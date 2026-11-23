@@ -265,6 +265,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ListTaskTimers { .. }
         // A challenge holds nothing; the duel feature paces it.
         | ClientCommand::ChallengeDuel { .. }
+        | ClientCommand::DeclineDuel { .. }
         // A report to the staff holds nothing back either.
         | ClientCommand::SendPetition { .. }
         | ClientCommand::ReportBug { .. }
@@ -528,6 +529,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AskTaskHistory { session_id, .. }
         | ClientCommand::ListTaskTimers { session_id, .. }
         | ClientCommand::ChallengeDuel { session_id, .. }
+        | ClientCommand::DeclineDuel { session_id, .. }
         | ClientCommand::SendPetition { session_id, .. }
         | ClientCommand::ReportBug { session_id, .. }
         | ClientCommand::SendFeedback { session_id, .. }
@@ -767,6 +769,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::AskDisciplineReuse { .. }
         | ClientCommand::ToggleStance { .. }
         | ClientCommand::ChallengeDuel { .. }
+        | ClientCommand::DeclineDuel { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }

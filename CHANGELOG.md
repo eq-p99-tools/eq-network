@@ -5,6 +5,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- TAKP and Quarm keep a duel as the `EQMac` program does (checklist 6.622;
+  TAKP program reads 11g and 11h; source-derived from TAKP 44afcbf's
+  `Handle_OP_RequestDuel`, `Handle_OP_DuelResponse` and
+  `Handle_OP_DuelAccept` and Quarm fc75fcf's `Handle_OP_RequestDuel`,
+  `Handle_OP_DuelResponse` and `Handle_OP_DuelResponse2`, not live). `/duel`
+  takes any spawn but a corpse; accepting sends 0xcf40 then 0x5d41; the
+  program's own refusals and `/decline` send the 6-byte 0xd040 with the
+  reason; TAKP's relayed refusal is `TurnedDown`; a kill in the duel sends
+  0x5e41, which neither server names. The host's question works as on
+  Titanium, its no staying local. The old held `EQMac` duel in the
+  confirmations module is gone.
+  - **Breaking:** `GameCommand::DeclineDuel`; `Capability::DecliningDuels`
+    (92); `DuelNews::{Declining, NothingToDecline, DecliningWhileDueling}`;
+    `socials::{EQMAC_DUEL_WON_OPCODE, eqmac_duel_auto_decline,
+    eqmac_duel_won}`; `Request::AutoDeclineDuel` and `Request::DuelOver`
+    now encode on `EQMac`.
+
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
   192-byte body with the event's reason at +4, carrying where the player

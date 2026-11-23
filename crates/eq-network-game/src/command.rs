@@ -792,6 +792,16 @@ pub enum GameCommand {
         /// When the player asked.
         created: std::time::Instant,
     },
+    /// `EQMac`'s `/decline` (TAKP program read 11h, 0x4fc966): turns the
+    /// waiting challenge down and tells the challenger. The session tells
+    /// what it did as [`crate::socials::DuelNews`]. The Titanium program
+    /// has no such command.
+    DeclineDuel {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Choose a button on the exact popup that was displayed.
     RespondToPopup {
         /// Current zone admission.
@@ -1505,6 +1515,7 @@ impl GameCommand {
             Self::AnswerTranslocate { .. } => "AnswerTranslocate",
             Self::AnswerDuel { .. } => "AnswerDuel",
             Self::ChallengeDuel { .. } => "ChallengeDuel",
+            Self::DeclineDuel { .. } => "DeclineDuel",
             Self::RespondToPopup { .. } => "RespondToPopup",
             Self::InspectPlayer { .. } => "InspectPlayer",
             Self::SetInspectNote { .. } => "SetInspectNote",
@@ -1661,6 +1672,7 @@ impl GameCommand {
             | Self::StopCasting { session_id, .. }
             | Self::YellForHelp { session_id, .. }
             | Self::ChallengeDuel { session_id, .. }
+            | Self::DeclineDuel { session_id, .. }
             | Self::SendPetition { session_id, .. }
             | Self::ReportBug { session_id, .. }
             | Self::SendFeedback { session_id, .. }
@@ -1848,6 +1860,7 @@ impl GameCommand {
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
             Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
+            Self::DeclineDuel { .. } => Capability::DecliningDuels,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
             Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
                 Capability::PlayerInspection
@@ -2012,6 +2025,7 @@ impl GameCommand {
             | Self::StopCasting { created, .. }
             | Self::YellForHelp { created, .. }
             | Self::ChallengeDuel { created, .. }
+            | Self::DeclineDuel { created, .. }
             | Self::SendPetition { created, .. }
             | Self::ReportBug { created, .. }
             | Self::SendFeedback { created, .. }
@@ -2272,6 +2286,7 @@ pub fn encode(
         | GameCommand::AnswerTranslocate { .. }
         | GameCommand::AnswerDuel { .. }
         | GameCommand::ChallengeDuel { .. }
+        | GameCommand::DeclineDuel { .. }
         | GameCommand::RespondToPopup { .. }
         | GameCommand::InspectPlayer { .. }
         | GameCommand::SetInspectNote { .. }

@@ -753,12 +753,15 @@ pub enum Capability {
     /// The Titanium client can report Velious water's cold through
     /// environmental damage ([`crate::hazards::LiquidHazard::Cold`]).
     ColdWater,
+    /// `EQMac`'s `/decline` of a waiting duel challenge
+    /// ([`crate::command::GameCommand::DeclineDuel`]).
+    DecliningDuels,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 92] = [
+    pub const ALL: [Self; 93] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -851,6 +854,7 @@ impl Capability {
         Self::WeaponStances,
         Self::Melody,
         Self::ColdWater,
+        Self::DecliningDuels,
     ];
 }
 
@@ -2969,6 +2973,7 @@ mod tests {
             Capability::WeaponStances => 89,
             Capability::Melody => 90,
             Capability::ColdWater => 91,
+            Capability::DecliningDuels => 92,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

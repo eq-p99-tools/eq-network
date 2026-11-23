@@ -21,6 +21,21 @@
 //! The ignore list's refusal (reason 0) is not sent: the session keeps no
 //! ignore list, so an ignored player's challenge is asked about like any
 //! other.
+//!
+//! The `EQMac` program (TAKP program reads 11g and 11h: `/duel` at 0x4fca55,
+//! a challenge at 0x4e31b7, a refusal at 0x4e9fa3, a death at 0x528e16,
+//! `/decline` at 0x4fc966) keeps the same three facts ([0x798674],
+//! [0x798676], [0x798678]) and the same lines, with these differences:
+//! - `/duel` takes any spawn that isn't a corpse, NPCs included, and tests
+//!   for no target before the player themselves;
+//! - its own refusals go as `OP_DuelResponse`, 6 bytes, and the one
+//!   challenged turns a challenge down with it too;
+//! - it has `/decline`, which sends that refusal with reason 0;
+//! - its word for a won duel is 0x415e, 4 bytes, and only after a kill;
+//! - nothing happens when the opponent leaves the zone, or when the player
+//!   dies (zoning clears it).
+//!
+//! The host's question works the same on both: its no stays local.
 use super::{
     actions,
     confirmations::closed,
@@ -32,14 +47,17 @@ use eq_network_game::{
     confirmations::{ConsentClosure, ConsentId, ConsentKind},
     message::Message,
     request::Request,
-    socials::{DuelAutoDecline, DuelNews, DuelQuestion, DuelUpdate},
+    socials::{DuelAutoDecline, DuelNews, DuelQuestion, DuelRefusal, DuelUpdate},
     world::{SpawnKind, WorldEvent},
 };
 
-/// The Titanium program's duel state, and the host's question about a
-/// waiting challenge.
+/// The program's duel state, and the host's question about a waiting
+/// challenge. The addresses are the Titanium program's; the `EQMac`
+/// program's are in the module's notes.
 #[derive(Debug, Default)]
-pub(super) struct TitaniumDuel {
+pub(super) struct ProgramDuel {
+    /// Whether this is the `EQMac` program's duel rather than Titanium's.
+    eqmac: bool,
     /// The player the player challenged (the program's 0x9238d8).
     outgoing: Option<u16>,
     /// The challenge waiting for the player, or their opponent (0x9238dc).
@@ -51,7 +69,15 @@ pub(super) struct TitaniumDuel {
     sequence: u64,
 }
 
-impl TitaniumDuel {
+impl ProgramDuel {
+    /// The `EQMac` program's duel (TAKP program reads 11g and 11h).
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
     /// The program clears its duel state at death, zone-in and setup.
     fn clear(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
         self.outgoing = None;
@@ -84,7 +110,14 @@ impl TitaniumDuel {
             return Ok(());
         }
         if self.active {
-            if self.incoming != Some(from) {
+            // Titanium tests its 0x9238dc, `EQMac` its opponent [0x798674]
+            // (read 11h); a duel sets both to the opponent.
+            let opponent = if self.eqmac {
+                self.outgoing
+            } else {
+                self.incoming
+            };
+            if opponent != Some(from) {
                 out.request(&Request::AutoDeclineDuel {
                     challenger: from,
                     reason: DuelAutoDecline::Dueling,
@@ -134,21 +167,34 @@ impl TitaniumDuel {
 
     /// `/duel` at the target, as 0x472a67 takes it; 0 is no target.
     fn duel(&mut self, target: u16, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        let player = world
-            .spawns
-            .get(target)
-            .is_some_and(|spawn| spawn.kind == SpawnKind::Player);
-        if world.is_player(target) {
-            return Self::news(out, DuelNews::NotYourself);
-        }
-        if target == 0 || !player {
-            return Self::news(out, DuelNews::NoPlayerTarget);
+        let kind = world.spawns.get(target).map(|spawn| spawn.kind);
+        if self.eqmac {
+            // `EQMac` (read 11g): no target or a corpse, then the player.
+            let corpse = matches!(kind, Some(SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse));
+            if target == 0 || kind.is_none() || corpse {
+                return Self::news(out, DuelNews::NoPlayerTarget);
+            }
+            if world.is_player(target) {
+                return Self::news(out, DuelNews::NotYourself);
+            }
+        } else {
+            if world.is_player(target) {
+                return Self::news(out, DuelNews::NotYourself);
+            }
+            if target == 0 || kind != Some(SpawnKind::Player) {
+                return Self::news(out, DuelNews::NoPlayerTarget);
+            }
         }
         if self.active {
+            let opponent = if self.eqmac {
+                self.outgoing
+            } else {
+                self.incoming
+            };
             return Self::news(
                 out,
                 DuelNews::AlreadyDueling {
-                    at_opponent: self.incoming == Some(target),
+                    at_opponent: opponent == Some(target),
                 },
             );
         }
@@ -212,6 +258,25 @@ impl TitaniumDuel {
         self.close_question(out, ConsentClosure::AnswerSent { accept: false })
     }
 
+    /// `EQMac`'s `/decline` (0x4fc966, read 11h): during a duel it only
+    /// says so; otherwise it turns the waiting challenge down with reason 0
+    /// and forgets it, or says there is none. Inferred: the duel test comes
+    /// first, since a duel keeps the opponent waiting in [0x798676].
+    fn decline(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.active {
+            return Self::news(out, DuelNews::DecliningWhileDueling);
+        }
+        let Some(challenger) = self.incoming.take() else {
+            return Self::news(out, DuelNews::NothingToDecline);
+        };
+        out.request(&Request::AnswerDuel {
+            challenger,
+            accept: false,
+        })?;
+        self.close_question(out, ConsentClosure::AnswerSent { accept: false })?;
+        Self::news(out, DuelNews::Declining { challenger })
+    }
+
     /// `OP_Death` (0x4a8cd5): the partner's death ends it. The program
     /// tests [0x9238d8] alone, so a challenge the player sent that was never
     /// accepted ends too (0x2f45), and a challenger's death changes nothing
@@ -256,9 +321,9 @@ impl TitaniumDuel {
     /// The partner leaving the zone (`OP_DeleteSpawn`, 0x4581b7): during
     /// the duel the player wins and the program says so to the server;
     /// before it the challenge lapses. Either way all is forgotten
-    /// (R49-6d).
+    /// (R49-6d). The `EQMac` program has no such case (read 11h).
     fn departed(&mut self, spawn: u16, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.partner(spawn) {
+        if self.eqmac || !self.partner(spawn) {
             return Ok(());
         }
         let news = if self.active {
@@ -272,15 +337,21 @@ impl TitaniumDuel {
     }
 }
 
-impl Feature for TitaniumDuel {
+impl Feature for ProgramDuel {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
-        vec![crate::world::Capability::Dueling]
+        let mut offered = vec![crate::world::Capability::Dueling];
+        if self.eqmac {
+            offered.push(crate::world::Capability::DecliningDuels);
+        }
+        offered
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,
-            ClientCommand::AnswerDuel { .. } | ClientCommand::ChallengeDuel { .. }
+            ClientCommand::AnswerDuel { .. }
+                | ClientCommand::ChallengeDuel { .. }
+                | ClientCommand::DeclineDuel { .. }
         )
     }
 
@@ -310,6 +381,14 @@ impl Feature for TitaniumDuel {
             ClientCommand::ChallengeDuel {
                 session_id, target, ..
             } if session_id == world.session_id => self.duel(target, world, out),
+            ClientCommand::DeclineDuel { session_id, .. }
+                if session_id == world.session_id && self.eqmac =>
+            {
+                self.decline(out)
+            }
+            ClientCommand::DeclineDuel { .. } if !self.eqmac => {
+                actions::refuse(command, "This server's client has no /decline.", out.log)
+            }
             _ => actions::refuse(command, "That is for another session.", out.log),
         }
     }
@@ -330,7 +409,8 @@ impl Feature for TitaniumDuel {
                     return Ok(());
                 };
                 if world.is_player(dead) {
-                    return self.clear(out);
+                    // The `EQMac` program keeps it; zoning clears it.
+                    return if self.eqmac { Ok(()) } else { self.clear(out) };
                 }
                 self.died((dead, death.killer_id), world, out)
             }
@@ -339,6 +419,16 @@ impl Feature for TitaniumDuel {
             }
             Message::Event(WorldEvent::Duel(DuelUpdate::AutoDeclined { by, reason })) => {
                 self.turned_down(*by, *reason, out)
+            }
+            // `EQMac`'s refusal (0x4e9fa3, read 11h), which TAKP relays.
+            Message::Event(WorldEvent::Duel(DuelUpdate::Refused { from, reason })) => {
+                let reason = match reason {
+                    DuelRefusal::Declined => Some(DuelAutoDecline::Ignored),
+                    DuelRefusal::Dueling => Some(DuelAutoDecline::Dueling),
+                    DuelRefusal::Considering => Some(DuelAutoDecline::Considering),
+                    DuelRefusal::Other(_) => None,
+                };
+                self.turned_down(*from, reason, out)
             }
             Message::Event(WorldEvent::Despawn(spawn)) => self.departed(*spawn, out),
             // The program has no case for `OP_DuelAccept`, and Titanium
@@ -400,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_challenge_is_a_line_and_a_question_and_sends_nothing() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         let heard = testing::run(|out| feature.observe(&challenge(12), &mut world, out));
         assert_eq!(heard.sent, []);
         assert_eq!(news(&heard), [DuelNews::Challenged { by: 12 }]);
@@ -417,7 +507,7 @@ mod tests {
 
     #[test]
     fn a_second_challenger_is_turned_down_by_the_program_itself() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         testing::run(|out| feature.observe(&challenge(12), &mut world, out));
         let busy = testing::run(|out| feature.observe(&challenge(13), &mut world, out));
         assert_eq!(
@@ -433,7 +523,7 @@ mod tests {
 
     #[test]
     fn duel_accepts_the_waiting_challenge_in_two_packets() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         testing::run(|out| feature.observe(&challenge(12), &mut world, out));
         let accepted = testing::run(|out| feature.handle(&duel(12), &mut world, out));
         assert_eq!(
@@ -465,7 +555,7 @@ mod tests {
 
     #[test]
     fn duel_challenges_and_the_answer_in_kind_begins_it_with_nothing_sent() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         let sent = testing::run(|out| feature.handle(&duel(12), &mut world, out));
         assert_eq!(
             (sent.sent.len(), sent.sent[0].opcode, &sent.sent[0].body),
@@ -486,7 +576,7 @@ mod tests {
 
     #[test]
     fn duel_refuses_in_the_programs_words_and_sends_nothing() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         for (target, said) in [
             (0, DuelNews::NoPlayerTarget),
             (30, DuelNews::NoPlayerTarget),
@@ -505,7 +595,7 @@ mod tests {
 
     #[test]
     fn the_hosts_yes_sends_what_duel_does_and_its_no_sends_nothing() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         let question = offer(&testing::run(|out| {
             feature.observe(&challenge(12), &mut world, out)
         }))
@@ -554,7 +644,7 @@ mod tests {
                 corpse_name: None,
             }))
         };
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         testing::run(|out| feature.observe(&challenge(12), &mut world, out));
         // The challenger isn't the program's side yet: their death is no
         // news (0x4a8cd5 tests [0x9238d8] alone).
@@ -584,7 +674,7 @@ mod tests {
     fn a_refusal_counts_only_from_the_one_challenged_and_keeps_the_waiting_challenge() {
         let refused =
             |by, reason| Message::Event(WorldEvent::Duel(DuelUpdate::AutoDeclined { by, reason }));
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         testing::run(|out| feature.handle(&duel(13), &mut world, out));
         // From anyone else: ignored.
         let other = testing::run(|out| {
@@ -617,7 +707,7 @@ mod tests {
     #[test]
     fn a_partner_leaving_forfeits_the_duel_or_lapses_the_challenge() {
         let gone = |spawn| Message::Event(WorldEvent::Despawn(spawn));
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         testing::run(|out| feature.handle(&duel(13), &mut world, out));
         // Someone else leaving changes nothing.
         assert_eq!(
@@ -643,7 +733,7 @@ mod tests {
 
     #[test]
     fn the_card_never_names_a_challenger_gone_from_the_zone() {
-        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let (mut feature, mut world) = (ProgramDuel::default(), world());
         let question = offer(&testing::run(|out| {
             feature.observe(&challenge(12), &mut world, out)
         }))
@@ -662,5 +752,279 @@ mod tests {
         };
         let refused = testing::run(|out| feature.handle(&yes, &mut gone, out));
         assert_eq!(refused.sent, []);
+    }
+
+    /// The `EQMac` program's duel (TAKP program reads 11g and 11h), on the
+    /// Mac wire.
+    mod eqmac {
+        use super::super::super::wire::EqMac;
+        use super::*;
+
+        fn world() -> World {
+            let mut world = super::world();
+            world.spawns.insert(testing::spawn(OWN, SpawnKind::Player));
+            world
+                .spawns
+                .insert(testing::spawn(40, SpawnKind::PlayerCorpse));
+            world
+                .spawns
+                .insert(testing::spawn(41, SpawnKind::NpcCorpse));
+            world
+        }
+
+        fn wire(outcome: &testing::Outcome<Result<()>>) -> Vec<(u16, Vec<u8>)> {
+            outcome
+                .sent
+                .iter()
+                .map(|packet| (packet.opcode, packet.body.clone()))
+                .collect()
+        }
+
+        fn decline() -> ClientCommand {
+            ClientCommand::DeclineDuel {
+                session_id: 5,
+                created: Instant::now(),
+            }
+        }
+
+        fn refused(from: u16, reason: socials::DuelRefusal) -> Message {
+            Message::Event(WorldEvent::Duel(DuelUpdate::Refused { from, reason }))
+        }
+
+        fn died(spawn_id: u32, killer_id: u32) -> Message {
+            Message::Event(WorldEvent::Death(Death {
+                spawn_id,
+                killer_id,
+                corpse_id: 0,
+                bind_zone_id: 0,
+                corpse_name: None,
+            }))
+        }
+
+        #[test]
+        fn it_offers_decline_as_well() {
+            assert_eq!(
+                ProgramDuel::eqmac().capabilities(),
+                [
+                    crate::world::Capability::Dueling,
+                    crate::world::Capability::DecliningDuels
+                ]
+            );
+            assert_eq!(
+                ProgramDuel::default().capabilities(),
+                [crate::world::Capability::Dueling]
+            );
+        }
+
+        #[test]
+        fn duel_takes_any_spawn_but_a_corpse_and_tests_for_none_first() {
+            let mut world = world();
+            for (target, said) in [
+                (0, DuelNews::NoPlayerTarget),
+                (99, DuelNews::NoPlayerTarget),
+                (40, DuelNews::NoPlayerTarget),
+                (41, DuelNews::NoPlayerTarget),
+                (OWN, DuelNews::NotYourself),
+            ] {
+                let mut feature = ProgramDuel::eqmac();
+                let refused =
+                    testing::run_on(&EqMac, |out| feature.handle(&duel(target), &mut world, out));
+                assert_eq!(refused.sent, [], "{target}");
+                assert_eq!(news(&refused), [said], "{target}");
+            }
+            // An NPC is challenged, as the program does: 0x40cf {it, you}.
+            let mut feature = ProgramDuel::eqmac();
+            let npc = testing::run_on(&EqMac, |out| feature.handle(&duel(30), &mut world, out));
+            assert_eq!(wire(&npc), [(0xcf40, vec![30, 0, 7, 0])]);
+            assert_eq!(news(&npc), [DuelNews::Challenging { target: 30 }]);
+        }
+
+        #[test]
+        fn the_accept_is_the_request_then_the_accept_byte_for_byte() {
+            let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+            let heard = testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            assert_eq!(heard.sent, []);
+            assert_eq!(news(&heard), [DuelNews::Challenged { by: 12 }]);
+            let question = offer(&heard).unwrap();
+            // The host's yes sends exactly what /duel sends (N5).
+            let yes = testing::run_on(&EqMac, |out| {
+                feature.handle(
+                    &ClientCommand::AnswerDuel {
+                        session_id: 5,
+                        offer_id: question.id,
+                        accept: true,
+                    },
+                    &mut world,
+                    out,
+                )
+            });
+            assert_eq!(
+                wire(&yes),
+                [(0xcf40, vec![12, 0, 7, 0]), (0x5d41, vec![12, 0, 7, 0])]
+            );
+            assert_eq!(news(&yes), [DuelNews::Accepting { challenger: 12 }]);
+            let (mut typed, mut world) = (ProgramDuel::eqmac(), self::world());
+            testing::run_on(&EqMac, |out| typed.observe(&challenge(12), &mut world, out));
+            let by_duel = testing::run_on(&EqMac, |out| typed.handle(&duel(12), &mut world, out));
+            assert_eq!(wire(&by_duel), wire(&yes));
+        }
+
+        #[test]
+        fn the_programs_own_refusals_are_six_bytes_with_the_reason() {
+            let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+            testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            // Another challenge waits: type 2.
+            let busy = testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(13), &mut world, out)
+            });
+            assert_eq!(wire(&busy), [(0xd040, vec![13, 0, 7, 0, 2, 0])]);
+            assert_eq!(news(&busy), []);
+            testing::run_on(&EqMac, |out| feature.handle(&duel(12), &mut world, out));
+            // During the duel: the opponent again is ignored, anyone else type 1.
+            let opponent = testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            assert!(opponent.sent.is_empty() && opponent.events.is_empty());
+            let dueling = testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(13), &mut world, out)
+            });
+            assert_eq!(wire(&dueling), [(0xd040, vec![13, 0, 7, 0, 1, 0])]);
+        }
+
+        #[test]
+        fn a_refusal_from_the_one_challenged_ends_it_by_its_type() {
+            use socials::DuelRefusal;
+            for (reason, line) in [
+                (DuelRefusal::Declined, Some(DuelAutoDecline::Ignored)),
+                (DuelRefusal::Dueling, Some(DuelAutoDecline::Dueling)),
+                (DuelRefusal::Considering, Some(DuelAutoDecline::Considering)),
+                (DuelRefusal::Other(5), None),
+            ] {
+                let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+                testing::run_on(&EqMac, |out| feature.handle(&duel(13), &mut world, out));
+                let other = testing::run_on(&EqMac, |out| {
+                    feature.observe(&refused(12, reason), &mut world, out)
+                });
+                assert!(other.events.is_empty() && feature.outgoing == Some(13));
+                let turned = testing::run_on(&EqMac, |out| {
+                    feature.observe(&refused(13, reason), &mut world, out)
+                });
+                assert_eq!(turned.sent, []);
+                assert_eq!(
+                    news(&turned),
+                    [DuelNews::TurnedDown {
+                        by: 13,
+                        reason: line
+                    }]
+                );
+                assert!(feature.outgoing.is_none() && !feature.active);
+            }
+        }
+
+        #[test]
+        fn decline_says_and_sends_as_the_program_does() {
+            let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+            let none = testing::run_on(&EqMac, |out| feature.handle(&decline(), &mut world, out));
+            assert_eq!(none.sent, []);
+            assert_eq!(news(&none), [DuelNews::NothingToDecline]);
+            let heard = testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            let question = offer(&heard).unwrap();
+            let declined =
+                testing::run_on(&EqMac, |out| feature.handle(&decline(), &mut world, out));
+            assert_eq!(wire(&declined), [(0xd040, vec![12, 0, 7, 0, 0, 0])]);
+            assert!(declined.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::ConsentClosed { id, .. }) if *id == question.id
+            )));
+            assert_eq!(news(&declined), [DuelNews::Declining { challenger: 12 }]);
+            assert!(feature.incoming.is_none() && feature.question.is_none());
+            // During a duel it only says so.
+            testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(13), &mut world, out)
+            });
+            testing::run_on(&EqMac, |out| feature.handle(&duel(13), &mut world, out));
+            let on = testing::run_on(&EqMac, |out| feature.handle(&decline(), &mut world, out));
+            assert_eq!(on.sent, []);
+            assert_eq!(news(&on), [DuelNews::DecliningWhileDueling]);
+            assert!(feature.active);
+        }
+
+        #[test]
+        fn the_hosts_no_stays_local_as_on_titanium() {
+            let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+            let heard = testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            let question = offer(&heard).unwrap();
+            let no = testing::run_on(&EqMac, |out| {
+                feature.handle(
+                    &ClientCommand::AnswerDuel {
+                        session_id: 5,
+                        offer_id: question.id,
+                        accept: false,
+                    },
+                    &mut world,
+                    out,
+                )
+            });
+            assert_eq!(no.sent, []);
+            assert!(feature.incoming.is_none());
+        }
+
+        #[test]
+        fn a_kill_sends_the_won_word_and_nothing_else_ends_it_but_zoning() {
+            let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+            testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            testing::run_on(&EqMac, |out| feature.handle(&duel(12), &mut world, out));
+            // The opponent leaving the zone, or the player dying: nothing.
+            let gone = testing::run_on(&EqMac, |out| {
+                feature.observe(&Message::Event(WorldEvent::Despawn(12)), &mut world, out)
+            });
+            assert!(gone.sent.is_empty() && gone.events.is_empty());
+            let own = testing::run_on(&EqMac, |out| {
+                feature.observe(&died(u32::from(OWN), 12), &mut world, out)
+            });
+            assert!(own.sent.is_empty() && own.events.is_empty() && feature.active);
+            let won = testing::run_on(&EqMac, |out| {
+                feature.observe(&died(12, u32::from(OWN)), &mut world, out)
+            });
+            assert_eq!(wire(&won), [(0x5e41, vec![12, 0, 7, 0])]);
+            assert_eq!(news(&won), [DuelNews::Won { over: 12 }]);
+            assert!(!feature.active && feature.incoming.is_none() && feature.outgoing.is_none());
+            // Killed by another: the line, and nothing sent.
+            testing::run_on(&EqMac, |out| feature.handle(&duel(13), &mut world, out));
+            testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(13), &mut world, out)
+            });
+            let ended = testing::run_on(&EqMac, |out| {
+                feature.observe(&died(13, 30), &mut world, out)
+            });
+            assert_eq!(ended.sent, []);
+            assert_eq!(news(&ended), [DuelNews::Ended { opponent: 13 }]);
+            // Zoning clears silently.
+            testing::run_on(&EqMac, |out| feature.handle(&duel(12), &mut world, out));
+            let zoned = testing::run_on(&EqMac, |out| {
+                feature.observe(&Message::LoggedOut, &mut world, out)
+            });
+            assert_eq!(zoned.sent, []);
+            assert_eq!(news(&zoned), []);
+            assert!(feature.outgoing.is_none());
+        }
+
+        #[test]
+        fn titanium_has_no_decline() {
+            let (mut feature, mut world) = (ProgramDuel::default(), super::world());
+            let refused = testing::run(|out| feature.handle(&decline(), &mut world, out));
+            assert_eq!(refused.sent, []);
+            assert!(!refused.events.is_empty());
+        }
     }
 }

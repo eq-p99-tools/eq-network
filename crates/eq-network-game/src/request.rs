@@ -150,18 +150,19 @@ pub enum Request {
         /// Took it on, or left it.
         on: bool,
     },
-    /// The Titanium program's own refusal of a challenge, by its reason
-    /// ([`socials::titanium_duel_auto_decline`]); the `EQMac` client's is
-    /// not read.
+    /// The program's own refusal of a challenge, by its reason: Titanium's
+    /// [`socials::titanium_duel_auto_decline`], and `EQMac`'s
+    /// [`socials::eqmac_duel_auto_decline`] (TAKP program read 11h).
     AutoDeclineDuel {
         /// Who challenged.
         challenger: u16,
         /// Why.
         reason: socials::DuelAutoDecline,
     },
-    /// The Titanium program's word that the duel is over, when the player
+    /// The program's word that the duel is over: Titanium's when the player
     /// kills the opponent or the opponent leaves
-    /// ([`socials::titanium_duel_over`]); the `EQMac` client's is not read.
+    /// ([`socials::titanium_duel_over`]), and `EQMac`'s only when the player
+    /// kills them ([`socials::eqmac_duel_won`], TAKP program read 11h).
     DuelOver {
         /// The opponent.
         opponent: u16,
@@ -1043,6 +1044,12 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             })
         }
         Request::DuelRequest { other } => Ok(socials::eqmac_duel_request(*other, duelist(sender)?)),
+        Request::AutoDeclineDuel { challenger, reason } => Ok(socials::eqmac_duel_auto_decline(
+            *challenger,
+            duelist(sender)?,
+            *reason,
+        )),
+        Request::DuelOver { opponent } => Ok(socials::eqmac_duel_won(*opponent, duelist(sender)?)),
         Request::Trade(with) => exchange::eqmac::request(sender.spawn(), *with),
         Request::AnswerTrade { asker, busy: false } => {
             exchange::eqmac::acknowledge(sender.spawn(), *asker)
