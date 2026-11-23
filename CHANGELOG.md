@@ -17,6 +17,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     server is unread, so anything the transport takes counts (inferred).
     No new `LinkLoss` variant; not breaking.
 
+- Each Bard song stop says the Titanium program's line (0x40f06d, read
+  R49-21): `WorldEvent::SongStopped { session_id, spell_id, string_id }`,
+  with 0x318f, at the player's stop, a gem click while singing, a forget's
+  answer and the server's cast update ending the song. A stop down the
+  program's non-song path (another class's song, or a timed item cast's
+  end) says nothing. The Mac-era server types send none.
+  - **Breaking:** the new `WorldEvent` variant. A gem click that stops the
+    song no longer sends `CastRejected`; the stop's `SongStopped` says it.
 - A rider's restore aboard keeps the z of the last save sent, whatever kind
   (read R49-22f, checklist 6.613). Every save writes the program's record's
   third field, which its profile loader never writes, so an ordinary
