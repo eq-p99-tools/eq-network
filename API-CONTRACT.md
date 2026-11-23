@@ -489,9 +489,10 @@ Carried slots remain provisional until covered by received inventory.
 A pack receipt for the same serialized whole item can resolve a single
 direct cursor-to-station route, separately from the station clear.
 
-## P99 local pads
+## Same-zone zone lines
 
-A P99 host can provide `InstalledZoneBoundaries` in `ClientConfig`.
+A P99 or stock EQEmu (Titanium) host can provide `InstalledZoneBoundaries`
+in `ClientConfig`; Quarm, TAKP and RoF2 refuse a same-zone line.
 The worker corroborates the entered boundary with the current approach,
 admission and indexed zone-point record where required. A same-zone pad
 submits an ordinary position report at entry and stages a local landing.

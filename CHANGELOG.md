@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Breaking:** A same-zone zone line places the player locally on stock
+  EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
+  program's 0x48aaa6 sends one position record and lands the player itself,
+  with no 0x5dd8 and no wait, on any server). `WorldEvent::SameZoneBoundary`
+  is removed: nothing waits for the server to move the player any more, and
+  exhaustive matches drop its arm. The EQEmu profile now takes the host's
+  `InstalledZoneBoundaries`. Quarm, TAKP and RoF2 are unread and still refuse
+  a same-zone line, as before.
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
   192-byte body with the event's reason at +4, carrying where the player
