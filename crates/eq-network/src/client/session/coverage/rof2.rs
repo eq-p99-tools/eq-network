@@ -7,7 +7,7 @@
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
 //! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538, 6.539, 6.541,
-//! 6.544), and the chat rows from the chat parser (6.521).
+//! 6.544, 6.549), and the chat rows from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -16,7 +16,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::Rof2,
-    NIMBUS, ROF2,
+    NIMBUS, RENAME, REWARD, ROF2,
 };
 
 /// What the entry leaves unread of `RoF2`'s zone description (6.501).
@@ -234,6 +234,13 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x6703 => sent("OP_Begging", ROF2, Read(&[Zone])),
         0x39e8 => sent("OP_PickPocket", ROF2, Read(&[Zone])),
         0x0386 => sent("OP_Bind_Wound", ROF2, Read(&[Zone])),
+        // Quest rewards and their sound, renames, the new titles notice and
+        // the banker's change (6.549), unencoded for both generations, the
+        // bytes Titanium gets, with Titanium's parts.
+        0x1a30 => sent("OP_Sound", ROF2, Partly(&[Zone], REWARD)),
+        0x2c57 => sent("OP_MobRename", ROF2, Partly(&[Zone], RENAME)),
+        0x0d32 => sent("OP_NewTitlesAvailable", ROF2, Read(&[Zone])),
+        0x791e => sent("OP_BankerChange", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the
