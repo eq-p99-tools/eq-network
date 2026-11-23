@@ -935,7 +935,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 117;
+    const KINDS: usize = 120;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1042,6 +1042,9 @@ mod tests {
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
             ClientCommand::AnswerDuel { .. } => 115,
+            ClientCommand::SendPetition { .. } => 117,
+            ClientCommand::ReportBug { .. } => 118,
+            ClientCommand::SendFeedback { .. } => 119,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1099,6 +1102,26 @@ mod tests {
             },
             ClientCommand::YellForHelp {
                 session_id,
+                created,
+            },
+            ClientCommand::SendPetition {
+                session_id,
+                text: "A synthetic petition.".into(),
+                created,
+            },
+            ClientCommand::ReportBug {
+                session_id,
+                report: eq_network_game::reports::BugReport {
+                    category: eq_network_game::reports::BugCategory::Other,
+                    text: "A synthetic report.".into(),
+                    place: None,
+                    target: None,
+                },
+                created,
+            },
+            ClientCommand::SendFeedback {
+                session_id,
+                text: "Synthetic feedback.".into(),
                 created,
             },
             ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
@@ -1978,6 +2001,14 @@ mod tests {
                 assert!(servers.iter().all(|features| features
                     .capabilities()
                     .contains(&crate::world::Capability::ServerFilters)));
+                continue;
+            }
+            if matches!(command, ClientCommand::SendFeedback { .. }) {
+                // Built and tested, and listed by no server type until its
+                // own live check (6.511f).
+                assert!(!servers.iter().any(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::SendingFeedback)));
                 continue;
             }
             if Features::is_departure(&command) {

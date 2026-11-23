@@ -519,6 +519,13 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Petitions, bug reports and feedback to the server's staff. A server
+    /// type lists them only after its own live check, since a person reads
+    /// each one (recording checklist 6.511).
+    fn reports(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     fn dialogs(&self) -> Provided {
         None
     }
@@ -591,6 +598,7 @@ pub(super) trait ServerType: Sync {
             self.environmental_aa(setup),
             self.ticks(setup),
             self.helm(setup),
+            self.reports(setup),
             self.dialogs(),
         ]
         .into_iter()
@@ -1446,6 +1454,14 @@ impl ServerType for EqEmu {
     /// (`Client::Handle_OP_SpawnAppearance`), not yet checked live.
     fn helm(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::helm())
+    }
+
+    /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
+    /// no handler there.
+    fn reports(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::reports::Reports::new(
+            super::reports::Listed::EQEMU,
+        )))
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -2488,11 +2504,12 @@ mod tests {
         // server's tick are offered on EQEmu alone. P99 takes falls' damage by
         // the Titanium program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
-        // yet checked live; and only EQEmu takes the show-helm option.
+        // yet checked live; only EQEmu takes the show-helm option; and only
+        // EQEmu lists petitions and bug reports (6.511).
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 47),
+            (ServerProtocol::EqEmu, 48),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2507,6 +2524,8 @@ mod tests {
             Capability::ServerTicks,
             Capability::ShowingHelm,
             Capability::BoatControl,
+            Capability::Petitioning,
+            Capability::ReportingBugs,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

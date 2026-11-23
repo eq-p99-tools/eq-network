@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Send petitions, bug reports and feedback to the server's staff (gap list
+  3.6, recording checklist 6.511), laid out from stock `EQEmu`'s and TAKP's
+  handlers: `eq_network_game::reports` encodes Titanium's `OP_Petition`
+  (0x251f) and `OP_Bug` (0x7ac2, 8736 bytes) and `EQMac`'s petition, bug
+  (3340 bytes) and feedback (1131 bytes). Stock `EQEmu` lists
+  `Capability::Petitioning` and `Capability::ReportingBugs`; feedback, P99,
+  Quarm and TAKP list nothing until their own live checks. A bug report
+  carries its category, the player's place and heading and the target, and
+  leaves the interface path, time played and system information empty.
+  Over-long text is refused, never cut, and two reports of a kind are 10
+  seconds apart (inferred). No refusal or diagnostic repeats a report's
+  text. **Breaking:** new variants on the exhaustive `GameCommand`
+  (`SendPetition`, `ReportBug`, `SendFeedback`), `WorldEvent`
+  (`ReportSent`, `ReportRefused`) and `Capability` (`Petitioning`,
+  `ReportingBugs`, `SendingFeedback`; `Capability::ALL` grows to 75).
+
 - Ask for a last name with `/surname` (gap 3.6, checklist 6.507).
   `GameCommand::Surname` sends `OP_Surname`'s 100-byte record (Titanium
   0x4668, `EQMac` 0xc441) with the surname as typed, under the new

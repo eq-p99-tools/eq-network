@@ -114,6 +114,8 @@ pub mod raid;
 /// How far each client generation lets the player reach doors, objects,
 /// merchants and the one they bandage.
 pub mod reach;
+/// Reports to the server's staff: petitions, bug reports and feedback.
+pub mod reports;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
 /// What a quest or a task gives the player.
