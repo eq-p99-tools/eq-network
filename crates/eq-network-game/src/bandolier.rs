@@ -1,6 +1,7 @@
 //! The player's bandolier sets and potion belt as the Titanium profile
 //! carries them (6.559), and the player's saving and clearing of a set and
-//! setting and clearing of a belt slot (6.564). No swap is sent from here.
+//! setting and clearing of a belt slot (6.564), and the swap to a set and
+//! what it does to the inventory (6.566, [`crate::bandolier::swap()`]).
 //!
 //! A bandolier set is a name and the four weapon slots' items it puts in
 //! place (primary, secondary, range, ammo); the potion belt is four items
@@ -17,6 +18,9 @@
 
 use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
+
+mod swapping;
+pub use swapping::swap;
 
 /// The Titanium profile's length, as the session's other profile readers
 /// take it.
@@ -38,8 +42,7 @@ const ITEM_LENGTH: usize = 4 + 4 + 64;
 /// A set's record: its name, then its items.
 const SET_LENGTH: usize = SET_NAME_LENGTH + SET_ITEMS * ITEM_LENGTH;
 
-/// Titanium's `OP_Bandolier`: saving, clearing and (not built) swapping a
-/// set.
+/// Titanium's `OP_Bandolier`: saving, clearing and swapping to a set.
 pub const OPCODE: u16 = 0x6f0c;
 /// Titanium's `OP_PotionBelt`: setting and clearing a belt slot.
 pub const BELT_OPCODE: u16 = 0x0719;
@@ -54,6 +57,8 @@ pub const MOST_NAME: usize = SET_NAME_LENGTH - 1;
 const SAVE: u32 = 0;
 /// `OP_Bandolier`'s clear (`bandolierRemove`).
 const CLEAR: u32 = 1;
+/// `OP_Bandolier`'s swap (`bandolierSet`).
+const SWAP: u32 = 2;
 /// `OP_PotionBelt`'s set; the server clears for any other action.
 const BELT_SET: u32 = 0;
 /// The action sent to clear a belt slot (inferred, R49-45 c).
@@ -104,6 +109,20 @@ pub fn clear(set: u8) -> Result<[u8; LENGTH]> {
     check_set(set)?;
     let mut body = [0; LENGTH];
     body[..4].copy_from_slice(&CLEAR.to_le_bytes());
+    body[4] = set;
+    Ok(body)
+}
+
+/// Builds the swap to set `set` (`BandolierSet_Struct`): its action, the
+/// set and 35 bytes of 0. The server answers with no item updates; see
+/// [`swap()`] for what it moves.
+///
+/// # Errors
+/// Refuses a set past 3: the server does not bound it.
+pub fn swap_to(set: u8) -> Result<[u8; LENGTH]> {
+    check_set(set)?;
+    let mut body = [0; LENGTH];
+    body[..4].copy_from_slice(&SWAP.to_le_bytes());
     body[4] = set;
     Ok(body)
 }
@@ -351,6 +370,10 @@ mod tests {
         let cleared = clear(3).unwrap();
         assert_eq!((word(&cleared, 0), cleared[4]), (1, 3));
         assert!(cleared[5..].iter().all(|byte| *byte == 0));
+        let swapped = swap_to(1).unwrap();
+        assert_eq!((word(&swapped, 0), swapped[4]), (2, 1));
+        assert!(swapped[5..].iter().all(|byte| *byte == 0));
+        assert!(swap_to(4).is_err());
     }
 
     #[test]

@@ -531,7 +531,8 @@ pub(super) trait ServerType: Sync {
     /// The profile's bandolier sets and potion belt, told at admission on
     /// Titanium, and saving and clearing them. No server takes the four
     /// commands until their local live rows pass (6.564 rows 1 to 5); then
-    /// stock `EQEmu` alone offers `Bandolier::sending`, and P99, whose era
+    /// stock `EQEmu` alone offers `Bandolier::sending`, the swap once read
+    /// R49-45 d too (6.566), and P99, whose era
     /// has no bandolier, never does.
     fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -2878,7 +2879,7 @@ mod tests {
 
     #[test]
     fn no_server_offers_the_bandoliers_sets_or_belt_before_their_live_rows() {
-        // Built and tested from source (6.564); stock EQEmu offers each once
+        // Built and tested from source (6.564, 6.566); stock EQEmu offers each once
         // its local live rows pass, and P99 never does.
         for protocol in [
             ServerProtocol::EqEmu,
@@ -2890,7 +2891,8 @@ mod tests {
             let offered = offers(server_type(protocol));
             assert!(
                 !offered.contains(&Capability::Bandoliers)
-                    && !offered.contains(&Capability::PotionBelt),
+                    && !offered.contains(&Capability::PotionBelt)
+                    && !offered.contains(&Capability::BandolierSwap),
                 "{protocol:?}"
             );
         }

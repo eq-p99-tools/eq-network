@@ -1102,6 +1102,25 @@ pub(super) fn merchant_view(message: &mut Message) {
 }
 
 impl Feature for Belongings {
+    /// A bandolier swap's moves are predicted by its own feature, and
+    /// `EQEmu` confirms them no more than an ordinary move's: they settle
+    /// by the same silence (6.566). A swap goes only with no prediction
+    /// left, so this restarts no other move's wait.
+    fn notice(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if matches!(command, ClientCommand::SwapBandolier { .. })
+            && self.rules.settles_by_silence()
+            && !world.inventory.predicted()
+        {
+            self.settlement.sent(Instant::now());
+        }
+        Ok(())
+    }
+
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
         let mut offered = Vec::new();
@@ -2873,6 +2892,33 @@ mod tests {
             })]
         ));
         assert!(world.inventory.predicted());
+        let later = Instant::now() + REFUSAL_WINDOW;
+        let outcome = testing::run(|out| belongings.tick(later, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [&InventoryUpdate::Settled]
+        );
+        assert!(!world.inventory.predicted());
+    }
+
+    #[test]
+    fn a_bandolier_swaps_prediction_settles_as_an_ordinary_moves_does() {
+        let (mut belongings, mut world) = admitted();
+        let swap = ClientCommand::SwapBandolier {
+            session_id: 5,
+            set: 0,
+        };
+        testing::run(|out| belongings.notice(&swap, &mut world, out))
+            .result
+            .unwrap();
+        // The swap's own feature applies its moves after the notice.
+        let mut moved = item(22);
+        moved.slot = InventorySlot(13);
+        world
+            .inventory
+            .0
+            .apply(InventoryUpdate::Prediction(vec![moved]));
         let later = Instant::now() + REFUSAL_WINDOW;
         let outcome = testing::run(|out| belongings.tick(later, &mut world, out));
         outcome.result.unwrap();

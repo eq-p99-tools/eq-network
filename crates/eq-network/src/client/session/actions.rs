@@ -125,7 +125,7 @@ fn touches_cursor_or_station(command: &ClientCommand) -> bool {
 /// a decision here.
 #[allow(clippy::too_many_lines)] // Keep the exhaustive resource table together.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
-    use Resource::{Casting, GroundPickup, Inventory, Shopping, Spellbook};
+    use Resource::{Casting, CursorAndStation, GroundPickup, Inventory, Shopping, Spellbook};
     match command {
         ClientCommand::Shop { open: true, .. } => &[Shopping],
         ClientCommand::CastSpell { .. }
@@ -144,6 +144,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::UseItem(_)
         | ClientCommand::RangedAttack(_)
         | ClientCommand::SaveBandolier { .. } => &[Casting, Inventory],
+        // A swap moves what the server never confirms: it waits for a
+        // cast, a station and a trader's window as well (6.566, inferred
+        // until R49-45 b).
+        ClientCommand::SwapBandolier { .. } => &[Casting, Inventory, CursorAndStation, Shopping],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
@@ -467,6 +471,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::EndBrowse { session_id }
         | ClientCommand::SaveBandolier { session_id, .. }
         | ClientCommand::ClearBandolier { session_id, .. }
+        | ClientCommand::SwapBandolier { session_id, .. }
         | ClientCommand::SetPotionBelt { session_id, .. }
         | ClientCommand::ClearPotionBelt { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
@@ -750,6 +755,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::EndBrowse { .. } => WorldEvent::BazaarRefused { session_id, reason },
         ClientCommand::SaveBandolier { .. }
         | ClientCommand::ClearBandolier { .. }
+        | ClientCommand::SwapBandolier { .. }
         | ClientCommand::SetPotionBelt { .. }
         | ClientCommand::ClearPotionBelt { .. } => {
             WorldEvent::BandolierRefused { session_id, reason }
