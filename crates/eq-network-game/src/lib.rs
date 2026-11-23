@@ -125,6 +125,7 @@ pub mod rof2_answers;
 pub mod rof2_buffs;
 pub mod rof2_casting;
 pub mod rof2_looks;
+pub mod rof2_loot_titles;
 pub mod rof2_news;
 pub mod rof2_notices;
 pub mod rof2_player;

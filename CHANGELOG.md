@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's corpse money and loot close, the surname answer, the title
+  list and title changes as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.552). The new `rof2_loot_titles` module reads `OP_MoneyOnCorpse`
+  (0x5f44), `OP_LootComplete` (0x55c4), `OP_Surname` (0x0423),
+  `OP_SendTitleList` (0x2d08) and `OP_SetTitleReply` (0x4c21), which have no
+  encoder for either generation, through Titanium's readers into Titanium's
+  events, with Titanium's refusals. The corpse money record that ends a SoD
+  and later listing (response 6, Loot All) gives no event: its coverage row
+  is `Partly` with a part naming it, so the gap log tells each arrival, and
+  lifting validate waits on the loot listing batch that decides its event.
+  The last name and the titles reach the host in the event only.
 - Read RoF2's quest rewards and their sound, renames, the new titles
   notice and the banker's change as stock `EQEmu` sends them, labelled
   inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`

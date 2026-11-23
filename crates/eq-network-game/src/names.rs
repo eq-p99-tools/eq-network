@@ -348,7 +348,7 @@ pub(crate) fn eqmac_gm_rename(body: &[u8]) -> Result<WorldEvent> {
 /// # Errors
 /// Rejects a wrong length, another kind, text that fills its field, and a
 /// spawn that is zero or past 16 bits.
-fn titanium_title(body: &[u8]) -> Result<WorldEvent> {
+pub(crate) fn titanium_title(body: &[u8]) -> Result<WorldEvent> {
     ensure!(body.len() == TITLE_LENGTH, "invalid title length");
     let field = &body[4..4 + TITLE];
     ensure!(field.contains(&0), "title without its end");
