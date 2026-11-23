@@ -1898,8 +1898,8 @@ refusal is `WorldEvent::BandolierRefused` in the session's words, with
 nothing sent: sets unknown, a set, slot or name out of bounds, a save
 while the inventory is not known or while casting (inferred until read
 R49-45 b), a clear of a set or slot already empty, a belt item not carried
-or not for the belt, and a second send within 250 ms (ours, inferred). The
-belt's use is a later slice.
+or not for the belt, and a second send within 250 ms (ours, inferred). Using
+the belt is described below.
 
 Swapping to a set (`GameCommand::SwapBandolier`, under its own
 `Capability::BandolierSwap`) is built and tested from source (6.566) and
@@ -1927,6 +1927,28 @@ swap's, keep projected custody after they settle until the server next
 sends them; a swap is refused after any item move until then.** Regaining
 that custody is a gate for offering the swap, beside its live rows and
 read R49-45 d.
+
+Using a belt slot (`GameCommand::UseBeltItem(BeltUse)`, under its own
+`Capability::UsingPotionBelt`) is built and tested from source (6.568) and
+offered by no server type until its local live rows pass; P99 never. The
+host names only the belt slot (0 to 3); the item is the one the session's
+belt holds there, so a host can't use an item the belt does not name. The
+session casts it from the first slot holding that item, worn 0 to 21 and
+then packs 22 to 29 (inferred until read R49-45 c), by Titanium's
+`OP_CastSpell` on casting slot 11 (`EQEmu`'s `CastingSlot::PotionBelt`).
+**Stock `EQEmu` casts the item at whatever slot that names, the bank and the
+cursor included; the session never names a bank, the cursor or a bag**,
+since an item click is never sent from a bag either. Past the choice of
+slot it is the whole item-use path of `GameCommand::UseItem`: the same
+holds (`Casting`, `Inventory`), the same checks of charges, click effect,
+level, song class and target, and the same answers
+(`WorldEvent::ItemUseAction`, then the cast's own events). A refresh on
+slot 11 answers the cast; one on the item slot (10) does not. It is refused
+in the session's words, with nothing sent, when the belt is unknown or not
+yet read, the belt slot is out of bounds or empty, the inventory is not
+known or is stale, the item is not worn or in a pack, or the first slot
+holding it has custody unknown (as after an `EQEmu` move until the server
+sends it again). Hosts and scripts get no wider rule than for `UseItem`.
 
 ## Bazaar search
 

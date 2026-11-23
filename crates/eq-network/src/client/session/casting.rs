@@ -7,7 +7,8 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    inventory::ItemUse,
+    bandolier::BeltUse,
+    inventory::{InventorySlot, ItemUse},
     message::Message,
     request::Request,
     spells::{SpellUpdate, ITEM_CAST_SLOT},
@@ -90,6 +91,8 @@ enum Phase {
 pub(super) enum Source {
     Gem(u8),
     Item,
+    /// An item used from the potion belt, answered on its own slot.
+    Belt,
     Knight(KnightAbility),
     Discipline,
 }
@@ -105,6 +108,8 @@ impl Source {
         source.is_none_or(|source| match source {
             Self::Gem(gem) => slot == u32::from(gem),
             Self::Item => slot == u32::from(ITEM_CAST_SLOT),
+            // Only the belt's own slot is this cast's (6.568 B5).
+            Self::Belt => slot == u32::from(eq_network_game::spells::BELT_CAST_SLOT),
             // EQEmu's ServerToTitaniumCastingSlot falls back to the
             // discipline slot for its internal Ability slot.
             Self::Knight(_) => {
@@ -359,6 +364,15 @@ pub(super) struct Casting {
     knights: Option<knights::Reuse>,
     disciplines: disciplines::DisciplineState,
     use_disciplines: bool,
+    belt_use: BeltUses,
+}
+
+/// Whether the server type takes items used from the potion belt (6.568).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BeltUses {
+    #[default]
+    Unoffered,
+    Offered,
 }
 
 const BARD_CLASS: u32 = 8;
@@ -387,6 +401,17 @@ impl Casting {
     /// without moving, and P99's own handling of it is unchecked.
     pub(super) fn with_cast_stop(mut self) -> Self {
         self.cast_stop = true;
+        self
+    }
+
+    /// Takes items used from the potion belt, once its live rows pass
+    /// (6.568); P99 never.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "offered on stock EQEmu once rows 6.568 pass")
+    )]
+    pub(super) fn with_belt_use(mut self) -> Self {
+        self.belt_use = BeltUses::Offered;
         self
     }
 
@@ -575,7 +600,45 @@ impl Casting {
     }
 
     /// Casts an item's click effect at a target the player can see.
-    fn use_item(&mut self, request: &ItemUse, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Uses the item a belt slot names from the first slot the player wears
+    /// it in or carries it in a pack, by the whole item-click path (6.568
+    /// B3). A bag is not a click slot (`check_item_cast`), nor the cursor
+    /// or a bank (B4); the order is inferred until read R49-45 c.
+    fn use_belt_item(
+        &mut self,
+        request: &BeltUse,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match belt_item_slot(request, world) {
+            Ok(slot) => {
+                let item = ItemUse {
+                    request_id: request.request_id,
+                    session_id: request.session_id,
+                    revision: world.inventory.revision(),
+                    slot,
+                    target_id: request.target_id,
+                    created: request.created,
+                    installed_class_spell: request.installed_class_spell,
+                };
+                self.use_item(&item, Source::Belt, world, out)
+            }
+            Err(error) => out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
+                session_id: request.session_id,
+                request_id: request.request_id,
+                error: Some(error.into()),
+                string_id: None,
+            })),
+        }
+    }
+
+    fn use_item(
+        &mut self,
+        request: &ItemUse,
+        source: Source,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         if let Some(string_id) = lying_refusal(world, out) {
             return out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
                 session_id: request.session_id,
@@ -595,10 +658,19 @@ impl Casting {
                     .check_item_use(request, player.level, target_available)
             })
             .and_then(|spell_id| {
-                let packet = out.encode(&Request::CastItem {
-                    spell_id,
-                    slot: request.slot,
-                    target_id: request.target_id,
+                let (slot, target_id) = (request.slot, request.target_id);
+                let packet = out.encode(&if matches!(source, Source::Belt) {
+                    Request::CastBeltItem {
+                        spell_id,
+                        slot,
+                        target_id,
+                    }
+                } else {
+                    Request::CastItem {
+                        spell_id,
+                        slot,
+                        target_id,
+                    }
                 })?;
                 Ok((spell_id, packet))
             });
@@ -617,7 +689,7 @@ impl Casting {
                         installed_class_spell: request.installed_class_spell,
                     });
                 }
-                self.submitted(spell_id, Source::Item, world, out)?;
+                self.submitted(spell_id, source, world, out)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -646,6 +718,35 @@ impl Casting {
     }
 }
 
+/// The slot a belt use casts from: the belt mirror's item, in the first
+/// worn slot (0 to 21) or pack (22 to 29) holding it whose custody is
+/// known (inferred until read R49-45 c).
+fn belt_item_slot(request: &BeltUse, world: &World) -> Result<InventorySlot, &'static str> {
+    let belt = world
+        .belt
+        .as_ref()
+        .ok_or("Your potion belt is not known; it is read again when you zone.")?;
+    let held = belt
+        .get(usize::from(request.belt_slot))
+        .ok_or("Choose a belt slot from 1 to 4.")?
+        .as_ref()
+        .ok_or("That belt slot is empty.")?;
+    let inventory = &world.inventory;
+    if !inventory.received() || inventory.stale() {
+        return Err("Wait for current inventory contents");
+    }
+    (0..=29)
+        .map(InventorySlot)
+        .find(|slot| {
+            inventory
+                .items()
+                .get(slot)
+                .is_some_and(|item| item.details.id == held.item_id)
+        })
+        .filter(|slot| inventory.custody_known(*slot))
+        .ok_or("You carry that item nowhere it can be used from the belt.")
+}
+
 impl Feature for Casting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
@@ -662,6 +763,9 @@ impl Feature for Casting {
         if self.use_disciplines {
             offered.push(Capability::UsingDisciplines);
         }
+        if self.belt_use == BeltUses::Offered {
+            offered.push(Capability::UsingPotionBelt);
+        }
         offered
     }
 
@@ -670,6 +774,9 @@ impl Feature for Casting {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
+        if matches!(command, ClientCommand::UseBeltItem(_)) {
+            return self.belt_use == BeltUses::Offered;
+        }
         matches!(
             command,
             ClientCommand::CastSpell { .. }
@@ -730,7 +837,8 @@ impl Feature for Casting {
                 world,
                 out,
             ),
-            ClientCommand::UseItem(request) => self.use_item(request, world, out),
+            ClientCommand::UseItem(request) => self.use_item(request, Source::Item, world, out),
+            ClientCommand::UseBeltItem(request) => self.use_belt_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
         }

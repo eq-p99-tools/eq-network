@@ -564,3 +564,51 @@ fn a_swap_waits_for_a_merchant_trade_or_container_and_the_mirrors_refusals() {
         ]
     );
 }
+
+#[test]
+fn the_belt_is_shown_to_other_features_as_it_is_known() {
+    // 6.568 B1: only this feature writes the world's belt; it is `None`
+    // until both parts of the profile are heard, and when they are unknown.
+    let mut feature = Bandolier::sending(ALL);
+    let mut world = world();
+    assert!(world.belt.is_none());
+    feature
+        .admit(
+            &Message::Event(WorldEvent::Bandoliers(Box::new(sets()))),
+            &mut world,
+        )
+        .unwrap();
+    assert!(world.belt.is_none());
+    feature
+        .admit(
+            &Message::Event(WorldEvent::PotionBelt(Box::new(belt()))),
+            &mut world,
+        )
+        .unwrap();
+    assert_eq!(world.belt.as_deref(), Some(&belt()));
+
+    let outcome = run(&mut feature, &mut world, &set_belt(0, 201));
+    assert_eq!(world.belt.as_deref(), Some(told_belt(&outcome)));
+    assert_eq!(
+        world.belt.as_ref().unwrap()[0].as_ref().unwrap().item_id,
+        201
+    );
+    run(&mut feature, &mut world, &clear_belt(2));
+    assert_eq!(world.belt.as_ref().unwrap()[2], None);
+    // A refused change leaves it as it was.
+    let before = world.belt.clone();
+    let outcome = run(&mut feature, &mut world, &set_belt(1, 202));
+    assert!(refusal(&outcome).is_some());
+    assert_eq!(world.belt, before);
+
+    testing::run(|out| {
+        feature.observe(
+            &Message::Event(WorldEvent::BandoliersUnknown),
+            &mut world,
+            out,
+        )
+    })
+    .result
+    .unwrap();
+    assert!(world.belt.is_none());
+}

@@ -2879,7 +2879,7 @@ mod tests {
 
     #[test]
     fn no_server_offers_the_bandoliers_sets_or_belt_before_their_live_rows() {
-        // Built and tested from source (6.564, 6.566); stock EQEmu offers each once
+        // Built and tested from source (6.564, 6.566, 6.568); stock EQEmu offers each once
         // its local live rows pass, and P99 never does.
         for protocol in [
             ServerProtocol::EqEmu,
@@ -2892,7 +2892,8 @@ mod tests {
             assert!(
                 !offered.contains(&Capability::Bandoliers)
                     && !offered.contains(&Capability::PotionBelt)
-                    && !offered.contains(&Capability::BandolierSwap),
+                    && !offered.contains(&Capability::BandolierSwap)
+                    && !offered.contains(&Capability::UsingPotionBelt),
                 "{protocol:?}"
             );
         }

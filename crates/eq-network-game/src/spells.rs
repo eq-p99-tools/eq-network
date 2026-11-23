@@ -17,6 +17,11 @@ pub use eqmac::{
 /// The Titanium and `EQMac` casting slot for an ordinary item click.
 pub const ITEM_CAST_SLOT: u16 = 10;
 
+/// Titanium's casting slot for an item used from the potion belt
+/// (`CastingSlot::PotionBelt`; inferred as the program's until read
+/// R49-45 c, 6.568).
+pub const BELT_CAST_SLOT: u16 = 11;
+
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
 pub const MEMORIZE_OPCODE: u16 = 0x308e;
 /// Titanium's `OP_FormattedMessage`, a string-table line with arguments.

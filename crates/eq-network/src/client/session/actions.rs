@@ -142,6 +142,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // save waits for a cast (6.564 E2, inferred until R49-45 b) and for
         // a move in flight, which would change what the session copies.
         ClientCommand::UseItem(_)
+        | ClientCommand::UseBeltItem(_)
         | ClientCommand::RangedAttack(_)
         | ClientCommand::SaveBandolier { .. } => &[Casting, Inventory],
         // A swap moves what the server never confirms: it waits for a
@@ -404,6 +405,12 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. } => return super::looting::rejected(command, reason),
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
+            session_id: request.session_id,
+            request_id: request.request_id,
+            error,
+            string_id: None,
+        },
+        ClientCommand::UseBeltItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
             error,

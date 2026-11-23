@@ -12,7 +12,8 @@ pub use actions::{
     MOVE_OPCODE,
 };
 pub use activation::{
-    titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
+    titanium_belt_cast, titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse,
+    CAST_OPCODE,
 };
 pub use banking::banker_in_range;
 pub use destruction::{titanium_destroy, InventoryDestroy};

@@ -162,6 +162,28 @@ fn check_set(set: u8) -> Result<()> {
     Ok(())
 }
 
+/// A use of the item a potion belt slot names (6.568): the session casts its
+/// click effect from the first slot the player wears or carries it in, by
+/// the same checks as an item click
+/// ([`crate::command::GameCommand::UseBeltItem`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeltUse {
+    /// Caller-generated correlation ID, unique within an admission; its
+    /// answer is a [`crate::world::WorldEvent::ItemUseAction`].
+    pub request_id: u64,
+    /// Owning zone admission.
+    pub session_id: u64,
+    /// The belt slot, 0 to 3.
+    pub belt_slot: u8,
+    /// Explicit own or known zone spawn ID.
+    pub target_id: u16,
+    /// Local creation time; stalls and reconnects do not replay requests.
+    pub created: std::time::Instant,
+    /// The host's word on whether the item's spell is the player's class's,
+    /// as [`crate::inventory::ItemUse::installed_class_spell`].
+    pub installed_class_spell: Option<bool>,
+}
+
 /// An item a set or the belt names, as the profile keeps it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BeltItem {

@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Use a potion belt slot on Titanium (6.568, slice 4), from stock `EQEmu`'s
+  source and not yet checked live. New `GameCommand::UseBeltItem` (with
+  `bandolier::BeltUse`) under the new `Capability::UsingPotionBelt`, offered
+  by no server type until its live rows pass (P99 never). The session casts
+  the item the belt names from the first worn slot or pack holding it, on
+  `OP_CastSpell` casting slot 11, through the whole item-use path; never
+  from a bag, a bank or the cursor. New `inventory::titanium_belt_cast`,
+  `spells::BELT_CAST_SLOT` and `request::Request::CastBeltItem`.
+  **Breaking:** the new `GameCommand`, `Request` and `Capability` variants
+  (`Capability::ALL` is 88 long).
 - Swap to a bandolier set on Titanium (6.566, slice 3), from stock
   `EQEmu`'s source and not yet checked live. New
   `GameCommand::SwapBandolier` under the new `Capability::BandolierSwap`,

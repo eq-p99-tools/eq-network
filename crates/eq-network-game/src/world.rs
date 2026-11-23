@@ -713,6 +713,9 @@ pub enum Capability {
     /// ([`crate::command::GameCommand::SwapBandolier`]), on the player's own
     /// click or key only.
     BandolierSwap,
+    /// Using the item a potion belt slot names
+    /// ([`crate::command::GameCommand::UseBeltItem`]).
+    UsingPotionBelt,
     /// Setting and clearing the potion belt's slots
     /// ([`crate::command::GameCommand::SetPotionBelt`],
     /// [`crate::command::GameCommand::ClearPotionBelt`]). No use from it.
@@ -730,7 +733,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 87] = [
+    pub const ALL: [Self; 88] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -818,6 +821,7 @@ impl Capability {
         Self::Bandoliers,
         Self::PotionBelt,
         Self::BandolierSwap,
+        Self::UsingPotionBelt,
     ];
 }
 
@@ -2841,6 +2845,7 @@ mod tests {
             Capability::Bandoliers => 84,
             Capability::PotionBelt => 85,
             Capability::BandolierSwap => 86,
+            Capability::UsingPotionBelt => 87,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
