@@ -25,6 +25,7 @@ fn spell(id: u32, band: Band, effects: &[(u32, i32, u32)]) -> Spell {
             id: *effect,
             base: *base,
             formula: *formula,
+            max: 0,
         };
     }
     Spell {
@@ -32,6 +33,7 @@ fn spell(id: u32, band: Band, effects: &[(u32, i32, u32)]) -> Spell {
         band: Some(band),
         bard: Some(false),
         effects: Some(slots),
+        level: None,
     }
 }
 
@@ -278,9 +280,21 @@ fn a_stronger_value_replaces_in_place_and_a_weaker_is_refused() {
         over(debuff(400, 0), debuff(LET_THROUGH, 5)),
         Ok(replaced(2))
     );
-    // A formula whose evaluation is unread leaves it unslotted.
-    let scaled = spell(401, NORMAL, &[(2, 30, 102)]);
+    // A formula that needs the level, with the level unknown, leaves it
+    // unslotted; with the level, the scaled value compares.
+    let mut scaled = spell(401, NORMAL, &[(2, 30, 102)]);
     assert_eq!(over(debuff(400, 20), scaled), Err(Unplaced::ValueUnknown));
+    scaled.level = Some(5);
+    assert_eq!(
+        over(debuff(400, 40), scaled),
+        Err(Unplaced::Refused(Rule::Weaker))
+    );
+    scaled.level = Some(10);
+    assert_eq!(over(debuff(400, 40), scaled), Ok(replaced(2)));
+    // The random formula never compares.
+    let mut random = spell(401, NORMAL, &[(2, 30, 123)]);
+    random.level = Some(10);
+    assert_eq!(over(debuff(400, 20), random), Err(Unplaced::ValueUnknown));
 }
 
 #[test]
@@ -453,4 +467,48 @@ fn a_replace_outside_the_new_band_takes_the_band_s_first_empty_slot() {
             rule: Some(Rule::Replaced),
         })
     );
+}
+
+fn effect(id: u32, base: i32, formula: u32, max: i32) -> Effect {
+    Effect {
+        id,
+        base,
+        formula,
+        max,
+    }
+}
+
+#[test]
+fn values_follow_the_formula_table_the_slow_rule_the_cap_and_the_sign() {
+    let at = |effect, level| value(effect, Some(level));
+    // Constant, and record-tick formulas without a record.
+    assert_eq!(at(effect(2, -20, 100, 0), 60), Some(-20));
+    assert_eq!(at(effect(2, 20, 0, 0), 60), Some(20));
+    assert_eq!(at(effect(2, 20, 107, 0), 60), Some(20));
+    assert_eq!(value(effect(2, 20, 122, 0), None), Some(20));
+    // Level forms.
+    assert_eq!(at(effect(2, 10, 101, 0), 51), Some(35));
+    assert_eq!(at(effect(2, 10, 105, 0), 10), Some(50));
+    assert_eq!(at(effect(2, 10, 110, 0), 60), Some(20));
+    assert_eq!(at(effect(2, 10, 111, 0), 20), Some(34));
+    assert_eq!(at(effect(2, 10, 111, 0), 10), Some(10));
+    assert_eq!(at(effect(2, 10, 118, 0), 50), Some(130));
+    assert_eq!(at(effect(2, 10, 124, 0), 55), Some(15));
+    assert_eq!(at(effect(2, 10, 132, 0), 49), Some(10));
+    // Any other formula: the level times the formula.
+    assert_eq!(at(effect(2, 10, 3, 0), 20), Some(70));
+    assert_eq!(at(effect(2, 10, 106, 0), 2), Some(222));
+    // The cap at |max|, applied to the magnitude, then the base's sign.
+    assert_eq!(at(effect(2, -10, 102, -40), 60), Some(-40));
+    assert_eq!(at(effect(2, 10, 102, 40), 20), Some(30));
+    // A slow below 100 subtracts, raised to the max.
+    assert_eq!(at(effect(11, 80, 102, 0), 30), Some(50));
+    assert_eq!(at(effect(11, 80, 102, 60), 30), Some(60));
+    // A haste adds as any other.
+    assert_eq!(at(effect(11, 120, 102, 0), 10), Some(130));
+    // Unworkable without the state they read.
+    assert_eq!(at(effect(2, 10, 123, 50), 10), None);
+    assert_eq!(at(effect(2, 10, 137, 0), 10), None);
+    assert_eq!(at(effect(2, 10, 138, 0), 10), None);
+    assert_eq!(value(effect(2, 10, 102, 0), None), None);
 }

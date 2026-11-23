@@ -17,10 +17,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     and `Refused(Rule)`.
   - Step 4 compares the landing with every held buff, effect by effect, in
     the read's order, and replaces a weaker conflict in place, nominates a
-    slot where either side has +0x17d, or refuses. Values are worked out
-    for formulas 0 and 100 only, with the base's sign [I]; any other
-    formula leaves the landing unslotted (`ValueUnknown`) until 0x40f339
-    is read.
+    slot where either side has +0x17d, or refuses. Values are 0x40f339's,
+    as its read gives them: the formula table, the slow rule, the cap at
+    |max| and the base's sign, at the held entry's stored level and the
+    caster's (`Spell::level`, `Effect::max`). An unknown level a formula
+    needs, the random formula 123, and 137 and 138 (the owner's hit
+    points) leave the landing unslotted (`ValueUnknown`).
   - Step 6: a landing without +0x17d and no room evicts the first held
     spell with it, from slot 0; the player's +0x256 is taken as 0 [I].
   - The normal band names slots below 15 plus what the held buffs' effect

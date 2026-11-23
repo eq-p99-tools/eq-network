@@ -492,6 +492,7 @@ mod tests {
             band: Some(Band::default()),
             bard: Some(false),
             effects: Some([Effect::default(); 12]),
+            level: None,
         };
         let finder = GameDialect::Titanium.buff_placement().unwrap();
         let landing = Landing {

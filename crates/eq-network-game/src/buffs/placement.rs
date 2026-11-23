@@ -23,6 +23,8 @@
 //! below it are named, and past it the top is unknown unless the caller
 //! says the other sources add nothing.
 //!
+//! Values are 0x40f339's, as its read gives them, at each side's level.
+//!
 //! A replace or an eviction is this client's prediction of what the
 //! program removes. The server stays the authority: its next buff state
 //! wins, and the caller logs any disagreement with the [`Rule`] that fired.
@@ -73,6 +75,8 @@ pub struct Effect {
     pub base: i32,
     /// Its formula (+0xf0 + slot × 4).
     pub formula: u32,
+    /// Its max (+0x90 + slot × 4).
+    pub max: i32,
 }
 
 impl Default for Effect {
@@ -81,6 +85,7 @@ impl Default for Effect {
             id: BLANK,
             base: 0,
             formula: 100,
+            max: 0,
         }
     }
 }
@@ -97,6 +102,10 @@ pub struct Spell {
     pub bard: Option<bool>,
     /// Its twelve effect positions.
     pub effects: Option<[Effect; 12]>,
+    /// The level its values are worked out at: a held entry's stored level
+    /// (its record's byte +1), or for the landing the caster's level, plus
+    /// effect 0x110's total for a Bard song (R49-22e 1, rule 10).
+    pub level: Option<u8>,
 }
 
 impl Spell {
@@ -108,6 +117,7 @@ impl Spell {
             band: None,
             bard: None,
             effects: None,
+            level: None,
         }
     }
 }
@@ -187,7 +197,9 @@ pub enum Unplaced {
     /// A held spell carries effect 148, whose blocking test (step 2) is only
     /// partly read.
     Blocked,
-    /// A step-4 value uses a formula whose evaluation is unread (Q1).
+    /// A step-4 value can't be worked out: its level is unknown and its
+    /// formula needs one, or the formula is random (123) or reads the
+    /// owner's hit points (137, 138).
     ValueUnknown,
     /// Step 4 refused the landing: the program writes nothing.
     Refused(Rule),
@@ -244,14 +256,70 @@ const MINUS_ONE_HELD: u32 = 0x716;
 /// The one spell the refusals of the value compare let through.
 const LET_THROUGH: u32 = 0x344;
 
-/// An effect's value as 0x40f339 works it out, where this client can: for
-/// formulas 0 and 100, the base itself, with its sign [I] (6.612 Q1 (a)).
-/// The other formulas' evaluation is unread.
-const fn value(effect: Effect) -> Option<i64> {
-    match effect.formula {
-        0 | 100 => Some(effect.base as i64),
-        _ => None,
+/// An effect's value as 0x40f339(spell, level, slot, no record) works it
+/// out (read of 0x40f339): an amount from the formula, added to |base| (or,
+/// for a slow below 100, taken from it and raised to the max), capped at
+/// |max|, with the base's sign. None where the level is unknown and the
+/// formula needs it, for the random formula 123, and for 137 and 138,
+/// which read the owner's hit points.
+fn value(effect: Effect, level: Option<u8>) -> Option<i64> {
+    let base = i64::from(effect.base).abs();
+    let max = i64::from(effect.max);
+    let amount = match effect.formula {
+        // The record-ticks formulas add nothing without a record, as in
+        // step 4.
+        0 | 100 | 107 | 108 | 120 | 122 => 0,
+        123 | 137 | 138 => return None,
+        formula => {
+            let level = i64::from(level?);
+            let above = |floor: i64, times: i64| ((level - floor) * times).max(0);
+            match formula {
+                101 => level / 2,
+                102 => level,
+                103 => level * 2,
+                104 => level * 3,
+                105 => level * 4,
+                109 => level / 4,
+                110 => level / 6,
+                111 => above(16, 6),
+                112 => above(24, 8),
+                113 => above(34, 10),
+                114 => above(44, 15),
+                115 => above(15, 7),
+                116 => above(24, 10),
+                117 => above(34, 13),
+                118 => above(44, 20),
+                119 => level / 8,
+                121 => level / 3,
+                124 => above(50, 1),
+                125 => above(50, 2),
+                126 => above(50, 3),
+                127 => above(50, 4),
+                128 => above(50, 5),
+                129 => above(50, 10),
+                130 => above(50, 15),
+                131 => above(50, 20),
+                132 => above(50, 25),
+                // Any other, 0 to 99 and 106 among them: the level times
+                // the formula.
+                other => level * i64::from(other),
+            }
+        }
+    };
+    let mut value = if effect.id == 11 && base < 100 {
+        let slowed = base - amount;
+        if max != 0 && slowed < max {
+            max
+        } else {
+            slowed
+        }
+    } else {
+        base + amount
+    };
+    if max != 0 {
+        value = value.min(max.abs());
     }
+    Some(if effect.base < 0 { -value } else { value })
 }
 
 /// The normal band's top this client can name, and whether it is the
@@ -267,7 +335,7 @@ fn normal_top(landing: &Landing<'_>) -> (u32, bool) {
         };
         for effect in effects.iter().filter(|effect| effect.id == ADDS_SLOTS) {
             total = total
-                .zip(value(*effect))
+                .zip(value(*effect, spell.level))
                 .map(|(total, value)| total + value);
         }
     }
@@ -443,12 +511,12 @@ fn compare(new: &Spell, held: &Spell) -> Result<Compared, Unplaced> {
         let new_value = if forced_new {
             -1
         } else {
-            value(*new_effect).ok_or(Unplaced::ValueUnknown)?
+            value(*new_effect, new.level).ok_or(Unplaced::ValueUnknown)?
         };
         let held_value = if forced_held {
             -1
         } else {
-            value(*held_effect).ok_or(Unplaced::ValueUnknown)?
+            value(*held_effect, held.level).ok_or(Unplaced::ValueUnknown)?
         };
         return Ok(values(effect, held_value, new_value, new.id));
     }
