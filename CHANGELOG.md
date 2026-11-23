@@ -21,6 +21,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handlers; declining sends nothing (inferred). Both new coverage rows keep
   no sample. **Breaking:** the new `News`, `Request`, `GameCommand`,
   `WorldEvent` and `Capability` variants.
+- Read RoF2's corpse money and loot close, the surname answer, the title
+  list and title changes as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.552). The new `rof2_loot_titles` module reads `OP_MoneyOnCorpse`
+  (0x5f44), `OP_LootComplete` (0x55c4), `OP_Surname` (0x0423),
+  `OP_SendTitleList` (0x2d08) and `OP_SetTitleReply` (0x4c21), which have no
+  encoder for either generation, through Titanium's readers into Titanium's
+  events, with Titanium's refusals. The corpse money record that ends a SoD
+  and later listing (response 6, Loot All) gives no event: its coverage row
+  is `Partly` with a part naming it, so the gap log tells each arrival, and
+  lifting validate waits on the loot listing batch that decides its event.
+  The last name and the titles reach the host in the event only.
 - Search the Bazaar on stock `EQEmu`, read only (6.550, slice 1). The new
   `bazaar` module builds `OP_BazaarSearch` (0x1ee9) searches and welcome
   requests and reads the results, the search's end and the welcome.

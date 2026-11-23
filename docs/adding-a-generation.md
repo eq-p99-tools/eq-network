@@ -181,6 +181,11 @@ unreachable because validation refuses the generation:
   four messages with no encoder for either generation, read by Titanium's readers under
   `RoF2`'s numbers. Whether the program reads the reward's faction words and the rename's two
   words is a read still owed.
+- Its corpse money and loot close, surname answer and titles (`rof2_loot_titles`, 6.552): five
+  messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
+  numbers, but for the Loot All marker that ends a SoD and later listing, which gives no event
+  until the loot listing is read and blocks lifting validate. How the program shows that marker
+  is a read still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.
