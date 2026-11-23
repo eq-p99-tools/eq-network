@@ -78,6 +78,19 @@ impl Sight {
         })
     }
 
+    /// Whether a buff the player has grants divine aura, as far as the
+    /// host's catalog knows.
+    pub(super) fn divine_aura(&self) -> bool {
+        self.catalog.as_ref().is_some_and(|catalog| {
+            self.slots.values().any(|buff| {
+                catalog.grants_divine_aura(buff.spell_id, u16::from(buff.caster_level), false)
+            }) || self
+                .landings
+                .iter()
+                .any(|(&spell, &level)| catalog.grants_divine_aura(u32::from(spell), level, true))
+        })
+    }
+
     pub(super) fn changed(&mut self) -> Option<bool> {
         let visible = self.sees_invisible();
         (visible != std::mem::replace(&mut self.published, visible)).then_some(visible)

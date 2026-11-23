@@ -9,7 +9,7 @@ use super::{
     Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
     BAZAAR_SEARCH, BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK,
     MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
-    RENAME, REWARD, SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
+    RENAME, REWARD, SACRIFICE, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
     TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRADER_SHOP, TRANSLOCATE, VOICE_MACRO,
 };
 
@@ -213,6 +213,14 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x3cdc => sent("OP_LogoutReply", EQEMU, Read(&[Zone])),
         // The answer to OP_RequestTitles.
         0x3e89 => sent("OP_SendTitleList", EQEMU, Read(&[Zone])),
+        // The Titanium program reads another program's own refusal of the
+        // player's challenge (R49-6d, 0x45d5af). EQEmu leaves 0x3ea0
+        // unmapped and never passes one on; P99 might (inferred).
+        0x3ea0 => sent(
+            "OP_DuelResponse (the program's own refusal)",
+            P99,
+            Read(&[Zone]),
+        ),
         0x3ea6 => sent("OP_ApproveName", EQEMU, Read(&[World])),
         0x3eba => sent("OP_SendZonepoints", EQEMU, Read(&[Zone])),
         0x3eec => sent("OP_SetGroupTarget", EQEMU, planned(Raids)),
@@ -258,6 +266,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             Partly(&[Zone], DISCIPLINE_TIMER),
         ),
         // A quest's reward, or EQEmu's fixed record that gives nothing.
+        // EQEmu names it OP_Sound; the program reads a quest reward (R49-6g).
         0x541e => sent("OP_Sound", EQEMU, Partly(&[Zone], REWARD)),
         0x547a => sent("OP_Emote", EQEMU, Read(&[Chat])),
         0x5483 => sent("OP_MarkNPC", EQEMU, planned(Raids)),
@@ -281,7 +290,12 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             Unread(Needless("it carries nothing")),
         ),
         0x5a48 => sent("OP_FormattedMessage", EQEMU, Read(&[Chat])),
-        0x5b7b => sent("OP_IncreaseStats", EQEMU, Partly(&[Zone], STATS)),
+        // The program reads 12 bytes, the spawn, the stat and the amount
+        // (R49-6f, 0x455fff). EQEmu sends its 141-byte IncreaseStat_Struct
+        // (zone/client.cpp Client::SetStats, Client::IncStats), which the
+        // program doesn't read: each one is counted unreadable, with its
+        // length and a sample.
+        0x5b7b => sent("OP_IncreaseStats", EQEMU, Read(&[Zone])),
         0x5c78 => sent("OP_Damage", EQEMU, Read(&[Zone])),
         0x5cc0 => sent("OP_PVPStats", EQEMU, planned(LaterSystems)),
         0x5d11 => sent("OP_Track", EQEMU, Read(&[Zone])),

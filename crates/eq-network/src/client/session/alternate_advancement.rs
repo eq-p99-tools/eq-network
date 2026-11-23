@@ -3,7 +3,8 @@
 //! (ranks, points, AA experience and timers, 6.548); and Titanium's AA
 //! requests, training, activating and the experience split (6.556), and
 //! `EQMac`'s, of which only the split goes yet (6.562). No server type lists
-//! them until their own local live rows pass.
+//! the requests until their own local live rows pass. Every Titanium
+//! session reads the facts, unlisted, for the air counter (6.491).
 use super::{
     actions,
     feature::{Feature, Out, World},
