@@ -565,8 +565,12 @@ pub enum GameCommand {
         created: std::time::Instant,
     },
     /// Put the poison in a slot on the weapon, as a right-click on it does
-    /// ([`crate::poisons`]; what starts it in the program is pending read
-    /// R49-1, recording checklist 6.493).
+    /// ([`crate::poisons`]; read R49-1, recording checklist 6.493): the
+    /// session sits a standing player, waits 10 s seated, then sends it.
+    /// [`crate::world::WorldEvent::PoisonStarted`] says it began;
+    /// [`crate::world::WorldEvent::PoisonInterrupted`] that a posture change
+    /// stopped it. A command while one is under way is ignored, as the
+    /// program ignores it.
     ApplyPoison {
         /// Current zone admission.
         session_id: u64,
