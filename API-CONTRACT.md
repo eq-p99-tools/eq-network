@@ -1428,6 +1428,15 @@ revision, capability and scenario. Separate source-derived behavior, synthetic
 codec/state-machine tests, and live evidence. A check on one server type does not
 list a feature on another: one checked on TAKP waits for its own check on Quarm.
 
+A Mac server type may also list a feature from a read of that server's own
+handlers at a named commit, never from another server's: the offer is
+labelled "source-derived, not live" in its server type, its checklist row
+stays open until a live row, and a live defect withdraws the offer on that
+server first. TAKP offers `Looting` this way, from its handlers at
+EQMacEmu/Server 44afcbf (6.577): the same 2-byte open and close, 12-byte item
+request, echo before the checks and empty-cursor rule as Quarm's. Delivery and
+coins stay with the inventory owner.
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

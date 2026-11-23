@@ -1,7 +1,7 @@
-# Quarm corpse access
+# Quarm and TAKP corpse access
 
 This implementation is source-derived and tested with synthetic packets. It
-has not been exercised on Quarm or an attended local server. No installed
+has not been exercised on Quarm, on TAKP or on an attended local server. No installed
 assets, identities or captured packets are fixtures.
 
 ## Evidence
@@ -41,13 +41,27 @@ establishes these layouts and server actions:
   than another looter; callers must not infer a specific permission cause
   from it. Server chat may supply further explanation.
 
+TAKP's server at
+[`44afcbf`](https://github.com/EQMacEmu/Server/tree/44afcbf) was read the same
+way for its own offer (6.577). It has the same opcodes in
+`utils/patches/patch_Mac.conf`, the same `LootingItem_Struct` (12 bytes) and
+`moneyOnCorpseStruct`, and the same size checks in `Handle_OP_LootRequest`,
+`Handle_OP_LootItem` and `Handle_OP_EndLootRequest`. Its
+`Corpse::LootCorpseItem` echoes the item request before its checks too, and its
+`CheckCursorEmptyWhenLooting` also defaults true. Its open refusals use
+responses 0 and 2 (`SendLootReqErrorPacket` defaults to 2), and its loot views
+come through the same `ENCODE(OP_ItemPacket)` as `OP_LootItemPacket`, read
+under TAKP's item rules. Quarm's version adds only its trivial-loot and
+legacy-item rules, which stay server decisions.
+
 These sources do not establish the deployed public-server revision or the
 official program's exact UI timing. No new inference checklist ID is used.
 
 ## Ownership and lifecycle
 
-The generation encodes/decodes loot. `ServerType` offers it for Quarm;
-TAKP availability stays unchanged pending its own validation. Item-rule
+The generation encodes/decodes loot. `ServerType` offers it for Quarm (from
+Quarm's handlers) and for TAKP (from TAKP's own, 6.577), each source-derived
+and not yet checked live. Item-rule
 selection follows the same server policy as ordinary inventory decoding.
 Titanium packet formats retain their existing slot conversion.
 

@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Looting` on TAKP (6.577), from TAKP's own corpse handlers at
+  EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
+  the echo before the server's checks, and an empty cursor before an item
+  request, as TAKP's `CheckCursorEmptyWhenLooting` defaults. Source-derived,
+  not yet checked live.
+
 - Read the guild bank as stock `EQEmu` tells a Titanium client of it
   (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
   emptied), the deposit answer, the bare acknowledgement and the clear, by
