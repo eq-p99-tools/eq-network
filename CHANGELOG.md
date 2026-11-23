@@ -5,6 +5,98 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Word a spoken tongue's skill as the Titanium program does (6.495, reads
+  R49-4 and R49-4b), for the client's languages slice.
+  - **Breaking:** `Tongue::spoken` takes a `chat::Speaker` (the game master
+    flag and whether log-server word 0 is set), and `Tongue::skill()` is now
+    the wire's `u32`.
+  - The skill is the profile's less intoxication >> 2, floored at 0, language
+    0 included; 100 for a game master, or -1 under log-server word 0. New
+    `Tongue::unslurred` gives the away reply's raw skill.
+  - New `PlayerState::intoxication` (Titanium u32 at 128, `EQMac` byte at
+    4968). The program's own offset is in its memory copy, so the match to
+    the profile field is inferred. No later change is decoded.
+  - New `WorldRules::listener_garble`: Titanium's `OP_LogServer` word at 16,
+    the switch for the listener's garble stage. `EQEmu` (1d9cb5c) never sets
+    it.
+  - `EQMac` writes the skill cut to 16 bits (inferred; the Mac program isn't
+    read).
+- Read the Apply Poison wait from effect 234 as the program does (read
+  R49-1f, 6.493b): the host reports the total with the new
+  `GameCommand::PoisonWait { session_id, total_ms }`, and each tick waits
+  that many ms where it is not 0, else 10 s; a negative total never sends.
+  Untold or `None`, the wait stays 10 s. **Breaking:** a new variant on the
+  exhaustive command enum.
+
+- Follow the Titanium program's read R49-6 for duels, stuns, becoming a
+  corpse, `/lfg`, the quest reward, stat increases and `/sheathe` and
+  `/aggressive`.
+  - **Breaking.** `WorldEvent::DuelNews(socials::DuelNews)` is new, and
+    `Capability::WeaponStances` and `GameCommand::ToggleStance` are new.
+    `GameCommand::ChallengeDuel`'s `target` is now the player's target, or
+    0 for none. `Request::AnswerDuel` with `accept: false` is refused on
+    Titanium, and `Request::AutoDeclineDuel` and `Request::PlayerState` are
+    new. `WorldEvent::StatsChanged` now carries `stats::StatIncrease`.
+  - **Duel.** The program has no challenge window and no decline. A
+    challenge is news. `/duel` at the challenger accepts with
+    `OP_RequestDuel`, then `OP_DuelAccept`; anywhere else it challenges.
+    The session turns a challenge down on its own, as the program does
+    (0x3ea0, 12 bytes, reason 1 or 2), and keeps no pace, time-out or
+    distance test. The host's question stays, as a departure the host
+    owns: a yes sends what `/duel` sends, and a no sends nothing. The
+    Mac-era duel is held for row 11g. The ignore-list refusal (reason 0)
+    is not sent.
+  - **Duel ends (read R49-6d).** Only the player's side, the one challenged
+    or accepted, ends a duel. Its death is `Won` (with the program's 8-byte
+    0x3bad) or `Ended`. Its leaving is `Forfeited` (with 0x3bad) or
+    `Lapsed`. Its program's own refusal, 0x3ea0, now read as
+    `DuelUpdate::AutoDeclined`, is `TurnedDown`. New:
+    `DuelNews::{TurnedDown, Lapsed, Forfeited}`, `Request::DuelOver` and
+    `socials::titanium_duel_over`.
+  - **Stun.** A stun under divine aura (effect 40) is ignored (0x417839).
+    A stun during a stun doesn't extend it.
+  - **Corpse.** `OP_BecomeCorpse` places the spawn and stops it.
+  - **LFG.** Titanium's body says the program's range, 100, at +0xc.
+  - **Quest reward.** The coin order is cited to `EQEmu`'s
+    `QuestReward_Struct` and `AddMoneyToPP` (1d9cb5c7).
+  - **Stances.** `/sheathe` and `/aggressive` flip state bit 2 or 8 and send
+    `OP_PlayerStateAdd` or `OP_PlayerStateRemove`, on stock `EQEmu` only.
+    The first P99 use is attended.
+  - **Stats.** `OP_IncreaseStats` is read as the program reads it, 12 bytes
+    `{spawn, stat, amount}` (`stats::StatIncrease`, which replaces
+    `stats::StatChange`; breaking). `EQEmu`'s own 141-byte form is
+    unreadable, as it is to the program, and each one is counted as a gap
+    with its length.
+
+- A Titanium trap or door record (type 253, the new `TRAP_DAMAGE_KIND`)
+  keeps its spell field in `Damage::spell_id`, since the Titanium program
+  picks the line it prints for one by that field (0x4a56e3, read R49-3b).
+  Other kinds still drop it. A field of 0 or 0xFFFF reads as none.
+- Report drowning and lava on every Titanium server, as the Titanium
+  program does (read R25: 0x41c905 sends its own damage reports on any
+  server it plays on). **Characters on public EQEmu servers and on P99
+  can now drown and burn with this client**, where before only falls were
+  reported there. The EQEmu and P99 policies take falls, drowning and lava
+  whether or not the session is on the local network, and both read the AA
+  facts the air counter needs, unlisted (the AA requests stay local only,
+  6.581). A host withholds every report with its own setting (the client's
+  Take Environmental Damage). TAKP and Quarm are unchanged.
+  - From reads R49-3 and R49-3a: after each Titanium report, falls
+    included, the session sends the program's damage record, `OP_Damage`
+    0x5c78 (`hazards::titanium_damage_record`). `EQEmu` only relays it.
+    P99's handling is unknown until the attended liquid row (6.491).
+  - The record is skipped below the program's death floor, -10, where the
+    session can count the player's item HP. No Titanium server type can
+    yet (inferred, 6.491b).
+  - No Titanium report in the freeze stance or for a carrier race, as the
+    program skips them.
+  - Zone 200's lava is its own type, 244 (`LiquidHazard::ZoneHeat`,
+    `Hazard::ZoneHeat`), and Titanium freezing encodes as 246.
+  - New `WorldEvent::HazardReported { session_id, hazard, amount, record }`
+    after every report sent, for the program's own damage line.
+  - **Breaking:** `WorldEvent::HazardReported`; `ZoneHeat` on `LiquidHazard`
+    and `Hazard`; `Hazard` is `Serialize`.
+
 - Apply Poison as the Titanium program does it (read R49-1, 6.493): the
   session sits a standing player, waits 10 s seated, then sends the request.
   Any posture change before then cancels it. The skill and posture refusals

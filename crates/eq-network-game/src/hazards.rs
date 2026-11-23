@@ -2,6 +2,15 @@
 //! The client works the damage out and reports it, and the server takes the
 //! amount on its word, applying only its own reductions.
 //!
+//! The Titanium program reports every hazard twice too (read R49-3 c,
+//! R49-3a):
+//! `OP_EnvDamage` first ([`titanium_damage`](crate::hazards::titanium_damage)),
+//! then `OP_Damage`
+//! ([`titanium_damage_record`](crate::hazards::titanium_damage_record)).
+//! `EQEmu`'s `Handle_OP_Damage` only relays that record to the zone, the
+//! sender too for every type but a fall, and applies nothing
+//! (`zone/client_packet.cpp`), so the player loses the HP once.
+//!
 //! Layout references: `EQEmu`'s `EnvDamage2_Struct`
 //! (`common/eq_packet_structs.h` and `common/patches/titanium_structs.h`)
 //! and `EQMacEmu`'s `Damage_Struct` (`common/eq_packet_structs.h`); the
@@ -18,7 +27,10 @@
 //! (`eqmac_damage`). `EQMacEmu`'s `Handle_OP_EnvDamage` does nothing, and
 //! `Handle_OP_Damage` takes the amount once (`zone/client_packet.cpp`,
 //! Settle results S1), so the pair costs the player the damage once.
-use crate::{combat::EQMAC_DAMAGE_OPCODE, command::EncodedCommand};
+use crate::{
+    combat::{DAMAGE_OPCODE, EQMAC_DAMAGE_OPCODE},
+    command::EncodedCommand,
+};
 use anyhow::{ensure, Result};
 
 /// `OP_EnvDamage`: damage the world did to the player, in Titanium's
@@ -36,6 +48,8 @@ const EQMAC_NOTICE_SIZE: usize = 36;
 
 /// Titanium's `EnvDamage2_Struct`.
 const TITANIUM_SIZE: usize = 31;
+/// Titanium's `CombatDamage_Struct`.
+const TITANIUM_RECORD_SIZE: usize = 23;
 /// `EQMac`'s `Damage_Struct`.
 const EQMAC_SIZE: usize = 24;
 
@@ -63,6 +77,10 @@ pub enum LiquidHazard {
     Drowning,
     /// The body origin was in mapped lava.
     Lava,
+    /// The body origin was in mapped lava in zone 200, which the program
+    /// reports as its own type and works out from disease resist (read
+    /// R49-3 b).
+    ZoneHeat,
 }
 
 /// The session view used when the host sampled a liquid hazard.
@@ -90,7 +108,7 @@ pub(crate) fn titanium_environment(profile: &[u8]) -> TitaniumEnvironment {
 }
 
 /// What in the world did the damage.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub enum Hazard {
     /// A fall.
     Falling,
@@ -100,19 +118,26 @@ pub enum Hazard {
     Lava,
     /// Bitter cold.
     Freezing,
+    /// Zone 200's lava, which the Titanium program reports as type 244 and
+    /// works out from disease resist (read R49-3 b). No `EQMac` type is
+    /// known for it.
+    ZoneHeat,
 }
 
 impl Hazard {
     /// The damage type both generations put on the report, where the
     /// generation has one: lava, drowning and falling are 250, 251 and 252
-    /// in both servers' code, and only `EQMacEmu` names freezing, 246.
+    /// in both servers' code; freezing is 246 in `EQMacEmu`'s and in the
+    /// Titanium program's (read R49-3 b); zone 200's lava is 244 in the
+    /// Titanium program's only.
     const fn code(self, titanium: bool) -> Option<u8> {
         match self {
             Self::Lava => Some(250),
             Self::Drowning => Some(251),
             Self::Falling => Some(252),
-            Self::Freezing if titanium => None,
             Self::Freezing => Some(246),
+            Self::ZoneHeat if titanium => Some(244),
+            Self::ZoneHeat => None,
         }
     }
 }
@@ -139,8 +164,8 @@ fn check(spawn_id: u16, amount: u32) -> Result<()> {
 /// struct calls constant; the rest is zero.
 ///
 /// # Errors
-/// Refuses freezing, for which no Titanium damage type is known, a report
-/// for no spawn, no damage, and more than `i32::MAX` points of it.
+/// Refuses a report for no spawn, no damage, and more than `i32::MAX`
+/// points of it.
 pub fn titanium_damage(spawn_id: u16, hazard: Hazard, amount: u32) -> Result<EncodedCommand> {
     check(spawn_id, amount)?;
     let Some(code) = hazard.code(true) else {
@@ -153,6 +178,36 @@ pub fn titanium_damage(spawn_id: u16, hazard: Hazard, amount: u32) -> Result<Enc
     body[27..29].copy_from_slice(&u16::MAX.to_le_bytes());
     Ok(EncodedCommand {
         opcode: ENV_DAMAGE_OPCODE,
+        body,
+    })
+}
+
+/// The Titanium program's second report (`OP_Damage`, 23 bytes), as it
+/// builds it after [`titanium_damage`] for every hazard it reports (read
+/// R49-3 c, 0x41d37f; falls at 0x420ea6, R49-3a): the player's spawn as the
+/// target at 0, no source, the damage type at 4, no spell (0xFFFF) at 5,
+/// the amount at 7, and zero force and angles. The program sends the amount
+/// after its own local absorbs, which leave drowning, lava and falls alone.
+///
+/// # Errors
+/// Refuses a report for no spawn, no damage, and more than `i32::MAX`
+/// points of it.
+pub fn titanium_damage_record(
+    spawn_id: u16,
+    hazard: Hazard,
+    amount: u32,
+) -> Result<EncodedCommand> {
+    check(spawn_id, amount)?;
+    let Some(code) = hazard.code(true) else {
+        anyhow::bail!("no Titanium damage type is known for {hazard:?}");
+    };
+    let mut body = vec![0; TITANIUM_RECORD_SIZE];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[4] = code;
+    body[5..7].copy_from_slice(&u16::MAX.to_le_bytes());
+    body[7..11].copy_from_slice(&amount.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: DAMAGE_OPCODE,
         body,
     })
 }
@@ -247,8 +302,39 @@ mod tests {
             titanium_damage(7, Hazard::Drowning, 1).unwrap().body[22],
             251
         );
-        // No Titanium type is known for freezing.
-        assert!(titanium_damage(7, Hazard::Freezing, 10).is_err());
+        // Cold and zone 200's lava, from the program (R49-3 b).
+        assert_eq!(
+            titanium_damage(7, Hazard::Freezing, 10).unwrap().body[22],
+            246
+        );
+        assert_eq!(
+            titanium_damage(7, Hazard::ZoneHeat, 10).unwrap().body[22],
+            244
+        );
+        assert!(eqmac_damage(7, Hazard::ZoneHeat, 10).is_err());
+    }
+
+    #[test]
+    fn titanium_follows_each_report_with_the_damage_record_the_program_builds() {
+        for (hazard, code) in [
+            (Hazard::Falling, 252),
+            (Hazard::Drowning, 251),
+            (Hazard::Lava, 250),
+            (Hazard::ZoneHeat, 244),
+            (Hazard::Freezing, 246),
+        ] {
+            let record = titanium_damage_record(0x0342, hazard, 300).unwrap();
+            assert_eq!(record.opcode, DAMAGE_OPCODE);
+            let mut expected = [0; TITANIUM_RECORD_SIZE];
+            expected[..2].copy_from_slice(&0x0342u16.to_le_bytes());
+            expected[4] = code;
+            expected[5..7].fill(0xff);
+            expected[7..11].copy_from_slice(&300u32.to_le_bytes());
+            assert_eq!(record.body, expected, "{hazard:?}");
+        }
+        assert!(titanium_damage_record(0, Hazard::Lava, 10).is_err());
+        assert!(titanium_damage_record(7, Hazard::Lava, 0).is_err());
+        assert!(titanium_damage_record(7, Hazard::Lava, u32::MAX).is_err());
     }
 
     #[test]

@@ -22,6 +22,7 @@ mod creation;
 mod deletion;
 mod dialogs;
 mod doors;
+mod duel;
 mod entities;
 mod exchange;
 pub(super) mod feature;

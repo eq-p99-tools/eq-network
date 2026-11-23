@@ -579,6 +579,22 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Effect 234's total for the player, in ms, as the host sums it: the
+    /// effect's value from every active buff at its caster's level, type-4
+    /// records negated, and from every AA the player's class may use at
+    /// their level (read R49-1f; 0x41002f and 0x40feaa). Worn items do not
+    /// count. `None` when the host cannot resolve something that could
+    /// carry the effect, such as a buff whose spell it does not know.
+    ///
+    /// The host's own report, posted whenever the total changes; the
+    /// Apply Poison wait reads the latest one on each tick (checklist
+    /// 6.493b). Each zone session starts untold, which waits 10 s.
+    PoisonWait {
+        /// Current zone admission.
+        session_id: u64,
+        /// The total in ms, or `None` when it cannot be summed.
+        total_ms: Option<i64>,
+    },
     /// What the session may eat and drink on its own from now on. Each zone
     /// session starts with the client's configured choice, so a host that
     /// lets the player change it says so again after each admission.
@@ -760,14 +776,15 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
-    /// Challenge another player to a duel: Titanium's `/duel` at the
-    /// player's target (checklist 6.492b; what the program checks and
-    /// prints is pending R49-6h). The session sends it only at a player
-    /// spawn in the zone other than the player, one challenge at a time.
+    /// Titanium's `/duel` at the player's target (R49-6h, 0x472a67): a
+    /// challenge, or the acceptance of the target's own. The session tells
+    /// what it did as [`crate::socials::DuelNews`], with the program's
+    /// refusals for no player target, the player themselves, a duel on and
+    /// another challenge waiting.
     ChallengeDuel {
         /// Current zone admission.
         session_id: u64,
-        /// The player challenged.
+        /// The player's target, or 0 for none.
         target: u16,
         /// When the player asked.
         created: std::time::Instant,
@@ -1243,6 +1260,17 @@ pub enum GameCommand {
         /// When the player requested it.
         created: std::time::Instant,
     },
+    /// Titanium's `/sheathe` (0x465dea) or `/aggressive` (0x465e51): flip
+    /// one bit of the player's own state word and tell the server (read
+    /// R49-6n). No line; the server's echo changes how the player stands.
+    ToggleStance {
+        /// Current zone admission.
+        session_id: u64,
+        /// Which one.
+        stance: crate::appearance::Stance,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Ask when a discipline may next be used: `EQMac`'s bare `/disc`
     /// ([`crate::disciplines::eqmac::REUSE_QUESTION`]). The server answers
     /// with a line; the session keeps no timer of its own.
@@ -1445,6 +1473,7 @@ impl GameCommand {
             Self::ApplyPoison { .. } => "ApplyPoison",
             Self::ChatChannel { .. } => "ChatChannel",
             Self::AutoEat { .. } => "AutoEat",
+            Self::PoisonWait { .. } => "PoisonWait",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
             Self::SetMovementOptions { .. } => "SetMovementOptions",
             Self::SetBookOptions { .. } => "SetBookOptions",
@@ -1453,6 +1482,7 @@ impl GameCommand {
             Self::UseKnightAbility { .. } => "UseKnightAbility",
             Self::Shield { .. } => "Shield",
             Self::AskDisciplineReuse { .. } => "AskDisciplineReuse",
+            Self::ToggleStance { .. } => "ToggleStance",
             Self::AcceptTask { .. } => "AcceptTask",
             Self::DeclineTasks { .. } => "DeclineTasks",
             Self::CancelTask { .. } => "CancelTask",
@@ -1596,6 +1626,7 @@ impl GameCommand {
             | Self::ApplyPoison { session_id, .. }
             | Self::ChatChannel { session_id, .. }
             | Self::AutoEat { session_id, .. }
+            | Self::PoisonWait { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
             | Self::SetServerFilters { session_id, .. }
             | Self::SetMovementOptions { session_id, .. }
@@ -1605,6 +1636,7 @@ impl GameCommand {
             | Self::UseKnightAbility { session_id, .. }
             | Self::Shield { session_id, .. }
             | Self::AskDisciplineReuse { session_id, .. }
+            | Self::ToggleStance { session_id, .. }
             | Self::AcceptTask { session_id, .. }
             | Self::DeclineTasks { session_id }
             | Self::CancelTask { session_id, .. }
@@ -1747,12 +1779,14 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::LiquidDamage { hazard, .. } => match hazard {
                 crate::hazards::LiquidHazard::Drowning => Capability::Drowning,
-                crate::hazards::LiquidHazard::Lava => Capability::LavaHeat,
+                crate::hazards::LiquidHazard::Lava | crate::hazards::LiquidHazard::ZoneHeat => {
+                    Capability::LavaHeat
+                }
             },
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
-            Self::ApplyPoison { .. } => Capability::ApplyingPoison,
+            Self::ApplyPoison { .. } | Self::PoisonWait { .. } => Capability::ApplyingPoison,
             Self::ChatChannel { .. } => Capability::ChatChannels,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SetServerFilters { .. } => Capability::ServerFilters,
@@ -1784,6 +1818,7 @@ impl GameCommand {
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
             Self::Shield { .. } => Capability::Shielding,
             Self::AskDisciplineReuse { .. } => Capability::DisciplineReuse,
+            Self::ToggleStance { .. } => Capability::WeaponStances,
             Self::AcceptTask { .. }
             | Self::DeclineTasks { .. }
             | Self::CancelTask { .. }
@@ -1877,6 +1912,7 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
+            | Self::PoisonWait { .. }
             | Self::AnswerListPolls { .. }
             | Self::SetServerFilters { .. }
             | Self::SetBookOptions { .. }
@@ -2001,6 +2037,7 @@ impl GameCommand {
             | Self::UseKnightAbility { created, .. }
             | Self::Shield { created, .. }
             | Self::AskDisciplineReuse { created, .. }
+            | Self::ToggleStance { created, .. }
             | Self::AcceptTask { created, .. }
             | Self::CancelTask { created, .. }
             | Self::AskTaskHistory { created, .. }
@@ -2206,6 +2243,7 @@ pub fn encode(
         | GameCommand::ApplyPoison { .. }
         | GameCommand::ChatChannel { .. }
         | GameCommand::AutoEat { .. }
+        | GameCommand::PoisonWait { .. }
         | GameCommand::AnswerListPolls { .. }
         | GameCommand::SetServerFilters { .. }
         | GameCommand::SetMovementOptions { .. }
@@ -2215,6 +2253,7 @@ pub fn encode(
         | GameCommand::UseKnightAbility { .. }
         | GameCommand::Shield { .. }
         | GameCommand::AskDisciplineReuse { .. }
+        | GameCommand::ToggleStance { .. }
         | GameCommand::AcceptTask { .. }
         | GameCommand::DeclineTasks { .. }
         | GameCommand::CancelTask { .. }

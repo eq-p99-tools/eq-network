@@ -16,6 +16,7 @@ use super::{
 use crate::client::RecordEvent;
 use anyhow::Result;
 use eq_network_game::{
+    appearance::{AppearanceChange, SpawnStates, Stance},
     message::Message,
     request::Request,
     socials,
@@ -52,6 +53,12 @@ pub(super) struct Socials {
     eqmac: bool,
     /// There, when the last assist went, while it is unanswered.
     eqmac_assist: Option<Instant>,
+    /// Titanium: the player's own state word as `/sheathe` and
+    /// `/aggressive` last set it. The server passes the change to the others
+    /// and not back (`EQEmu`'s `Handle_OP_PlayerStateAdd`), so the session
+    /// keeps it, as the program keeps its own (R49-6n); a new zone, or the
+    /// server's word on the player's states, sends it back to the spawn's.
+    stances: Option<SpawnStates>,
 }
 
 impl Socials {
@@ -75,6 +82,39 @@ impl Socials {
         }
     }
 
+    /// Whether `/sheathe` and `/aggressive` are offered: the Titanium
+    /// program's (R49-6n), on stock `EQEmu` only. P99's first use is
+    /// attended (R3), and the `EQMac` program's forms are unread.
+    const fn weapon_stances(&self) -> bool {
+        !self.project1999 && !self.eqmac
+    }
+
+    /// `/sheathe` or `/aggressive`: the program flips the stance's bit in the
+    /// player's state word and sends `OP_PlayerStateAdd` or
+    /// `OP_PlayerStateRemove` with it, and shows no line (R49-6n).
+    fn toggle_stance(
+        &mut self,
+        stance: Stance,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let states = self
+            .stances
+            .or_else(|| {
+                let own = world.own_spawn?;
+                world.spawns.get(own).map(|spawn| spawn.appearance.states)
+            })
+            .unwrap_or_default();
+        let on = !states.contains(stance.states());
+        out.request(&Request::PlayerState { stance, on })?;
+        self.stances = Some(if on {
+            states.with(stance.states())
+        } else {
+            states.without(stance.states())
+        });
+        Ok(())
+    }
+
     /// Whether rolls take P99's ends, in order.
     const fn bounded_rolls(&self) -> bool {
         self.project1999 || self.eqmac
@@ -92,12 +132,16 @@ impl Feature for Socials {
                 Capability::Yelling,
             ];
         }
-        vec![
+        let mut offered = vec![
             Capability::Rolling,
             Capability::Emoting,
             Capability::Assisting,
             Capability::Yelling,
-        ]
+        ];
+        if self.weapon_stances() {
+            offered.push(Capability::WeaponStances);
+        }
+        offered
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -119,10 +163,24 @@ impl Feature for Socials {
                 | ClientCommand::Assist { .. }
                 | ClientCommand::YellForHelp { .. }
                 | ClientCommand::EmoteAnimation { .. }
-        )
+        ) || (self.weapon_stances() && matches!(command, ClientCommand::ToggleStance { .. }))
     }
 
     fn explain(&mut self, message: &mut Message, world: &World) {
+        let told = match message {
+            Message::ZoneOffer(_) | Message::ZoneAnswer(_) | Message::Handoff(_) => true,
+            Message::Event(WorldEvent::Appearance { spawn_id, change }) => {
+                world.own_spawn == Some(*spawn_id)
+                    && matches!(
+                        change,
+                        AppearanceChange::StatesAdded(_) | AppearanceChange::StatesRemoved(_)
+                    )
+            }
+            _ => false,
+        };
+        if told {
+            self.stances = None;
+        }
         if self.eqmac {
             if matches!(message, Message::Event(WorldEvent::Assisted(_))) {
                 self.eqmac_assist = None;
@@ -185,6 +243,7 @@ impl Feature for Socials {
                 out.request(&Request::Random { low, high })
             }
             ClientCommand::YellForHelp { .. } => out.request(&Request::YellForHelp),
+            ClientCommand::ToggleStance { stance, .. } => self.toggle_stance(*stance, world, out),
             // The program sends the animation only while the player stands
             // still (0x49e0c1, read R47); the host checks the stillness, and
             // the session sends nothing for a player it knows isn't standing.
@@ -994,6 +1053,84 @@ mod tests {
             (outcome.sent[0].opcode, outcome.sent[0].body.len()),
             (0xda41, 0)
         );
+    }
+
+    #[test]
+    fn sheathe_and_aggressive_flip_their_bit_in_two_opcodes_and_say_nothing() {
+        use eq_network_game::appearance::titanium_player_state;
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut own = testing::spawn(7, eq_network_game::world::SpawnKind::Player);
+        own.appearance.states = SpawnStates::WEAPON_SHEATHED;
+        world.spawns.insert(own);
+        let mut feature = Socials::default();
+        let toggle = |feature: &mut Socials, world: &mut World, stance| {
+            let command = ClientCommand::ToggleStance {
+                session_id: 5,
+                stance,
+                created: Instant::now(),
+            };
+            testing::run(|out| feature.handle(&command, world, out))
+        };
+        // The spawn says the weapon is sheathed: the first /sheathe draws it.
+        let drawn = toggle(&mut feature, &mut world, Stance::Sheathed);
+        assert_eq!(
+            drawn.sent,
+            [titanium_player_state(
+                7,
+                SpawnStates::WEAPON_SHEATHED,
+                false
+            )]
+        );
+        assert_eq!(
+            (drawn.sent[0].opcode, drawn.sent[0].body.len()),
+            (0x381d, 8)
+        );
+        assert!(drawn.events.is_empty(), "no line: {:?}", drawn.events);
+        // The server doesn't echo it, so the session's own word holds.
+        let sheathed = toggle(&mut feature, &mut world, Stance::Sheathed);
+        assert_eq!(
+            sheathed.sent,
+            [titanium_player_state(7, SpawnStates::WEAPON_SHEATHED, true)]
+        );
+        assert_eq!(sheathed.sent[0].opcode, 0x63da);
+        let aggressive = toggle(&mut feature, &mut world, Stance::Aggressive);
+        assert_eq!(
+            aggressive.sent,
+            [titanium_player_state(
+                7,
+                SpawnStates::FORCED_AGGRESSIVE,
+                true
+            )]
+        );
+        // A new zone goes back to the spawn's states.
+        feature.explain(&mut Message::Handoff(Vec::new()), &world);
+        let again = toggle(&mut feature, &mut world, Stance::Aggressive);
+        assert_eq!(
+            again.sent,
+            [titanium_player_state(
+                7,
+                SpawnStates::FORCED_AGGRESSIVE,
+                true
+            )]
+        );
+
+        // P99 and the Mac servers offer neither: P99's first use is
+        // attended, and the EQMac program's forms are unread.
+        let command = ClientCommand::ToggleStance {
+            session_id: 5,
+            stance: Stance::Sheathed,
+            created: Instant::now(),
+        };
+        assert!(Socials::default().owns(&command));
+        assert!(!Socials::project1999().owns(&command));
+        assert!(!Socials::eqmac().owns(&command));
+        assert!(Socials::default()
+            .capabilities()
+            .contains(&crate::world::Capability::WeaponStances));
+        assert!(!Socials::project1999()
+            .capabilities()
+            .contains(&crate::world::Capability::WeaponStances));
     }
 
     #[test]

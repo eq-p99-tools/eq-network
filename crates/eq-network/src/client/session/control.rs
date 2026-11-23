@@ -41,8 +41,9 @@ impl OwnControl {
         self.changed = Some(now);
     }
 
-    /// Native overlap is ignored, including zero; zero while idle is a
-    /// minimum-duration stun, not an explicit release.
+    /// Native overlap is ignored, including zero (0x417839 returns while
+    /// the actor's +0xd0 expiry is set: no extension; R49-6b); zero while
+    /// idle is a minimum-duration stun, not an explicit release.
     fn receive(&mut self, duration: Option<Duration>, now: Instant) -> bool {
         if self.stunned() {
             return false;
@@ -126,7 +127,9 @@ impl Stuns {
             Self::publish(world, out)?;
         }
         if let Message::Event(WorldEvent::Stun(duration)) = message {
-            if world.control.receive(*duration, now) {
+            // 0x417839 ignores a stun while effect 40's total is positive
+            // (divine aura; R49-6b), as far as the host's catalog knows.
+            if !world.sight.divine_aura() && world.control.receive(*duration, now) {
                 Self::publish(world, out)?;
             }
         }
@@ -139,7 +142,9 @@ impl Feature for Stuns {
         let now = Instant::now();
         world.control.expire(now);
         if let Message::Event(WorldEvent::Stun(duration)) = message {
-            world.control.receive(*duration, now);
+            if !world.sight.divine_aura() {
+                world.control.receive(*duration, now);
+            }
         }
         Ok(())
     }
@@ -222,6 +227,46 @@ mod tests {
             assert_eq!(control.revision, 2);
             assert!(!control.expire(start + Duration::from_secs(10)));
         }
+    }
+
+    #[test]
+    fn a_stun_under_divine_aura_is_ignored() {
+        // 0x417839 returns while effect 40's total is positive (R49-6b).
+        #[derive(Debug)]
+        struct Catalog;
+        impl eq_network_game::vision::SightCatalog for Catalog {
+            fn sees_invisible(&self, _spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
+                false
+            }
+            fn grants_divine_aura(&self, spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
+                spell_id == 99
+            }
+        }
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.sight = super::super::sight::Sight::new(Some(std::sync::Arc::new(Catalog)));
+        let aura = eq_network_game::buffs::Buff {
+            spell_id: 99,
+            caster_level: 20,
+            effect_type: 2,
+            bard_modifier: 10,
+            duration_ticks: 3,
+            counters: 0,
+            caster_id: 7,
+        };
+        world
+            .sight
+            .apply(&WorldEvent::BuffSnapshot(vec![Some(aura)]), Some(7));
+        let stun = Message::Event(WorldEvent::Stun(Some(Duration::from_secs(3))));
+        let now = Instant::now();
+        let heard = testing::run(|out| Stuns::observe_at(&stun, now, &mut world, out));
+        assert!(heard.events.is_empty() && !world.control.stunned());
+        // Without it, the same stun holds.
+        world
+            .sight
+            .apply(&WorldEvent::BuffSnapshot(vec![None]), Some(7));
+        testing::run(|out| Stuns::observe_at(&stun, now, &mut world, out));
+        assert!(world.control.stunned());
     }
 
     #[test]

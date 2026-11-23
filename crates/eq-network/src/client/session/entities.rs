@@ -140,6 +140,17 @@ impl Spawns {
                     (spawn.position.x, spawn.position.y, spawn.position.z) = (x, y, z);
                 }
             }
+            // The Titanium program places the spawn, stops it and snaps it to
+            // the floor, with no line and no window change (read R49-6e:
+            // 0x451db3). The floor is the host's; the position is the
+            // server's.
+            WorldEvent::BecameCorpse { spawn_id, position } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    let [x, y, z] = *position;
+                    (spawn.position.x, spawn.position.y, spawn.position.z) = (x, y, z);
+                    spawn.velocity = [0.0; 3];
+                }
+            }
             WorldEvent::TitleChanged { spawn_id, change } => {
                 if let Some(spawn) = self.0.get_mut(spawn_id) {
                     match change {
@@ -959,6 +970,35 @@ mod tests {
             [position.x, position.y, position.z, position.heading],
             [1.0, 2.0, 3.0, 128.0]
         );
+    }
+
+    #[test]
+    fn a_titanium_player_becoming_a_corpse_is_placed_and_stopped() {
+        let mut entities = Entities::new(GameDialect::Titanium);
+        let mut world = World::new(5);
+        let mut player = spawn(9, SpawnKind::Player);
+        player.position.heading = 64.0;
+        entities
+            .admit(&event(WorldEvent::Spawns(vec![player])), &mut world)
+            .unwrap();
+        let became = event(WorldEvent::BecameCorpse {
+            spawn_id: 9,
+            position: [4.0, 5.0, 6.0],
+        });
+        testing::run(|out| entities.observe(&became, &mut world, out))
+            .result
+            .unwrap();
+        let spawn = world.spawns.visible(9).unwrap();
+        assert_eq!(
+            [
+                spawn.position.x,
+                spawn.position.y,
+                spawn.position.z,
+                spawn.position.heading
+            ],
+            [4.0, 5.0, 6.0, 64.0]
+        );
+        assert_eq!(spawn.velocity, [0.0; 3]);
     }
 
     #[test]

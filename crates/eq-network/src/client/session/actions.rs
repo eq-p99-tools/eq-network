@@ -223,6 +223,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // about a discipline's reuse, which the server answers.
         | ClientCommand::Shield { .. }
         | ClientCommand::AskDisciplineReuse { .. }
+        // Nor does a weapon stance, one state bit.
+        | ClientCommand::ToggleStance { .. }
         // Nor do the journal's requests: the journal paces its own.
         | ClientCommand::AcceptTask { .. }
         | ClientCommand::DeclineTasks { .. }
@@ -309,6 +311,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::PoisonWait { .. }
         | ClientCommand::AnswerListPolls { .. }
         | ClientCommand::ChooseServerFilters { .. }
         | ClientCommand::SetServerFilters { .. }
@@ -486,6 +489,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
         | ClientCommand::AskDisciplineReuse { session_id, .. }
+        | ClientCommand::ToggleStance { session_id, .. }
         | ClientCommand::AcceptTask { session_id, .. }
         | ClientCommand::DeclineTasks { session_id }
         | ClientCommand::CancelTask { session_id, .. }
@@ -602,6 +606,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::PoisonWait { .. }
         | ClientCommand::AnswerListPolls { .. }
         | ClientCommand::SetBookOptions { .. }
         | ClientCommand::CloseContainer { .. }
@@ -728,6 +733,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::YellForHelp { .. }
         | ClientCommand::Shield { .. }
         | ClientCommand::AskDisciplineReuse { .. }
+        | ClientCommand::ToggleStance { .. }
         | ClientCommand::ChallengeDuel { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }
