@@ -8,6 +8,7 @@ mod buffs;
 mod camp;
 mod casting;
 mod character;
+pub(super) mod chat_link;
 mod clock;
 mod combat;
 mod confirmations;
@@ -207,6 +208,9 @@ pub(in crate::client) struct CharacterSession<'a> {
     /// What the riding wire keeps across zones, as the program's globals
     /// do (reads R36 §4, R36c).
     pub(in crate::client) riding: std::sync::Arc<riders::Riding>,
+    /// The character's chat server link, opened from the world's offer
+    /// where the server type opens one, kept across zones.
+    pub(in crate::client) chat: std::sync::Arc<chat_link::ChatLink>,
 }
 
 impl<'a> CharacterSession<'a> {
@@ -229,6 +233,7 @@ impl<'a> CharacterSession<'a> {
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
             server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
+            chat: std::sync::Arc::default(),
         }
     }
 
@@ -240,6 +245,8 @@ impl<'a> CharacterSession<'a> {
             self.server_filters
                 .replace(self.config.server_filters.clone());
             self.riding = std::sync::Arc::default();
+            // A camp or the character list ends the character's chat link.
+            self.chat.close();
         }
     }
 }

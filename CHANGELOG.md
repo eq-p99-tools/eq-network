@@ -5,6 +5,28 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Open the chat server's channels link (recording checklist 6.509; the
+  Titanium program's own side is pending read R49-8). From the world's
+  Titanium chat-channel offer (`OP_SetChatServer`, letter `B`), where the
+  server type opens one (`EQEmu`; not Project 1999, on Adam's word, nor
+  Quarm, TAKP or RoF2), the session opens one link per character on its own
+  thread: the offered address through the zone handoff's checks, then the
+  modern transport, then `OP_MailLogin` with the key, which stays zeroized in
+  `chat_server::Login` and in no event, log or `Debug`. The link survives zone
+  changes and ends on the character list, a camp, a stop and the session's
+  end; a second offer replaces it; nothing retries. `GameCommand::ChatChannel
+  { text }` (behind `Capability::ChatChannels`, offered only in a zone whose
+  world opened a link) sends the text the chat server takes, refused with
+  `WorldEvent::ChatChannelRefused` while the link is not up and never kept
+  for later. What the server says arrives as `WorldEvent::Channel` (a
+  message, a server line, the channels joined in slot order, a member
+  joining or leaving) and `WorldEvent::ChannelLink` (up, or lost and why).
+  Queues are bounded both ways; mail, friends and ignore opcodes go to the
+  gap log by opcode and length. New `eq_network_game::chat_server`.
+
+  Breaking: new variants on the exhaustive command, event and capability
+  enums.
+
 - Read RoF2's player profile and own spawn as stock `EQEmu` writes them,
   labelled inferred for RoF2 (6.502): `eq_network_game::rof2_player`
   walks each serialised stream whole, refusing any count but the

@@ -660,12 +660,16 @@ pub enum Capability {
     ServerFiltersAtOnce,
     /// Accepting or declining a challenge to a duel.
     Dueling,
+    /// The chat server's channels ([`crate::chat_server`]): offered where
+    /// the server type opens a chat link; whether one is up is told by
+    /// [`WorldEvent::ChannelLink`].
+    ChatChannels,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 72] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -737,6 +741,7 @@ impl Capability {
         Self::ServerFilters,
         Self::ServerFiltersAtOnce,
         Self::Dueling,
+        Self::ChatChannels,
     ];
 }
 
@@ -1535,6 +1540,18 @@ pub enum WorldEvent {
     /// sat and whether it took. The server's own inventory record removes
     /// it.
     PoisonAnswered(crate::poisons::PoisonAnswer),
+    /// What the chat server told about its channels
+    /// ([`crate::chat_server`]).
+    Channel(crate::chat_server::ChannelEvent),
+    /// The chat server link came up or ended.
+    ChannelLink(crate::chat_server::ChannelLink),
+    /// A chat channel command was not sent, and is not kept for later.
+    ChatChannelRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not, in this library's words.
+        reason: String,
+    },
     /// A poison was not put on: nothing was sent.
     ApplyPoisonRefused {
         /// Admission from the request.
@@ -2532,6 +2549,7 @@ mod tests {
             Capability::ServerFilters => 68,
             Capability::ServerFiltersAtOnce => 69,
             Capability::Dueling => 70,
+            Capability::ChatChannels => 71,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
