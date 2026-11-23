@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Slower water's own set in the swim grant, as read R49-26 reads the Titanium
+  region classifier (0x435ec9; checklist 6.483).
+  - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for
+    `SL`, `LA` and `VW`), `WaterRules::slower` and `WaterRules::set_for`.
+    Zone 222's own set is level 5's only; its slower water keeps
+    `LIQUID_6_TO_8`.
+  - `SwimCalibration` carries `slower` beside `set`, with
+    `SwimCalibration::set_for`. The session bound takes the larger of the
+    two sets' caps on each axis (`WetCaps::covering`), which widens it only
+    in poearthb. Breaking: a new required field.
 - A Bard's song under the Titanium program's rules (read R49-21; gap 3.5,
   checklist 6.442, 6.542), on P99 and Titanium EQEmu only. See
   API-CONTRACT.md, "A Bard's song under the Titanium program's rules".
