@@ -851,6 +851,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             abilities::eqmac::encode(*ability, *target, sender.spawn())
         }
         Request::FeignDeathPosture => abilities::eqmac::feign_posture(sender.spawn()),
+        Request::Shield(target) => crate::shielding::eqmac_shield(*target),
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Jump => Ok(crate::quarm::jump()),
         Request::Consent { name, given: true } => corpses::eqmac_consent(name),
@@ -1179,12 +1180,14 @@ mod tests {
     }
 
     #[test]
-    fn only_titanium_sends_a_shield() {
+    fn each_generation_sends_a_shield_in_its_own_width() {
         let packet = titanium(&Request::Shield(42), PLAYER).unwrap();
         assert_eq!((packet.opcode, packet.body), (0x3fe6, vec![42, 0, 0, 0]));
         assert!(titanium(&Request::Shield(0), PLAYER).is_err());
-        // No EQMac opcode is known yet (6.517).
-        assert!(eqmac(&Request::Shield(42), PLAYER).is_err());
+        // TAKP's and Quarm's 2-byte `Shielding_Struct` (6.603 G2).
+        let packet = eqmac(&Request::Shield(0x0142), PLAYER).unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x4b42, vec![0x42, 0x01]));
+        assert!(eqmac(&Request::Shield(0), PLAYER).is_err());
     }
 
     #[test]

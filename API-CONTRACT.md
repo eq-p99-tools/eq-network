@@ -2035,7 +2035,8 @@ already accepted one.
 ## Shielding
 
 Where the server type takes `/shield` (`Capability::Shielding`: stock
-`EQEmu` so far, from its source and not yet checked live), send
+`EQEmu`, TAKP and Quarm, each from its own source and not yet checked live;
+TAKP's and Quarm's `OP_Shielding` is the 16-bit spawn id alone), send
 `GameCommand::Shield` with the spawn id of the player to shield. The server
 checks the level (30), the class (Warrior), its rule, the 3-minute recast,
 the target (no NPC, not oneself) and the distance (15), and answers each
@@ -2044,6 +2045,25 @@ refusal, the start and the end with a line of its own; nothing answers on
 500 ms of the last one (`WorldEvent::SocialRefused`, nothing sent). Checks
 the original makes before it sends (oneself, the class, the level) are the
 host's: they may only be stricter than the server's.
+
+## Disciplines on TAKP and Quarm
+
+TAKP and Quarm send a Mac player no list of disciplines and no reuse
+timers. Where they are offered (`Capability::UsingDisciplines`, from both
+servers' own `Handle_OP_Discipline`, not yet checked live), send
+`GameCommand::UseDiscipline` by spell as on Titanium. The session sends the
+servers' number for that spell and the player's class (`OP_Discipline`,
+the number and three zero bytes), and refuses only a spell with no number
+for the class (`WorldEvent::CastRejected`, nothing sent) and a second try
+within one second. The server judges the level, its reuse timer, any
+discipline still active and the player's state, and answers each with a
+line of its own. `OP_DisciplineChange` reports the discipline begun and
+ended. Nothing waits for a cast.
+
+`GameCommand::AskDisciplineReuse` (`Capability::DisciplineReuse`) is the
+bare `/disc`: it sends the number 0, under the same one-second guard. The
+server answers with a line either way; the one that says a discipline is
+ready reaches the host as chat with string 393 and the server's color.
 
 ## Surnames
 

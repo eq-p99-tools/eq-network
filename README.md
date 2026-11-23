@@ -65,7 +65,8 @@ each.
 | `RangedCombat` | Firing a bow or throwing a weapon | Yes | Yes | – | – |
 | `Abilities` | Kick, bash, taunt, hide, sneak, forage and the like | Yes | Yes | Yes | Yes |
 | `KnightAbilities` | Lay on Hands and Harm Touch | Yes | Yes | – | – |
-| `UsingDisciplines` | Disciplines the server lists, for every melee class | Yes | Yes | – | – |
+| `UsingDisciplines` | Disciplines the server lists, for every melee class; on TAKP and Quarm by the server's number for the class (source-derived, not yet checked live) | Yes | Yes | Yes | Yes |
+| `DisciplineReuse` | A bare `/disc`, asking when a discipline may next be used (source-derived, not yet checked live) | – | – | Yes | Yes |
 | `Tracking` | The tracking window | Yes | Yes | – | – |
 | `Pets` | Commanding a pet (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Casting` | Casting memorized spells | Yes | Yes | Yes | Yes |

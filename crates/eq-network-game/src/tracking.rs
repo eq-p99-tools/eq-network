@@ -13,6 +13,8 @@
 //! `TrackTarget_Struct` (`common/patches/titanium_structs.h`), and
 //! `Client::Handle_OP_Track`, `Handle_OP_TrackTarget` and
 //! `Handle_OP_TrackUnknown` (`zone/client_packet.cpp`).
+pub mod eqmac;
+
 use crate::{command::EncodedCommand, world::Position};
 use serde::Serialize;
 use std::time::Duration;

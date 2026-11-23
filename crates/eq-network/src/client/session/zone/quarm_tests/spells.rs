@@ -89,6 +89,19 @@ fn casting_uses_the_mac_wire_and_waits_for_a_matching_reply_or_interruption() {
     // resolve them to this character before releasing the cast guard.
     receive(&mut features, &mut world, 0x3542, &[0x21, 0x01, 0, 0]);
     assert_eq!(send(&mut features, &mut world, &command), sent);
+    receive(
+        &mut features,
+        &mut world,
+        0xa940,
+        &[7, 0, 202, 0, 0xe8, 3, 0, 0],
+    );
+    assert!(actions::Held::new(features.holds(&world, Instant::now()))
+        .conflict(&command)
+        .is_some());
+    // TAKP's six bytes since 0802525, `fromWorld` 0, release it the same
+    // way (6.603 D0).
+    receive(&mut features, &mut world, 0x3542, &[0x21, 0x01, 0, 0, 0, 0]);
+    assert_eq!(send(&mut features, &mut world, &command), sent);
 }
 
 #[test]

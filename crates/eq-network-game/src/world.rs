@@ -625,7 +625,8 @@ pub enum Capability {
     GroundDropping,
     /// Titanium's Lay on Hands and Harm Touch.
     KnightAbilities,
-    /// Use the supported Titanium Warrior disciplines.
+    /// Use disciplines: those a Titanium server lists, or on TAKP and
+    /// Quarm those the class has a number for.
     UsingDisciplines,
     /// Respond to the current server dialog.
     ServerDialogs,
@@ -728,12 +729,16 @@ pub enum Capability {
     /// [`crate::command::GameCommand::ActivateAlternateAdvancement`],
     /// [`crate::command::GameCommand::SetAlternateAdvancementSplit`]).
     AlternateAdvancement,
+    /// Asking when a discipline may next be used
+    /// ([`crate::command::GameCommand::AskDisciplineReuse`]): `EQMac`'s
+    /// bare `/disc`.
+    DisciplineReuse,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 88] = [
+    pub const ALL: [Self; 89] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -822,6 +827,7 @@ impl Capability {
         Self::PotionBelt,
         Self::BandolierSwap,
         Self::UsingPotionBelt,
+        Self::DisciplineReuse,
     ];
 }
 
@@ -2865,6 +2871,7 @@ mod tests {
             Capability::PotionBelt => 85,
             Capability::BandolierSwap => 86,
             Capability::UsingPotionBelt => 87,
+            Capability::DisciplineReuse => 88,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

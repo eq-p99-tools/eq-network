@@ -219,8 +219,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // Stopping a cast must work during one; a yell holds nothing.
         | ClientCommand::StopCasting { .. }
         | ClientCommand::YellForHelp { .. }
-        // Nor does a shield: the server keeps its recast.
+        // Nor does a shield: the server keeps its recast. Nor does asking
+        // about a discipline's reuse, which the server answers.
         | ClientCommand::Shield { .. }
+        | ClientCommand::AskDisciplineReuse { .. }
         // Nor do the journal's requests: the journal paces its own.
         | ClientCommand::AcceptTask { .. }
         | ClientCommand::DeclineTasks { .. }
@@ -483,6 +485,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ClearPotionBelt { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
+        | ClientCommand::AskDisciplineReuse { session_id, .. }
         | ClientCommand::AcceptTask { session_id, .. }
         | ClientCommand::DeclineTasks { session_id }
         | ClientCommand::CancelTask { session_id, .. }
@@ -724,6 +727,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::SetTitle { .. }
         | ClientCommand::YellForHelp { .. }
         | ClientCommand::Shield { .. }
+        | ClientCommand::AskDisciplineReuse { .. }
         | ClientCommand::ChallengeDuel { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }

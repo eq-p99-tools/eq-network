@@ -10,8 +10,9 @@ mod eqmac;
 
 pub use eqmac::{
     decode_eqmac, eqmac_cast, eqmac_forget, eqmac_item_cast, eqmac_memorize, eqmac_scribe,
-    eqmac_swap, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS, EQMAC_CAST_OPCODE, EQMAC_DELETE_OPCODE,
-    EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE, EQMAC_SWAP_OPCODE,
+    eqmac_swap, eqmac_token, DISCIPLINE_READY, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS,
+    EQMAC_CAST_OPCODE, EQMAC_DELETE_OPCODE, EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE,
+    EQMAC_SWAP_OPCODE,
 };
 
 /// The Titanium and `EQMac` casting slot for an ordinary item click.

@@ -5,6 +5,37 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `/disc` and `/shield` on Quarm and TAKP (6.603 G1, G2), from each
+  server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is
+  source-derived and not yet checked live.
+  - New: `disciplines::eqmac::{OPCODE, REUSE_QUESTION, number, encode}`,
+    `shielding::{EQMAC_SHIELDING_OPCODE, eqmac_shield}`,
+    `GameCommand::AskDisciplineReuse` and `Capability::DisciplineReuse`.
+  - **/disc.** `UseDiscipline` sends the servers' number for the spell and
+    class (4 bytes: the number, then zeros).
+    - Only a spell with no number for the class is refused locally.
+    - The level, the reuse timer and any active discipline are the
+      server's to judge.
+    - A bare `/disc` sends 0.
+  - **/shield.** `/shield` sends the 2-byte target spawn ID, with the same
+    500 ms pace as Titanium.
+- Build TAKP's and Quarm's empty `OP_Track` without offering it (6.603 G3).
+  - New: `tracking::eqmac::{OPCODE, TRACKERS, press}`.
+  - Both servers kick any class but a Ranger, Druid or Bard, so `press`
+    refuses the rest.
+  - Nothing sends it until the `EQMac` program's window and its sends are
+    read (rows 10c, 10d).
+
+- Fix TAKP's cast interruptions (6.603 D0). Since 0802525, TAKP sends
+  `OP_InterruptCast` (0x3542) as a 6-byte `TokenText_Struct`, and the Mac
+  reader took only Quarm's 4 bytes, so every TAKP interruption was refused.
+  - Both lengths now read the same on both wires.
+  - A `fromWorld` other than 0 is refused and logged as not understood.
+  - New: `spells::{eqmac_token, DISCIPLINE_READY}`.
+  - The discipline-ready message (string 393) now reaches the host as a
+    chat line with the server's string number and color. Before, it was
+    dropped.
+
 - A jump never stands a seated player or ends a feign held standing (6.599,
   Adam 11-23).
   - **Seated jump:** a sitting or looting player's `Jump` is refused with a

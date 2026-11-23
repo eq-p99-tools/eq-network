@@ -1218,7 +1218,10 @@ pub enum GameCommand {
     /// 0x4bb39d, read R48): the ordinary cast with the discipline slot. The
     /// host judges class, level and the spell's own refusals from its spell
     /// data; the session refuses a spell the server didn't list, one whose
-    /// timer runs, and a timed self one while a discipline is active.
+    /// timer runs, and a timed self one while a discipline is active. On
+    /// TAKP and Quarm the session sends the servers' number for the spell
+    /// and class ([`crate::disciplines::eqmac`]) and refuses only a spell
+    /// with none; the timer and target fields are unused there.
     UseDiscipline {
         /// Admission where the player selected the discipline.
         session_id: u64,
@@ -1234,6 +1237,15 @@ pub enum GameCommand {
         /// read R48b b).
         timed_self: bool,
         /// When the player requested it.
+        created: std::time::Instant,
+    },
+    /// Ask when a discipline may next be used: `EQMac`'s bare `/disc`
+    /// ([`crate::disciplines::eqmac::REUSE_QUESTION`]). The server answers
+    /// with a line; the session keeps no timer of its own.
+    AskDisciplineReuse {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player asked.
         created: std::time::Instant,
     },
     /// Cast a Paladin or Shadow Knight class ability at the selected target.
@@ -1436,6 +1448,7 @@ impl GameCommand {
             Self::UseAbility { .. } => "UseAbility",
             Self::UseKnightAbility { .. } => "UseKnightAbility",
             Self::Shield { .. } => "Shield",
+            Self::AskDisciplineReuse { .. } => "AskDisciplineReuse",
             Self::AcceptTask { .. } => "AcceptTask",
             Self::DeclineTasks { .. } => "DeclineTasks",
             Self::CancelTask { .. } => "CancelTask",
@@ -1587,6 +1600,7 @@ impl GameCommand {
             | Self::UseAbility { session_id, .. }
             | Self::UseKnightAbility { session_id, .. }
             | Self::Shield { session_id, .. }
+            | Self::AskDisciplineReuse { session_id, .. }
             | Self::AcceptTask { session_id, .. }
             | Self::DeclineTasks { session_id }
             | Self::CancelTask { session_id, .. }
@@ -1765,6 +1779,7 @@ impl GameCommand {
             Self::UseAbility { .. } => Capability::Abilities,
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
             Self::Shield { .. } => Capability::Shielding,
+            Self::AskDisciplineReuse { .. } => Capability::DisciplineReuse,
             Self::AcceptTask { .. }
             | Self::DeclineTasks { .. }
             | Self::CancelTask { .. }
@@ -1981,6 +1996,7 @@ impl GameCommand {
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
             | Self::Shield { created, .. }
+            | Self::AskDisciplineReuse { created, .. }
             | Self::AcceptTask { created, .. }
             | Self::CancelTask { created, .. }
             | Self::AskTaskHistory { created, .. }
@@ -2194,6 +2210,7 @@ pub fn encode(
         | GameCommand::UseAbility { .. }
         | GameCommand::UseKnightAbility { .. }
         | GameCommand::Shield { .. }
+        | GameCommand::AskDisciplineReuse { .. }
         | GameCommand::AcceptTask { .. }
         | GameCommand::DeclineTasks { .. }
         | GameCommand::CancelTask { .. }

@@ -363,8 +363,19 @@ pub(super) struct Casting {
     cast_stop: bool,
     knights: Option<knights::Reuse>,
     disciplines: disciplines::DisciplineState,
-    use_disciplines: bool,
+    use_disciplines: DisciplineUse,
     belt_use: BeltUses,
+}
+
+/// Which wire's disciplines the server type takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DisciplineUse {
+    #[default]
+    Unoffered,
+    /// The listed spells, cast with the discipline slot (read R48).
+    Titanium,
+    /// TAKP's and Quarm's numbered `OP_Discipline` (6.603 G1).
+    EqMac,
 }
 
 /// Whether the server type takes items used from the potion belt (6.568).
@@ -393,8 +404,15 @@ impl Casting {
             Self::default()
         };
         casting.knights = Some(knights::Reuse::new(knight_estimate));
-        casting.use_disciplines = true;
+        casting.use_disciplines = DisciplineUse::Titanium;
         casting
+    }
+
+    /// Takes TAKP's and Quarm's `/disc` by number, from their own
+    /// `Handle_OP_Discipline` (6.603 G1, source-derived, not yet live).
+    pub(super) fn with_eqmac_disciplines(mut self) -> Self {
+        self.use_disciplines = DisciplineUse::EqMac;
+        self
     }
 
     /// Offers Titanium's `/stopcast`. `EQEmu` only for now: it ends a cast
@@ -760,8 +778,12 @@ impl Feature for Casting {
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);
         }
-        if self.use_disciplines {
-            offered.push(Capability::UsingDisciplines);
+        match self.use_disciplines {
+            DisciplineUse::Unoffered => {}
+            DisciplineUse::Titanium => offered.push(Capability::UsingDisciplines),
+            DisciplineUse::EqMac => {
+                offered.extend([Capability::UsingDisciplines, Capability::DisciplineReuse]);
+            }
         }
         if self.belt_use == BeltUses::Offered {
             offered.push(Capability::UsingPotionBelt);
@@ -786,6 +808,7 @@ impl Feature for Casting {
                 | ClientCommand::StopCasting { .. }
                 | ClientCommand::UseKnightAbility { .. }
                 | ClientCommand::UseDiscipline { .. }
+                | ClientCommand::AskDisciplineReuse { .. }
         )
     }
 
@@ -794,8 +817,7 @@ impl Feature for Casting {
         if let (Some(reuse), Message::KnightRefresh(remaining)) = (&mut self.knights, message) {
             reuse.received(*remaining, now);
         }
-        let own = self
-            .use_disciplines
+        let own = (self.use_disciplines == DisciplineUse::Titanium)
             .then(|| {
                 world
                     .player
@@ -825,6 +847,7 @@ impl Feature for Casting {
             ClientCommand::UseKnightAbility {
                 ability, target, ..
             } => self.knight(command, *ability, *target, Instant::now(), world, out),
+            ClientCommand::AskDisciplineReuse { .. } => self.ask_discipline_reuse(command, out),
             ClientCommand::UseDiscipline {
                 spell_id,
                 timer,

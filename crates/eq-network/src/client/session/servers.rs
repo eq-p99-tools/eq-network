@@ -782,17 +782,13 @@ impl Shield for WorldCodec {
 /// them; each server type still lists the ones it provides.
 mod shared {
     use super::{
-        Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
-        Combat, Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect,
-        GroundObjects, Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing,
-        Looking, Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes,
-        Raids, Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
-        Targeting, Ticks, Tradeskills, Training, Transfers, Translocate, Who,
+        Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Character, Clock, Combat,
+        Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
+        Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looking, Looting, Map,
+        Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading,
+        Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks,
+        Tradeskills, Training, Transfers, Translocate, Who,
     };
-
-    pub(super) fn casting() -> Box<dyn Feature> {
-        Box::<Casting>::default()
-    }
 
     pub(super) fn spellbook(edits: Edits) -> Box<dyn Feature> {
         Box::new(Spellbook::new(edits))
@@ -1625,8 +1621,8 @@ impl ServerType for EqEmu {
     }
 
     /// Sent as `Client::Handle_OP_Shielding` reads it, from source; not
-    /// yet checked live (checklist 6.517). P99 waits for an attended check,
-    /// and TAKP and Quarm for theirs: no `EQMac` encoder is built.
+    /// yet checked live (checklist 6.517). P99 waits for an attended check.
+    /// TAKP and Quarm send their own 2-byte shield (6.603 G2).
     fn shielding(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Shielding>::default())
     }
@@ -1846,9 +1842,17 @@ impl ServerType for Quarm {
 
     /// Quarm's cast handler reads the shared 12-byte `EQMac` request and
     /// answers through its spell bar and interruption messages. Its own
-    /// class, zone and expansion restrictions remain authoritative.
+    /// class, zone and expansion restrictions remain authoritative. `/disc`
+    /// goes by number as Quarm's own `Handle_OP_Discipline` at fc75fcf reads
+    /// it (6.603 G1), source-derived, not yet checked live.
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::default().with_eqmac_disciplines()))
+    }
+
+    /// Sent as Quarm's own `Handle_OP_Shielding` at fc75fcf reads it, in 2
+    /// bytes (6.603 G2), source-derived, not yet checked live.
+    fn shielding(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Shielding>::default())
     }
 
     /// Quarm's `OPMemorizeSpell` handles scribing, memorizing and forgetting
@@ -2110,9 +2114,19 @@ impl ServerType for Takp {
 
     /// Casting from the gems and items' click effects, in `EQMac`'s cast
     /// request; the cast is held until TAKP brings the spell bar back or
-    /// interrupts it.
+    /// interrupts it. `/disc` goes by number as TAKP's own
+    /// `Handle_OP_Discipline` at 44afcbf reads it (6.603 G1),
+    /// source-derived, not yet checked live.
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_luclin_port_begins()))
+        offer(Box::new(
+            Casting::with_luclin_port_begins().with_eqmac_disciplines(),
+        ))
+    }
+
+    /// Sent as TAKP's own `Handle_OP_Shielding` at 44afcbf reads it, in 2
+    /// bytes (6.603 G2), source-derived, not yet checked live.
+    fn shielding(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Shielding>::default())
     }
 
     /// Memorizing, forgetting and scribing spells in TAKP's 256-slot book.
@@ -2748,12 +2762,12 @@ mod tests {
         // Bazaar from source (6.580), and each answers `/who all` and friends
         // from its own handlers (6.583), and rolls, assists and splits the
         // same way (6.585), corpses (6.591), pets (6.595), and resurrection and
-        // sacrifice answers (6.596), training (6.597), and tradeskills and
-        // world containers (6.598). Other features
-        // await their own evidence.
+        // sacrifice answers (6.596), training (6.597), tradeskills and
+        // world containers (6.598), and `/disc` and `/shield` (6.603). Other
+        // features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 31);
+        assert_eq!(quarm.features(&setup).len(), 32);
         assert_eq!(
             offers(quarm),
             [
@@ -2791,58 +2805,26 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::WorldContainers,
+                Capability::UsingDisciplines,
                 Capability::FriendsWho,
                 Capability::Splitting,
                 Capability::ApplyingPoison,
+                Capability::Shielding,
                 Capability::BazaarSearching,
+                Capability::DisciplineReuse,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 33);
-        assert_eq!(
-            offers(takp),
-            [
-                Capability::Casting,
-                Capability::Spellbook,
-                Capability::Inventory,
-                Capability::Trading,
-                Capability::Giving,
-                Capability::Moving,
-                Capability::Falling,
-                Capability::Targeting,
-                Capability::Combat,
-                Capability::Looting,
-                Capability::Talking,
-                Capability::Camping,
-                Capability::Doors,
-                Capability::GroundItems,
-                Capability::Zoning,
-                Capability::Abilities,
-                Capability::Who,
-                Capability::Corpses,
-                Capability::Pets,
-                Capability::Training,
-                Capability::Resurrection,
-                Capability::Reading,
-                Capability::Tradeskills,
-                Capability::Grouping,
-                Capability::Listing,
-                Capability::Rolling,
-                Capability::Assisting,
-                Capability::EnvironmentalDamage,
-                Capability::BleedingOut,
-                Capability::Sacrifice,
-                Capability::Translocate,
-                Capability::Jumping,
-                Capability::Posture,
-                Capability::Meals,
-                Capability::WorldContainers,
-                Capability::FriendsWho,
-                Capability::Splitting,
-                Capability::ApplyingPoison,
-                Capability::BazaarSearching,
-            ]
-        );
+        assert_eq!(takp.features(&setup).len(), 34);
+        // TAKP offers what Quarm does, and the bleed-out report after the
+        // environmental damage.
+        let mut expected = offers(quarm);
+        let at = expected
+            .iter()
+            .position(|offered| *offered == Capability::EnvironmentalDamage)
+            .unwrap();
+        expected.insert(at + 1, Capability::BleedingOut);
+        assert_eq!(offers(takp), expected);
         for server in [quarm, takp] {
             assert_eq!(
                 server.wire().encode(&Request::Camp, SENDER).unwrap(),
@@ -3281,16 +3263,21 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_lists_shielding() {
-        // From `EQEmu`'s source alone (6.517): P99 waits for an attended
-        // run, TAKP and Quarm for theirs, and RoF2 for its own wire.
-        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Shielding));
+    fn eqemu_takp_and_quarm_list_shielding_from_their_own_source() {
+        // `EQEmu` from its source (6.517), TAKP and Quarm from theirs
+        // (6.603 G2): P99 waits for an attended run, and RoF2 for its own
+        // wire.
         for protocol in [
-            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
-            ServerProtocol::EqEmuRof2,
         ] {
+            assert!(
+                offers(server_type(protocol)).contains(&Capability::Shielding),
+                "{protocol:?}"
+            );
+        }
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmuRof2] {
             assert!(
                 !offers(server_type(protocol)).contains(&Capability::Shielding),
                 "{protocol:?}"

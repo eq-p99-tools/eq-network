@@ -27,6 +27,8 @@
 //! start) in `EQEmu`'s `common/eq_packet_structs.h`, and TAKP's
 //! `ClientDiscipline_Struct` (the discipline's number and three bytes of
 //! padding).
+pub mod eqmac;
+
 use crate::{buffs::BuffUpdate, command::EncodedCommand, spells, world::WorldEvent};
 use anyhow::{ensure, Result};
 use serde::Serialize;
