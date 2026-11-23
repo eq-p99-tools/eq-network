@@ -745,12 +745,17 @@ pub enum Capability {
     /// Titanium's `/sheathe` and `/aggressive`
     /// ([`crate::command::GameCommand::ToggleStance`]).
     WeaponStances,
+    /// A Bard's `/melody` (read R49-33 c). The host keeps the list and
+    /// presses the gems, as the program does; the session only says where
+    /// the server type takes it. It sends nothing the session doesn't
+    /// already take: `StopSong`, then a gem's `CastSpell`.
+    Melody,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 90] = [
+    pub const ALL: [Self; 91] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -841,6 +846,7 @@ impl Capability {
         Self::UsingPotionBelt,
         Self::DisciplineReuse,
         Self::WeaponStances,
+        Self::Melody,
     ];
 }
 
@@ -2942,6 +2948,7 @@ mod tests {
             Capability::UsingPotionBelt => 87,
             Capability::DisciplineReuse => 88,
             Capability::WeaponStances => 89,
+            Capability::Melody => 90,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
