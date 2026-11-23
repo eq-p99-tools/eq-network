@@ -127,8 +127,15 @@ unreachable because validation refuses the generation:
   reader with `RoF2`'s opcode pair. Each keeps the refusals of Titanium's reader for the same
   values. What the `RoF2` program does with the invisibility values, the appearance kinds, the
   elite material and hero's forge model, the size message's constants and the animation speed
-  is a read still owed. `OP_Illusion`, mana, endurance, death, damage and consider stay
-  unlisted.
+  is a read still owed. `OP_Illusion` stays unlisted.
+- The player's own news and the combat records (`rof2_news`, 6.519): the death, level,
+  experience, food and water, coins and time of day go out unencoded, the bytes Titanium gets,
+  and Titanium's readers read them; the mana change is the server's 20 bytes with the slot that
+  Titanium's encoder drops (not read); the damage record carries a 32-bit spell id, refused past
+  16 bits, and the push at 13; the consider answer carries no hit points; the skill update ends
+  in four constants. The death record's bind zone and attack skill sit the other way round on
+  stock `EQEmu` from where both programs' structs declare them, for both generations. The mana
+  and endurance updates with their maxima, and the group and raid percents, stay unlisted.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.
