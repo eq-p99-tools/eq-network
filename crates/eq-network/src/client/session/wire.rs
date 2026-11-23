@@ -472,6 +472,12 @@ impl Wire for Rof2 {
         eq_network_game::message::rof2(opcode, body)
     }
 
+    /// Its chat and the server's own lines, as stock `EQEmu` writes them
+    /// (inferred, 6.521).
+    fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
+        chat::parse_for(GameDialect::Rof2, opcode, body, include_raw)
+    }
+
     fn login(
         &self,
         config: &ClientConfig,

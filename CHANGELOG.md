@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's chat and the server's own lines as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.521). `chat::parse_for` with
+  `GameDialect::Rof2` now reads `OP_ChannelMessage` (0x2b2d) in its own
+  layout (two NUL-ended names, the language, channel and skill, the text
+  and a 15-byte zero tail, exact length), and `OP_MOTD`, `OP_Emote`,
+  `OP_SpecialMesg`, `OP_FormattedMessage`, `OP_SimpleMessage`,
+  `OP_GuildMOTD`, its reply and `OP_ColoredText` in Titanium's shape under
+  RoF2's numbers. Item links are 56 characters with the item at digits 1
+  to 5. The RoF2 wire's `chat` reads them, and coverage lists the nine
+  (`chat::ROF2_READS`). Outbound chat still refuses RoF2. An admitted RoF2
+  session records the chat and still sends and offers nothing.
 - Read RoF2's own-player news and combat records as stock `EQEmu` sends
   them, labelled inferred for RoF2 (6.519). The new `rof2_news` module reads
   `OP_Death` (0x6517), `OP_LevelUpdate` (0x1eec), `OP_ExpUpdate` (0x20ed),

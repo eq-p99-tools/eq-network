@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rof2_placeholder_refuses_every_packet_layout() {
+    fn the_rof2_placeholder_refuses_every_packet_it_would_send() {
         use crate::chat::{self, OutboundChat};
         use crate::command::{self, GameCommand};
         let rof2 = GameDialect::Rof2;
@@ -399,10 +399,14 @@ mod tests {
         };
         let say = OutboundChat::Say("Hail".into());
         refused(chat::encode_outbound_for(rof2, &say, "Tester").map(drop));
+        // Its chat is read (6.521), and the other generations' numbers say
+        // nothing to it.
         let mut channel_message = vec![0; 148];
         channel_message.extend(b"Hail\0");
         for opcode in [0x1004, 0x0741, 0x5a48, 0x024d] {
-            refused(chat::parse_for(rof2, opcode, &channel_message, false).map(drop));
+            assert!(chat::parse_for(rof2, opcode, &channel_message, false)
+                .unwrap()
+                .is_none());
         }
         let now = std::time::Instant::now();
         for request in [
