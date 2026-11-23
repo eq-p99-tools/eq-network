@@ -53,6 +53,9 @@ pub mod effects;
 pub mod exchange;
 /// Feign Death and the lying posture, by client generation.
 pub mod feign;
+/// The server filters: which kinds of message the player asks the server
+/// not to send.
+pub mod filters;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
 /// Asking which of the player's friends are online.

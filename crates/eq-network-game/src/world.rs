@@ -648,12 +648,21 @@ pub enum Capability {
     /// A Rogue's poison put on the weapon from the slot it sits in
     /// ([`crate::poisons`]).
     ApplyingPoison,
+    /// Keeping the character's server filters for every zone-in
+    /// ([`crate::command::GameCommand::SetServerFilters`]); every server
+    /// type takes the set.
+    ServerFilters,
+    /// Sending a change of the server filters at once, mid-zone, where the
+    /// server type is known to read it then (`EQEmu`'s
+    /// `Client::Handle_OP_SetServerFilter`). Elsewhere a change waits for
+    /// the next zone-in (recording checklist 6.494e).
+    ServerFiltersAtOnce,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 68] = [
+    pub const ALL: [Self; 70] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -722,6 +731,8 @@ impl Capability {
         Self::Yelling,
         Self::StoppingCasts,
         Self::ApplyingPoison,
+        Self::ServerFilters,
+        Self::ServerFiltersAtOnce,
     ];
 }
 
@@ -1717,6 +1728,22 @@ pub enum WorldEvent {
         /// The requested value.
         change: crate::listing::ListingChange,
     },
+    /// The character's server filters were kept: every later zone-in sends
+    /// them. `sent` says whether they also went to the zone at once; when
+    /// not, they wait for the next zone-in.
+    ServerFiltersKept {
+        /// Admission from the request; none at the character list.
+        session_id: Option<u64>,
+        /// Whether the zone was sent them now.
+        sent: bool,
+    },
+    /// A server filter change was not kept, and why; the prior set stands.
+    ServerFiltersRefused {
+        /// Admission from the request; none at the character list.
+        session_id: Option<u64>,
+        /// Why not.
+        reason: String,
+    },
     /// A listing change was not sent, and why.
     ListingRefused {
         /// Admission from the request.
@@ -2487,6 +2514,8 @@ mod tests {
             Capability::Yelling => 65,
             Capability::StoppingCasts => 66,
             Capability::ApplyingPoison => 67,
+            Capability::ServerFilters => 68,
+            Capability::ServerFiltersAtOnce => 69,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

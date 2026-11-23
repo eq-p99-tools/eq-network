@@ -434,16 +434,6 @@ pub fn client_update(sample: &crate::movement::PositionPacket) -> Result<Encoded
     })
 }
 
-/// The client's filters: every chat and combat category on.
-#[must_use]
-pub fn server_filters() -> [u8; 68] {
-    let mut filters = [0; 68];
-    for index in 5..=14 {
-        filters[index * 4] = 1;
-    }
-    filters
-}
-
 /// Decrypt the full 64-bit words, preserve the tail, then inflate with a strict limit.
 fn unpack(body: &[u8], profile: bool) -> Result<Zeroizing<Vec<u8>>> {
     ensure!(

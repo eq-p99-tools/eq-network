@@ -28,6 +28,7 @@ impl CastStream {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(session_id);
