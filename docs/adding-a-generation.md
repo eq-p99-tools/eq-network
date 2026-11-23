@@ -99,10 +99,18 @@ unreachable because validation refuses the generation:
   writes it: every count the encoder's constant, every string ended in its field, and an exact
   end. The entry completes with the player read from them, or without either with no player
   (the session then only records). An admitted `RoF2` session still sends nothing in the zone:
-  `EqEmuRof2` offers no feature, server filters or departures, `Rof2::messages` reads nothing
-  and `Rof2::encode` refuses, so every command is refused. Gems 9 to 12, appearance, the `/who`
-  listing and the spawn's packed position are not read, and what the `RoF2` program reads in
-  each field is a read still owed.
+  `EqEmuRof2` offers no feature, server filters or departures, and `Rof2::encode` refuses, so
+  every command is refused. Gems 9 to 12, appearance and the `/who` listing are not read, and
+  what the `RoF2` program reads in each field is a read still owed.
+- Its spawn records (`rof2_player::spawn`, 6.510): stock `EQEmu` sends every spawn as one
+  `OP_ZoneEntry` record, and one walker reads every branch the encoder writes (player,
+  creature, corpse, treasure chest, destructible object, and the three-texture non-player
+  races), with the packed position from the active `Spawn_Struct_Position`. `Rof2::messages`
+  makes each record a spawn, its first zone decoder. The entry keeps the first record, the
+  player's own, to itself, and any later one with the player's id, so the player is never
+  another spawn. With no feature offered, a spawn read during the entry reaches no one yet.
+  The motion deltas, animation and angle are not read, and velocity and forward input stay
+  zero.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

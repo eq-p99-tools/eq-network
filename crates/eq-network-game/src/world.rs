@@ -1281,7 +1281,7 @@ pub enum WorldEvent {
         last_name: String,
     },
     /// The server's answer to the player's `/surname`
-    /// ([`crate::names::surname_answer`]): whether it took the surname, and
+    /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
     /// [`WorldEvent::LastName`] changes the name the spawns carry.
     SurnameAnswer {
@@ -2464,8 +2464,10 @@ fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
     })
 }
 
+/// A signed 19-bit position field in eighths of a unit, from the low bits
+/// of `value`.
 #[allow(clippy::cast_possible_wrap, clippy::cast_precision_loss)]
-fn signed_position(value: u32) -> f32 {
+pub(crate) fn signed_position(value: u32) -> f32 {
     (((value & 0x7ffff) << 13) as i32 >> 13) as f32 / 8.0
 }
 pub(crate) fn until_nul(bytes: &[u8]) -> &[u8] {

@@ -5,6 +5,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's spawn records as stock `EQEmu` writes them, labelled inferred
+  for RoF2 (6.510). Stock `EQEmu` sends every spawn a RoF2 client sees as
+  one `OP_ZoneEntry` record. `eq_network_game::rof2_player::spawn` walks
+  any of them whole, choosing each branch from the record's own bytes as
+  the encoder chooses it: players, creatures and corpses, treasure chests
+  and destructible objects with their three strings and fixed block, and
+  non-players of races given three textures in place of nine tints and
+  nine textures. It refuses contradictory bits, a property count the
+  branch doesn't take, a GUID of any length but the encoder's, a string
+  that doesn't end in its field, a cut and a trailing byte. The packed
+  position is read from the active `Spawn_Struct_Position`; its deltas,
+  animation and angle are not, and appearance and the `/who` listing stay
+  default. `Rof2::messages` makes each record one spawn, and a refused
+  record unreadable by opcode and length. The own-spawn reader is now a
+  caller of the same walker. `Rof2Admission` keeps the first record, the
+  player's own, and any later one with the player's id to itself
+  (`Admission::kept`), so the player is never another spawn. The coverage
+  row for 0x5089 lists the zone decoder as a reader. An admitted RoF2
+  session still sends nothing and offers nothing. Still unreachable: a
+  RoF2 configuration is refused before a socket opens.
 - Challenge another player to a duel (6.492b). **Breaking:**
   `GameCommand::ChallengeDuel { session_id, target, created }` is a new
   variant, under `Capability::Dueling`, so exhaustive matches on

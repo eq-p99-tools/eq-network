@@ -72,6 +72,14 @@ pub(in crate::client) trait Admission {
         world: &mut World,
         handshake: &mut Handshake<'_, '_>,
     ) -> Result<Option<HandshakeComplete>>;
+
+    /// Whether the packet [`Admission::read`] took last is the handshake's
+    /// alone, which no decoder reads as well. False for most:
+    /// `RoF2`'s own spawn is the exception, which comes under the number
+    /// every other spawn comes under.
+    fn kept(&self) -> bool {
+        false
+    }
 }
 
 /// A completed handshake with the zone. The snapshot can fail independently
