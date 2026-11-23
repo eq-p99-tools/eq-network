@@ -13,6 +13,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The chat-channel link logs in to a stock chat server: a chat server's stream carries its opcodes in one byte (`EQEmu`'s `ucs/clientlist.cpp`, `opcode_size = 1`), but the link used the zones' two-byte opcodes. So the server read the login's lead 0 as an empty mailbox, refused the key as the wrong size and dropped the link (local EQEmu look, checklist 6.616). `transport::Session::with_one_byte_opcodes` carries them in one byte both ways, and the chat link uses it, so the login goes as 0x01, 0, then the mailbox, as read R49-12 a gives the Titanium program's.
 
+- **Breaking:** `BugReport` carries the Titanium bug report window's other
+  three check boxes: `repeatable`, `crash` and `character_flags` (checklist
+  6.511 C1b, read R49-23 send pass). With the target, they set the mask at
+  532 as the program's Send (0x4e9f7a) does: 1, 2, 4 and 8, the bits
+  `EQEmu`'s `Bug::InformationFlag` reads. Before, only the target's bit was
+  set. Struct literals add the three fields.
 - `GameCommand::InspectSpawn { session_id, spawn_id, created }` inspects a
   player by spawn ID without selecting them, for the Titanium program's
   right-click inspect (checklist 6.644, reads R49-16 and R49-16e). It sends

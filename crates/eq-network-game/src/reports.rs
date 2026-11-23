@@ -22,10 +22,9 @@
 //! something this library does not have:
 //! - The bug report's 128 bytes at 160 (copied from a program buffer that
 //!   is not identified; `EQEmu` names it `ui_path`), the time played at 308
-//!   (a character field `EQEmu` names `time_played`), the word at 464 (1
-//!   when an unidentified program check is false) and the window's check
-//!   boxes worth 1, 2 and 8 in the mask at 532. The box worth 4 is the
-//!   target's, which this library sets with the target.
+//!   (a character field `EQEmu` names `time_played`) and the word at 464
+//!   (1 when an unidentified program check is false). The window's four
+//!   check boxes are [`BugReport`](crate::reports::BugReport)'s.
 //! - The bug report's system information at 4638, where the program writes
 //!   a line naming the processor, the video card and its driver: this
 //!   library never sends it or anything about the machine, by choice.
@@ -181,9 +180,10 @@ pub struct BugTarget {
     pub name: String,
 }
 
-/// A bug report. How the official client sets the report's other flags
-/// (repeatable, crash, character flags) is unread, so it carries none of
-/// them (recording checklist 6.511c).
+/// A bug report, as the Titanium program's window gathers it (read R49-23,
+/// the window's Send 0x4e9f7a): its four check boxes set the mask at 532,
+/// worth 1 (it can be repeated), 2 (a crash), 4 (the target) and 8 (the
+/// character's flags), as `EQEmu`'s `Bug::InformationFlag` names them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BugReport {
     /// What it is about.
@@ -192,22 +192,39 @@ pub struct BugReport {
     pub text: String,
     /// Where the player stood, when the client knows.
     pub place: Option<BugPlace>,
-    /// The player's target, if any.
+    /// The player's target, if any: the window's target box.
     pub target: Option<BugTarget>,
+    /// The window's "can be repeated" box.
+    pub repeatable: bool,
+    /// The window's crash box.
+    pub crash: bool,
+    /// The window's box for sending the character's flags.
+    pub character_flags: bool,
 }
 
+/// `Bug::InformationFlag::Repeatable`: the bug can be made to happen again.
+const REPEATABLE: u32 = 1;
+/// `Bug::InformationFlag::Crash`: the bug crashed the game.
+const CRASH: u32 = 2;
 /// `Bug::InformationFlag::TargetInfo`: the report carries the target.
 const TARGET_INFO: u32 = 4;
+/// `Bug::InformationFlag::CharacterFlags`: the server is to note the
+/// character's flags.
+const CHARACTER_FLAGS: u32 = 8;
 
 impl BugReport {
     /// The report's optional-information mask, as `RegisterBug` reads it:
-    /// only whether it carries the target.
+    /// a bit for each of the window's check boxes.
     fn mask(&self) -> u32 {
-        if self.target.is_some() {
-            TARGET_INFO
-        } else {
-            0
-        }
+        [
+            (self.repeatable, REPEATABLE),
+            (self.crash, CRASH),
+            (self.target.is_some(), TARGET_INFO),
+            (self.character_flags, CHARACTER_FLAGS),
+        ]
+        .into_iter()
+        .filter(|(set, _)| *set)
+        .fold(0, |mask, (_, bit)| mask | bit)
     }
 }
 
@@ -508,7 +525,37 @@ mod tests {
                 spawn_id: 321,
                 name: "Guard_Alpha00".into(),
             }),
+            repeatable: false,
+            crash: false,
+            character_flags: false,
         }
+    }
+
+    #[test]
+    fn each_check_box_sets_its_bit_in_the_mask() {
+        let mut report = report();
+        assert_eq!(report.mask(), 4);
+        report.target = None;
+        assert_eq!(report.mask(), 0);
+        let mut one = report.clone();
+        one.repeatable = true;
+        assert_eq!(one.mask(), 1);
+        let mut one = report.clone();
+        one.crash = true;
+        assert_eq!(one.mask(), 2);
+        let mut one = report.clone();
+        one.character_flags = true;
+        assert_eq!(one.mask(), 8);
+        report.repeatable = true;
+        report.crash = true;
+        report.character_flags = true;
+        report.target = Some(BugTarget {
+            spawn_id: 1,
+            name: "Someone".into(),
+        });
+        assert_eq!(report.mask(), 15);
+        let packet = bug(GameDialect::Titanium, "Reporter", &report).unwrap();
+        assert_eq!(&packet.body[532..536], &15u32.to_le_bytes());
     }
 
     #[test]
