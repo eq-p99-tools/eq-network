@@ -1226,8 +1226,8 @@ impl ServerType for EqEmu {
     }
 
     /// `EQEmu`'s world offers its chat server (`ucs`) when one runs. Project
-    /// 1999 keeps the default, no link, on Adam's word until an attended
-    /// session (11-23), though it is not known to offer one.
+    /// 1999 keeps the default, no link: withheld until Adam has attended a
+    /// session there (his choice, 11-23), and it is not known to offer one.
     fn chat_channels(&self) -> bool {
         true
     }

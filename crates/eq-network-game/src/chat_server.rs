@@ -10,8 +10,10 @@
 //! mailbox it names, are inferred (recording checklist 6.509, pending read
 //! R49-12 a).
 //!
-//! The key is kept only in [`Login`], zeroed when it is dropped, and no
-//! `Debug`, event or error carries it.
+//! The key is kept in [`Login`] and its login body, zeroed when they are
+//! dropped, and no `Debug`, event or error carries it. Once sent, the
+//! transport's resend queue also holds the login body until the server
+//! acknowledges it, as it holds every reliable message.
 
 use crate::channels::{offer, ChatServer, ChatService};
 use anyhow::{ensure, Result};

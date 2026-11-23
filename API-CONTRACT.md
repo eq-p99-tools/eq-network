@@ -103,7 +103,10 @@ session's end; a later offer replaces it, and nothing retries.
 when its world opened a link; it is never added or removed mid-zone.
 Whether the link is up is told by `WorldEvent::ChannelLink`: `Up` once the
 chat server takes the login, `Lost { reason }` once when it ends (the
-reason names no address). `GameCommand::ChatChannel { session_id, text,
+reason names no address; a login unanswered for 30 seconds ends it). Each
+is told once, in the zone that hears it, and not again at the next zone's
+`Entered`: the host keeps the link's state across zones until `Lost` or the
+character list. `GameCommand::ChatChannel { session_id, text,
 created }` carries the chat server's own command text (`join a, b`,
 `leave a`, `leaveall`, `list`, `announce on`, `2 hello`, and the owner and
 moderator words, passed through unchecked); it is refused with

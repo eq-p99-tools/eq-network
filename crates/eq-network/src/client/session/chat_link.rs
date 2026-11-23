@@ -34,7 +34,7 @@ use std::{
         Arc, Mutex, PoisonError,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Commands waiting for the link at most; this library's own bound.
@@ -82,6 +82,8 @@ struct Inbound {
     news: VecDeque<News>,
     dropped: u64,
     up: bool,
+    /// The thread has told the link lost, or ended.
+    ended: bool,
 }
 
 impl Inbound {
@@ -94,11 +96,18 @@ impl Inbound {
     }
 }
 
+/// How long a login may go unanswered before the link ends: this library's
+/// own bound, inferred (the program's own is asked as R49-12 d).
+pub(super) const LOGIN_WAIT: Duration = Duration::from_secs(30);
+
 /// A link while its thread runs.
 struct Running {
     outbound: SyncSender<Vec<u8>>,
     inbound: Arc<Mutex<Inbound>>,
     stop: Arc<AtomicBool>,
+    /// The thread is in its address and connect step, which a stop cannot
+    /// cut short while the offered host resolves.
+    connecting: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -106,8 +115,13 @@ impl Running {
     fn close(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
-            // The thread checks its stop at least every receive wait.
-            let _ = thread.join();
+            // Past its connect step the thread checks its stop at least every
+            // receive wait, so it is waited for. In the step it is left to end
+            // on its own once the step returns, holding only the connector
+            // and its queues, telling nothing (reviewer F2).
+            if !self.connecting.load(Ordering::Acquire) {
+                let _ = thread.join();
+            }
         }
     }
 }
@@ -115,6 +129,8 @@ impl Running {
 /// The character's chat server link, kept across zones.
 pub(in crate::client) struct ChatLink {
     connect: Arc<Connect>,
+    /// How long a login may go unanswered.
+    login_wait: Duration,
     running: Mutex<Option<Running>>,
     /// What a closed link left untold, kept for the next drain.
     left: Mutex<Vec<News>>,
@@ -131,9 +147,17 @@ impl ChatLink {
     pub(super) fn with(connect: Arc<Connect>) -> Self {
         Self {
             connect,
+            login_wait: LOGIN_WAIT,
             running: Mutex::new(None),
             left: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The same link with another bound on an unanswered login.
+    #[cfg(test)]
+    pub(super) fn waiting(mut self, login_wait: Duration) -> Self {
+        self.login_wait = login_wait;
+        self
     }
 
     /// Opens a link from a login, closing any open one first: one connect
@@ -143,21 +167,31 @@ impl ChatLink {
         let (outbound, commands) = mpsc::sync_channel(OUTBOUND);
         let inbound = Arc::new(Mutex::new(Inbound::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let connecting = Arc::new(AtomicBool::new(true));
         let thread = {
             // The thread holds the connector, never the link, so dropping
             // the link closes it.
-            let (connect, inbound, stop) = (
-                Arc::clone(&self.connect),
-                Arc::clone(&inbound),
-                Arc::clone(&stop),
-            );
+            let thread = Thread {
+                connect: Arc::clone(&self.connect),
+                login,
+                local_only,
+                login_wait: self.login_wait,
+                commands,
+                inbound: Arc::clone(&inbound),
+                stop: Arc::clone(&stop),
+                connecting: Arc::clone(&connecting),
+            };
             std::thread::Builder::new()
                 .name("chat-link".into())
                 .spawn(move || {
-                    let loss = run(&*connect, &login, local_only, &commands, &inbound, &stop);
+                    let loss = run(&thread);
+                    let mut inbound = thread
+                        .inbound
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    inbound.up = false;
+                    inbound.ended = true;
                     if let Some(reason) = loss {
-                        let mut inbound = inbound.lock().unwrap_or_else(PoisonError::into_inner);
-                        inbound.up = false;
                         inbound.push(News::Link(ChannelLink::Lost { reason }));
                     }
                 })
@@ -175,6 +209,7 @@ impl ChatLink {
             outbound,
             inbound,
             stop,
+            connecting,
             thread: Some(thread),
         });
     }
@@ -218,13 +253,17 @@ impl ChatLink {
         let Some(running) = running.as_ref() else {
             return Err("There is no chat server link");
         };
-        if !running
-            .inbound
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .up
         {
-            return Err("The chat server has not taken the login");
+            let inbound = running
+                .inbound
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if inbound.ended {
+                return Err("The chat server link has ended");
+            }
+            if !inbound.up {
+                return Err("The chat server has not taken the login");
+            }
         }
         let body =
             chat_server::command(text).map_err(|_| "That chat channel command cannot be sent")?;
@@ -264,28 +303,53 @@ impl Drop for ChatLink {
     }
 }
 
+/// What the link's thread holds: the connector and its own queues, never
+/// the link.
+struct Thread {
+    connect: Arc<Connect>,
+    login: Login,
+    local_only: bool,
+    login_wait: Duration,
+    commands: Receiver<Vec<u8>>,
+    inbound: Arc<Mutex<Inbound>>,
+    stop: Arc<AtomicBool>,
+    connecting: Arc<AtomicBool>,
+}
+
 /// The link's thread: connects, logs in, then carries commands out and what
 /// the server says in until it is stopped or fails; why it failed, or None
 /// when it was stopped.
-fn run(
-    connect: &Connect,
-    login: &Login,
-    local_only: bool,
-    commands: &Receiver<Vec<u8>>,
-    inbound: &Mutex<Inbound>,
-    stop: &AtomicBool,
-) -> Option<LinkLoss> {
-    let mut transport = match connect(login, local_only, stop) {
+fn run(thread: &Thread) -> Option<LinkLoss> {
+    let Thread {
+        connect,
+        login,
+        local_only,
+        login_wait,
+        commands,
+        inbound,
+        stop,
+        connecting,
+    } = thread;
+    let connected = connect(login, *local_only, stop);
+    connecting.store(false, Ordering::Release);
+    let mut transport = match connected {
         Ok(transport) => transport,
         Err(_) if stop.load(Ordering::Relaxed) => return None,
         Err(loss) => return Some(loss),
     };
+    if stop.load(Ordering::Relaxed) {
+        // Closed while it connected: nothing is sent, nothing told.
+        let _ = transport.close();
+        return None;
+    }
     if transport
         .send(chat_server::LOGIN_OPCODE, &login.body())
         .is_err()
     {
+        let _ = transport.close();
         return Some(LinkLoss::Login);
     }
+    let asked = Instant::now();
     let mut up = false;
     let lost = |up: bool| {
         if up {
@@ -298,6 +362,12 @@ fn run(
         if stop.load(Ordering::Relaxed) {
             let _ = transport.close();
             return None;
+        }
+        if !up && asked.elapsed() >= *login_wait {
+            // A server that keeps the connection but never takes the login
+            // ends the link once (reviewer F1).
+            let _ = transport.close();
+            return Some(LinkLoss::Login);
         }
         loop {
             match commands.try_recv() {
@@ -443,10 +513,10 @@ impl Feature for Channels {
                 News::Event(event) => out
                     .log
                     .send(ClientEvent::World(WorldEvent::Channel(event)))?,
-                News::Unread { opcode, length } => out.log.gap(
+                News::Unread { opcode, length } => out.log.gap_unsampled(
                     opcode,
                     Some(unread_name(opcode)),
-                    &vec![0; length],
+                    length,
                     GapKind::Unread {
                         reason: "the chat server's mail, friends and ignore lists are not built"
                             .to_owned(),
@@ -466,7 +536,6 @@ mod tests {
     use super::super::feature::testing;
     use super::*;
     use crate::transport::Application;
-    use std::time::Instant;
 
     /// A key no test should find outside the login body.
     const KEY: &str = "0123ABCD";
@@ -584,6 +653,13 @@ mod tests {
     /// A link to a stub server, with what it sent and how often it
     /// connected.
     fn link(stub: Option<Stub>) -> (Arc<ChatLink>, Sent, Arc<Mutex<usize>>) {
+        link_waiting(stub, LOGIN_WAIT)
+    }
+
+    fn link_waiting(
+        stub: Option<Stub>,
+        wait: Duration,
+    ) -> (Arc<ChatLink>, Sent, Arc<Mutex<usize>>) {
         let sent: Sent = Arc::default();
         let connects = Arc::new(Mutex::new(0));
         let (into, count) = (Arc::clone(&sent), Arc::clone(&connects));
@@ -598,7 +674,8 @@ mod tests {
                 sent: Arc::clone(&into),
                 logged_in: false,
             }) as Box<dyn Transport + Send>)
-        }));
+        }))
+        .waiting(wait);
         (Arc::new(link), sent, connects)
     }
 
@@ -750,6 +827,92 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(opcode, _)| *opcode == CLOSED));
+    }
+
+    #[test]
+    fn an_unanswered_login_ends_once_past_its_bound_and_says_so() {
+        let (link, sent, connects) = link_waiting(Some(Stub::Stalls), Duration::from_millis(40));
+        link.open(login(), false);
+        let news = until(&link, |news| {
+            news.iter()
+                .any(|n| matches!(n, News::Link(ChannelLink::Lost { .. })))
+        });
+        assert_eq!(
+            news,
+            [News::Link(ChannelLink::Lost {
+                reason: LinkLoss::Login
+            })]
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!link.running());
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(opcode, _)| *opcode == CLOSED));
+        // A lost link says it has ended, not that it is still coming up.
+        assert_eq!(link.send("list"), Err("The chat server link has ended"));
+        assert_eq!(*connects.lock().unwrap(), 1);
+        assert_eq!(link.drain(), []);
+    }
+
+    #[test]
+    fn closing_never_waits_on_a_connect_that_cannot_be_cut_short() {
+        // A connector that ignores the stop until it is released, as the
+        // offered host's resolution does.
+        let (release, held) = mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        let sent: Sent = Arc::default();
+        let into = Arc::clone(&sent);
+        let link = ChatLink::with(Arc::new(move |_login, _local, _stop| {
+            let _ = held.lock().unwrap().recv();
+            Ok(Box::new(Fake {
+                stub: Stub::Takes,
+                script: VecDeque::new(),
+                sent: Arc::clone(&into),
+                logged_in: false,
+            }) as Box<dyn Transport + Send>)
+        }));
+        link.open(login(), false);
+        std::thread::sleep(Duration::from_millis(20));
+        let started = Instant::now();
+        link.close();
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert!(!link.opened());
+        release.send(()).unwrap();
+        // After the release the thread closes what it connected, sends
+        // nothing and tells nothing.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && sent.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*sent.lock().unwrap(), [(CLOSED, Vec::new())]);
+        assert_eq!(link.drain(), []);
+    }
+
+    #[test]
+    fn the_gap_log_keeps_an_unread_message_by_opcode_and_length_only() {
+        let (link, _, _) = link(Some(Stub::Floods));
+        let mut channels = Channels::new(Arc::clone(&link));
+        let mut world = World::new(5);
+        link.open(login(), false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut gaps = Vec::new();
+        while Instant::now() < deadline && gaps.is_empty() {
+            let outcome = testing::run(|out| channels.tick(Instant::now(), &mut world, out));
+            outcome.result.unwrap();
+            gaps.extend(outcome.events.into_iter().filter_map(|event| match event {
+                ClientEvent::Gap(gap) => Some(gap),
+                _ => None,
+            }));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let [gap] = &gaps[..] else {
+            panic!("one gap, not {gaps:?}");
+        };
+        assert_eq!(gap.opcode, chat_server::BUDDY_OPCODE);
+        assert_eq!((gap.min_length, gap.max_length), (5, 5));
+        assert_eq!(gap.sample, None);
     }
 
     #[test]
