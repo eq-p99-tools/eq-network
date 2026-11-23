@@ -165,6 +165,10 @@ unreachable because validation refuses the generation:
 - Its mana and endurance pools (`rof2_pools`, 6.538): the pool updates with their maxima and the
   group's and raid's percents, which the server sends SoD and later clients only, unencoded, and
   which give events of their own, since Titanium is sent nothing like them.
+- Its doors, ground objects and weather (`rof2_world`, 6.539): the door table and the ground
+  object have encoders of their own, and Titanium's readers take the door table by record length
+  and size width; the door's move, the click and the weather go out unencoded. The door record's
+  constants, the ground object's tilts and size, and the zone-in weather are reads still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

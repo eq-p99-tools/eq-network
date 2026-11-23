@@ -348,18 +348,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ObjectUpdate>> {
                 object_type: word(80),
             })))
         }
-        CLICK_OPCODE => {
-            ensure!(body.len() == 8, "invalid object click length");
-            let (drop_id, player_id) = (word(0), word(4));
-            Ok(Some(if drop_id == 0 {
-                ObjectUpdate::Kept { player_id }
-            } else {
-                ObjectUpdate::Remove {
-                    drop_id,
-                    taken_by: (player_id != 0).then_some(player_id),
-                }
-            }))
-        }
+        CLICK_OPCODE => click(body).map(Some),
         CONTAINER_OPCODE => {
             ensure!(
                 body.len() == CONTAINER_LENGTH,
@@ -379,9 +368,36 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ObjectUpdate>> {
     }
 }
 
+/// Reads an object click, `EQEmu`'s 8-byte `ClickObject_Struct`: the drop
+/// id and the player. A drop id of 0 is the server keeping the object; any
+/// other is the object leaving the zone, taken by the player if one is named.
+///
+/// # Errors
+/// Rejects any length other than 8.
+pub(crate) fn click(body: &[u8]) -> Result<ObjectUpdate> {
+    ensure!(body.len() == 8, "invalid object click length");
+    let word = |offset: usize| {
+        u32::from_le_bytes([
+            body[offset],
+            body[offset + 1],
+            body[offset + 2],
+            body[offset + 3],
+        ])
+    };
+    let (drop_id, player_id) = (word(0), word(4));
+    Ok(if drop_id == 0 {
+        ObjectUpdate::Kept { player_id }
+    } else {
+        ObjectUpdate::Remove {
+            drop_id,
+            taken_by: (player_id != 0).then_some(player_id),
+        }
+    })
+}
+
 /// A NUL-terminated name of printable ASCII, not blank. P99 names some
 /// fixtures with spaces.
-fn text(field: &[u8]) -> Option<String> {
+pub(crate) fn text(field: &[u8]) -> Option<String> {
     let end = field
         .iter()
         .position(|byte| *byte == 0)

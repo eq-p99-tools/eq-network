@@ -87,6 +87,17 @@ const BUFF: &[Part] = &[Part(
      data",
     Planned(Rof2),
 )];
+/// What the zone decoder leaves unread of a ground object (6.539).
+const GROUND_OBJECT: &[Part] = &[Part(
+    "the zone, the instance, the two tilts and the size, which Titanium's ground object has no \
+     field for",
+    Planned(Rof2),
+)];
+/// What the session leaves unread of the weather (6.539).
+const WEATHER: &[Part] = &[Part(
+    "the 12-byte form sent at zone-in, which Titanium's admission takes as a step",
+    Planned(Rof2),
+)];
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
 /// client; nothing for one no stage reads yet.
 pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
@@ -190,6 +201,18 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x5f42 => sent("OP_EnduranceUpdate", ROF2, Read(&[Zone])),
         0x2404 => sent("OP_MobManaUpdate", ROF2, Read(&[Zone])),
         0x1c81 => sent("OP_MobEnduranceUpdate", ROF2, Read(&[Zone])),
+        // Doors, ground objects and the weather (6.539). The door record's
+        // four bytes at 56 and everything from 68 are not parts: the
+        // encoder writes bytes 80 to 86 only, as 0, 1, 0, 1, 0, 0 and 0,
+        // and byte 87 and the 12 after it are not written. The ground
+        // object's 52-byte tail past its object type is not written either.
+        // The door's move, the click and the weather go out unencoded, the
+        // bytes Titanium gets.
+        0x7291 => sent("OP_SpawnDoor", ROF2, Read(&[Zone])),
+        0x08e8 => sent("OP_MoveDoor", ROF2, Read(&[Zone])),
+        0x6fca => sent("OP_GroundSpawn", ROF2, Partly(&[Zone], GROUND_OBJECT)),
+        0x4aa1 => sent("OP_ClickObject", ROF2, Read(&[Zone])),
+        0x661e => sent("OP_Weather", ROF2, Partly(&[Zone], WEATHER)),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the

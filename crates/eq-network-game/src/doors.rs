@@ -18,6 +18,9 @@ const STATIC_ID: u8 = 255;
 /// The most doors `EQEmu` lists in one table.
 const MOST_DOORS: usize = 500;
 
+/// The length of a Titanium door record, with its size in the 16 bits at 52.
+const TITANIUM_RECORD: usize = 80;
+
 /// A server-defined door or interactive zone object; open types are not all hinged doors.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Door {
@@ -331,61 +334,88 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
             ensure!(body.is_empty(), "invalid door removal length");
             Ok(Some(DoorUpdate::RemoveAll))
         }
-        0x700d => {
-            ensure!(body.len() == 2, "invalid door movement length");
-            Ok(Some(DoorUpdate::Move {
-                id: body[0],
-                action: body[1],
-            }))
-        }
-        0x4c24 => {
-            ensure!(
-                body.len().is_multiple_of(80) && body.len() <= MOST_DOORS * 80,
-                "invalid door table length"
-            );
-            let mut ids = std::collections::BTreeSet::new();
-            let mut doors = Vec::with_capacity(body.len() / 80);
-            for record in body.as_chunks::<80>().0 {
-                let word = |offset| {
-                    u32::from_le_bytes([
-                        record[offset],
-                        record[offset + 1],
-                        record[offset + 2],
-                        record[offset + 3],
-                    ])
-                };
-                let position = Position {
-                    x: f32::from_bits(word(36)),
-                    y: f32::from_bits(word(32)),
-                    z: f32::from_bits(word(40)),
-                    heading: f32::from_bits(word(44)),
-                };
-                ensure!(
-                    [position.x, position.y, position.z, position.heading]
-                        .iter()
-                        .all(|v| v.is_finite()),
-                    "non-finite door placement"
-                );
-                let id = record[60];
-                ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
-                let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
-                doors.push(Door {
-                    id,
-                    model: String::from_utf8_lossy(&record[..end]).into_owned(),
-                    position,
-                    incline: word(48),
-                    size: u16::from_le_bytes([record[52], record[53]]),
-                    open_type: record[61],
-                    state_at_spawn: record[62],
-                    invert_state: record[63],
-                    parameter: word(64),
-                    action: None,
-                });
-            }
-            Ok(Some(DoorUpdate::Spawn(doors)))
-        }
+        0x700d => door_move(body).map(Some),
+        0x4c24 => door_table(body, TITANIUM_RECORD, |record| {
+            Ok(u16::from_le_bytes([record[52], record[53]]))
+        })
+        .map(Some),
         _ => Ok(None),
     }
+}
+
+/// Decodes a door's move: the server's 2-byte `MoveDoor_Struct`, the door
+/// and the action, which stock `EQEmu` sends Titanium and `RoF2` alike with
+/// no encoder (`Doors::Open`, `ForceOpen`, `ForceClose`, `ToggleState` in
+/// `zone/doors.cpp`).
+///
+/// # Errors
+/// Rejects any length but 2.
+pub(crate) fn door_move(body: &[u8]) -> Result<DoorUpdate> {
+    ensure!(body.len() == 2, "invalid door movement length");
+    Ok(DoorUpdate::Move {
+        id: body[0],
+        action: body[1],
+    })
+}
+
+/// Decodes a door table of `record_length`-byte records, whose fields up to
+/// the parameter at 64 sit where Titanium's do, with the size as `size`
+/// reads it from a record; a malformed table is refused whole.
+///
+/// # Errors
+/// Rejects partial records, tables of more than 500 doors, a repeated ID other
+/// than a static object's, non-finite placement coordinates, and a size
+/// `size` refuses.
+pub(crate) fn door_table(
+    body: &[u8],
+    record_length: usize,
+    size: impl Fn(&[u8]) -> Result<u16>,
+) -> Result<DoorUpdate> {
+    ensure!(
+        body.len().is_multiple_of(record_length) && body.len() <= MOST_DOORS * record_length,
+        "invalid door table length"
+    );
+    let mut ids = std::collections::BTreeSet::new();
+    let mut doors = Vec::with_capacity(body.len() / record_length);
+    for record in body.chunks_exact(record_length) {
+        let word = |offset| {
+            u32::from_le_bytes([
+                record[offset],
+                record[offset + 1],
+                record[offset + 2],
+                record[offset + 3],
+            ])
+        };
+        let position = Position {
+            x: f32::from_bits(word(36)),
+            y: f32::from_bits(word(32)),
+            z: f32::from_bits(word(40)),
+            heading: f32::from_bits(word(44)),
+        };
+        ensure!(
+            [position.x, position.y, position.z, position.heading]
+                .iter()
+                .all(|v| v.is_finite()),
+            "non-finite door placement"
+        );
+        let id = record[60];
+        ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
+        let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
+        let size = size(record)?;
+        doors.push(Door {
+            id,
+            model: String::from_utf8_lossy(&record[..end]).into_owned(),
+            position,
+            incline: word(48),
+            size,
+            open_type: record[61],
+            state_at_spawn: record[62],
+            invert_state: record[63],
+            parameter: word(64),
+            action: None,
+        });
+    }
+    Ok(DoorUpdate::Spawn(doors))
 }
 
 #[cfg(test)]
