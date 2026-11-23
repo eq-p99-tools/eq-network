@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An item use refused where the Titanium program's cast start says its own
+  line now names that line (read R49-34 e 8, slice G, checklist 6.639):
+  0x88 for a level below the item's, 0xb3 for a worn-only effect on an
+  item not worn, and 0xb6 for an item with no charges left, through
+  `ItemUseAction`'s `string_id` (Titanium sessions only; the Mac-era
+  program's lines aren't read). The level test now comes before the worn
+  test, in the program's order. `ItemRefusal` carries each line beside
+  this library's words. The program's 0xec (an item used before its
+  recast) isn't built: which clock it compares the item's recast stamp
+  with isn't read yet.
 - **Breaking:** A same-zone zone line places the player locally on stock
   EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
   program's 0x48aaa6 sends one position record and lands the player itself,

@@ -816,13 +816,20 @@ impl Casting {
                 self.submitted(spell_id, source, world, out)?;
                 None
             }
-            Err(error) => Some(error.to_string()),
+            Err(error) => Some(error),
         };
+        // Titanium's own line for a refusal its cast start says (read
+        // R49-34 e 8); the Mac-era program's lines aren't read.
+        let string_id = error
+            .as_ref()
+            .and_then(|error| error.downcast_ref::<eq_network_game::inventory::ItemRefusal>())
+            .filter(|_| out.wire.dialect() == eq_network_game::GameDialect::Titanium)
+            .map(|refusal| refusal.string_id);
         out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
-            error,
-            string_id: None,
+            error: error.map(|error| error.to_string()),
+            string_id,
         }))
     }
 
