@@ -131,7 +131,7 @@ impl Doors {
         position: Position,
     ) -> Result<EncodedCommand> {
         self.check_click(id, player_id, position, crate::reach::TITANIUM.doors)?;
-        Ok(titanium_click(id, player_id))
+        Ok(titanium_click(id, player_id, None))
     }
 
     /// Checks a click on a door against the current door table and the
@@ -306,16 +306,41 @@ fn distance(from: Position, to: Position) -> f32 {
     (to.x - from.x).hypot(to.y - from.y).hypot(to.z - from.z)
 }
 
-/// Titanium's `OP_ClickDoor` for the player using a door, already checked.
+/// What a door click names as held: the cursor item, and the skill the
+/// program sends with it (read R49-22b, 0x49812e).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldItem {
+    /// The server's item ID of the cursor item.
+    pub id: u32,
+    /// The player's Pick Lock value when the item is a lockpick (item type
+    /// 12, not a container), else 0. Keys carry 0.
+    pub skill: u32,
+}
+
+/// The item type of a lockpick, whose door click carries the Pick Lock value.
+pub const LOCKPICK_ITEM_TYPE: u8 = 12;
+
+/// The most a door click's skill carries (0x4906c5 clamps it to 0xfe).
+const MOST_SKILL: u32 = 0xfe;
+
+/// Titanium's `OP_ClickDoor` for the player using a door, already checked,
+/// with what the cursor holds, if anything (6.537, read R49-22b).
+///
+/// The program writes 16 bytes (0x4906c5): the door at +0, the skill at +4
+/// (at most 254), the cursor item's ID at +8 (-1 for an empty cursor) and the
+/// clicker at +12. Bytes 1 to 3 are never written: they are left over from
+/// the stack, and the official client's recordings show 3 in byte 1, which
+/// this keeps. No server reads them.
 #[must_use]
-pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
+pub fn titanium_click(id: u8, player_id: u16, held: Option<HeldItem>) -> EncodedCommand {
     let mut body = vec![0; 16];
     body[0] = id;
-    // The official client sends 3 here and -1 as the held item for an
-    // ordinary open or close (what the 3 means is unknown, and a click
-    // holding a key is unrecorded).
     body[1] = 3;
-    body[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    let (item, skill) = held.map_or((u32::MAX, 0), |held| (held.id, held.skill.min(MOST_SKILL)));
+    body[4..8].copy_from_slice(&skill.to_le_bytes());
+    // Stock EQEmu reads none of this: it takes the key from its own copy of
+    // the inventory.
+    body[8..12].copy_from_slice(&item.to_le_bytes());
     body[12..14].copy_from_slice(&player_id.to_le_bytes());
     EncodedCommand {
         opcode: CLICK_OPCODE,

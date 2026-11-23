@@ -256,6 +256,42 @@ door's origin where it stands now, is refused in our own words with no string
 today's: 3-D to the door's origin where it stands now, within 20, which is
 stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule.
 
+## The item held in a door click
+
+A Titanium door click names what the player holds on the cursor, as read R49-22b
+reads the program (checklist 6.537; 0x49812e and 0x4906c5).
+`Request::ClickDoor { door_id, held }` and
+`doors::titanium_click(id, player_id, held: Option<HeldItem>)` write 16 bytes:
+- the door at +0;
+- the skill at +4, at most 254;
+- the cursor item's ID at +8, or -1 for an empty cursor;
+- the clicker at +12.
+
+`HeldItem::skill` is the player's Pick Lock value when the cursor holds a
+lockpick (`LOCKPICK_ITEM_TYPE`, 12, and not a container). Anything else, keys
+included, carries 0. Bytes 1 to 3 are not a field: the program leaves stack
+contents there. The official client's recordings show 3 in byte 1, and the
+encoder keeps it.
+
+The session takes the item and the skill from its own tracked inventory and
+profile, never from the host. No item on the cursor, or an inventory not yet
+loaded or made stale, sends -1, and a stack or an item with charges is named by
+its ID alone. The click never moves, drops or gives the item, and the ID appears
+in no event or diagnostic the host hears. The program refuses no keyed or locked
+door itself, and neither does the session: the lock lines are the server's.
+
+Not yet built:
+- A trapped door type sends item -1 and the Disarm Traps value. The read names
+  only part of that list of types, so a follow-up waits for the rest.
+- A type 57 door's contact click. Door +0xa4, +0xb4 and +0xb8 are not key
+  data, which corrects R16e.
+
+Stock `EQEmu` reads none of these fields: it takes the key from its own copy of
+the inventory and the key ring, and answers with its own lines and
+`OP_MoveDoor`. `EQMac`'s program asks for a clear cursor first, so its session
+still refuses a click with an item there, and its encoder refuses a `held` item.
+RoF2 sends -1 until its click is read.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:
