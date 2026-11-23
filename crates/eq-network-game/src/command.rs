@@ -579,6 +579,22 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Effect 234's total for the player, in ms, as the host sums it: the
+    /// effect's value from every active buff at its caster's level, type-4
+    /// records negated, and from every AA the player's class may use at
+    /// their level (read R49-1f; 0x41002f and 0x40feaa). Worn items do not
+    /// count. `None` when the host cannot resolve something that could
+    /// carry the effect, such as a buff whose spell it does not know.
+    ///
+    /// The host's own report, posted whenever the total changes; the
+    /// Apply Poison wait reads the latest one on each tick (checklist
+    /// 6.493b). Each zone session starts untold, which waits 10 s.
+    PoisonWait {
+        /// Current zone admission.
+        session_id: u64,
+        /// The total in ms, or `None` when it cannot be summed.
+        total_ms: Option<i64>,
+    },
     /// What the session may eat and drink on its own from now on. Each zone
     /// session starts with the client's configured choice, so a host that
     /// lets the player change it says so again after each admission.
@@ -1457,6 +1473,7 @@ impl GameCommand {
             Self::ApplyPoison { .. } => "ApplyPoison",
             Self::ChatChannel { .. } => "ChatChannel",
             Self::AutoEat { .. } => "AutoEat",
+            Self::PoisonWait { .. } => "PoisonWait",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
             Self::SetMovementOptions { .. } => "SetMovementOptions",
             Self::SetBookOptions { .. } => "SetBookOptions",
@@ -1609,6 +1626,7 @@ impl GameCommand {
             | Self::ApplyPoison { session_id, .. }
             | Self::ChatChannel { session_id, .. }
             | Self::AutoEat { session_id, .. }
+            | Self::PoisonWait { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
             | Self::SetServerFilters { session_id, .. }
             | Self::SetMovementOptions { session_id, .. }
@@ -1768,7 +1786,7 @@ impl GameCommand {
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
-            Self::ApplyPoison { .. } => Capability::ApplyingPoison,
+            Self::ApplyPoison { .. } | Self::PoisonWait { .. } => Capability::ApplyingPoison,
             Self::ChatChannel { .. } => Capability::ChatChannels,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SetServerFilters { .. } => Capability::ServerFilters,
@@ -1894,6 +1912,7 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
+            | Self::PoisonWait { .. }
             | Self::AnswerListPolls { .. }
             | Self::SetServerFilters { .. }
             | Self::SetBookOptions { .. }
@@ -2224,6 +2243,7 @@ pub fn encode(
         | GameCommand::ApplyPoison { .. }
         | GameCommand::ChatChannel { .. }
         | GameCommand::AutoEat { .. }
+        | GameCommand::PoisonWait { .. }
         | GameCommand::AnswerListPolls { .. }
         | GameCommand::SetServerFilters { .. }
         | GameCommand::SetMovementOptions { .. }

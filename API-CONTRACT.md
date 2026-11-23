@@ -911,12 +911,19 @@ same flow, inferred, as its program is not read.
   after the sit and the 0x305d refusal, in the program's order, so a
   standing player's click while one is in flight still sits them.
 - Otherwise the wait starts, with `WorldEvent::PoisonStarted { slot,
-  string_id: 0x305e }`. After 10 s seated the request goes out. The program
-  waits effect 234's total in ms (every active buff and usable AA, summed)
-  in place of 10 s where that is not 0 (read R49-1f). This session does not
-  sum it yet and always waits 10 s: slower where a total is below 10 s, and
-  faster where one is above 10 s or negative, a known departure until the
-  sum lands.
+  string_id: 0x305e }`. The request goes out once the seated wait passes
+  the delay, read each tick as the program reads it (read R49-1f): effect
+  234's total in ms where that is not 0, else 10 s. A negative total never
+  sends; the wait then ends only with a posture or zone change.
+- The host reports that total with `GameCommand::PoisonWait { total_ms }`
+  (6.493b), offered with `Capability::ApplyingPoison`, whenever it changes
+  and after each admission: effect 234 from every active buff at its
+  caster's level (type-4 records negated) and every AA the class may use at
+  its level; worn items do not count. It is the host's own report, never a
+  script's. `None` means something that could carry the effect is unknown,
+  such as a buff's spell. Untold or `None`, the session waits 10 s, which
+  departs where a total is not 0: slower below 10 s, faster above it or when
+  negative.
 - Any posture change before the send, a stand and re-sit between two ticks
   included, cancels it with `WorldEvent::PoisonInterrupted { string_id:
   0x30d1 }` and nothing sent. A click checks this first, so a stand and a
