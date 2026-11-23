@@ -1,7 +1,8 @@
 //! The zone handshake: the entry the client sends, what the zone sends
 //! before the player can act, the client's answers, and the player it
-//! admits. Each client generation has its own, behind [`Admission`];
-//! Titanium's is here. Everything else the zone says meanwhile goes to the
+//! admits. Each client generation has its own, behind [`Admission`]:
+//! Titanium's is here, `EQMac`'s in [`eqmac`] and `RoF2`'s in [`rof2`].
+//! Everything else the zone says meanwhile goes to the
 //! features, which stage it for the admission.
 use super::{
     bail, cstr, ensure, feature::World, le32, put_string, servers::Shield, ClientEvent,
@@ -16,7 +17,9 @@ use eq_network_game::{
 use eq_network_transport::{Application, Transport};
 
 mod eqmac;
+mod rof2;
 pub(in crate::client) use eqmac::EqMacAdmission;
+pub(in crate::client) use rof2::Rof2Admission;
 
 const PROFILE_OPCODE: u16 = 0x75df;
 const WEATHER_OPCODE: u16 = 0x254d;

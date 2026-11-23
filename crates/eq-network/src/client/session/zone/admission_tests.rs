@@ -758,3 +758,97 @@ fn every_server_type_sends_the_characters_kept_filters_at_zone_in() {
         assert_eq!(script.filters[0][16..20], [0, 0, 0, 0]);
     }
 }
+
+impl Script {
+    /// Stock `EQEmu`'s zone entry for a `RoF2` client: its description,
+    /// unasked, then its objects (the spawn request's answer), then a
+    /// message numbered as a Titanium spawn, which `RoF2` must not read.
+    fn rof2() -> Self {
+        let mut description = vec![0; 948];
+        description[64..71].copy_from_slice(b"example");
+        let mut script = Self {
+            incoming: VecDeque::new(),
+            stop_when_drained: None,
+            sent: Vec::new(),
+            filters: Vec::new(),
+            closed: false,
+            refuse_list_reply: false,
+        };
+        script.packet(0x1795, description);
+        script.packet(0x5ae2, Vec::new());
+        script.packet(0x7213, vec![0; 385]);
+        script
+    }
+}
+
+#[test]
+fn a_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_generations_layout() {
+    let mut config = config();
+    config.protocol = ServerProtocol::EqEmuRof2;
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let context = context(&config, &identity, &credentials, &stop, None);
+    let mut script = Script::rof2();
+    script.stop_when_drained = Some(stop.clone());
+    let mut diagnostics = Vec::new();
+    let mut entered = false;
+    let mut handler = |event| {
+        match event {
+            ClientEvent::Diagnostic(line) => diagnostics.push(line),
+            ClientEvent::World(WorldEvent::Entered { .. }) => entered = true,
+            _ => (),
+        }
+        Ok(())
+    };
+    let mut log = Events::new(&config, &mut handler);
+    let exit = run_script(&context, &mut script, &mut log).unwrap();
+    drop(log);
+    assert!(matches!(exit, ZoneExit::Stopped));
+    // The entry, the spawn request and the ready, and nothing in the zone.
+    assert_eq!(script.sent, [0x5089, 0x35fa, 0x345d]);
+    assert_eq!(script.filters.len(), 0);
+    // With no player snapshot the session only records, and says why.
+    assert!(!entered);
+    assert!(
+        diagnostics.iter().any(|line| {
+            line
+            == "Player presentation unavailable: the RoF2 player profile and spawn are not read yet"
+        }),
+        "{diagnostics:?}"
+    );
+    // A message numbered as Titanium's spawn is told by number and length,
+    // not read as one.
+    assert!(
+        diagnostics
+            .iter()
+            .any(|line| line.contains("(0x7213, 385 bytes), left unread")),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_rof2_session_with_a_player_at_the_controls_refuses_rather_than_sends() {
+    let mut config = config();
+    config.protocol = ServerProtocol::EqEmuRof2;
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let (sender, commands) = mpsc::channel();
+    sender
+        .send(ClientCommand::SendChat(OutboundChat::Say("Hail".into())))
+        .unwrap();
+    let context = context(&config, &identity, &credentials, &stop, Some(&commands));
+    let mut script = Script::rof2();
+    let mut handler = |_| Ok(());
+    let mut log = Events::new(&config, &mut handler);
+    let refused = run_script(&context, &mut script, &mut log).err().unwrap();
+    drop(log);
+    assert!(
+        refused.is::<crate::client::PlayerAdmissionError>(),
+        "{refused}"
+    );
+    // The command was never sent: only the entry went out.
+    assert_eq!(script.sent, [0x5089, 0x35fa, 0x345d]);
+    assert!(script.closed);
+}
