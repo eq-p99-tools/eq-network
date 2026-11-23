@@ -12,8 +12,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Ranger, Druid or Bard with the skill at any rank may press it, since both
   servers kick any other class; a press while a trade is open is refused
   (the program ignores it; which window its flag is, is inferred). The list
-  is the host's to build (row 10c). `abilities::eqmac::SUPPORTED` grows to
-  16; not breaking beyond that constant's length.
+  is the host's to build (row 10c). Its 10-second reuse is the program's
+  own (read 10e). `abilities::eqmac::SUPPORTED` grows to 16; not breaking
+  beyond that constant's length.
 
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's

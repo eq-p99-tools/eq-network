@@ -381,8 +381,9 @@ impl Ability {
             | Self::PickLock => 10_000,
             Self::Tracking => match dialect {
                 GameDialect::Titanium | GameDialect::Rof2 => 10_000,
-                // Titanium's, inferred for the Mac-era program: its own
-                // Tracking reuse is unread (6.619; a read is queued).
+                // The Mac-era program's own: skill 0x35's reuse in its
+                // static skill table, ready again once more than 10,000 ms
+                // have passed (TAKP program read 10e).
                 GameDialect::EqMac => 10_000,
             },
             Self::BindWound => match dialect {
