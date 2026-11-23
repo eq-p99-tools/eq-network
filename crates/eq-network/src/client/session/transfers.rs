@@ -229,7 +229,7 @@ impl Transfers {
         }
         let reply = zoning::reply(&answer, &self.character, pending, world.zone, heading)?;
         if reply == zoning::ZoneReply::Approved {
-            let save = save_on_leaving(pending.reason, world);
+            let save = save_on_leaving(&pending.clone(), world);
             world.lifecycle.finish(true, Instant::now())?;
             if let Some(save) = save {
                 noted(out, &Request::SaveOnZone(save), "the save before leaving")?;
@@ -283,9 +283,13 @@ impl Transfers {
 ///   the vehicle: the boat was never found here.
 /// - A boat transfer (reason 2), while the session still finds the boat by
 ///   its name, saves the player's place in the boat's frame and the name.
-/// - Any other transfer forgets the vehicle and sends the empty save that
-///   ordinary transfers have always sent.
-fn save_on_leaving(reason: u32, world: &mut World) -> Option<zoning::Save> {
+/// - Any other transfer forgets the vehicle and saves where the accepted
+///   request goes, its heading resolved as the request resolved it (999
+///   keeping the player's): the program fills every save from the profile
+///   (R49-36b), and that the profile then holds the request's place and
+///   heading is capture-derived (every recorded official save holds them).
+fn save_on_leaving(pending: &zoning::ZoneOffer, world: &mut World) -> Option<zoning::Save> {
+    let reason = pending.reason;
     if std::mem::take(&mut world.carried_from) == super::riders::CarriedFrom::Wait {
         return None;
     }
@@ -313,7 +317,10 @@ fn save_on_leaving(reason: u32, world: &mut World) -> Option<zoning::Save> {
         });
     }
     world.forget_vehicle();
-    Some(zoning::Save::default())
+    Some(zoning::Save {
+        position: Some(pending.position),
+        vehicle: None,
+    })
 }
 
 /// Sends a request and says so: zoning's few packets are worth reading back
@@ -1039,7 +1046,15 @@ mod tests {
         assert_eq!(
             outcome.sent,
             [
-                zoning::titanium_save_on_zone(&zoning::Save::default()),
+                zoning::titanium_save_on_zone(&zoning::Save {
+                    position: Some(Position {
+                        x: 10.0,
+                        y: 20.0,
+                        z: 3.0,
+                        heading: 0.0,
+                    }),
+                    vehicle: None,
+                }),
                 zoning::titanium_depart(7)
             ]
         );
@@ -1294,6 +1309,42 @@ mod tests {
         assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
     }
 
+    /// A transfer the zone accepted, going to `position` for `reason`.
+    fn going(reason: u32, position: Position) -> zoning::ZoneOffer {
+        zoning::ZoneOffer {
+            zone_id: 4,
+            instance_id: 0,
+            position,
+            reason,
+            to_bind: false,
+            solicited: false,
+        }
+    }
+
+    #[test]
+    fn an_ordinary_save_holds_where_the_request_goes() {
+        let there = Position {
+            x: 10.0,
+            y: 20.0,
+            z: 3.0,
+            heading: 64.0,
+        };
+        let mut world = World::new(5);
+        world.body.admit(
+            MotionSession::new(5, 7, Position { x: 99.0, ..there }, Instant::now()).unwrap(),
+        );
+        assert_eq!(
+            save_on_leaving(&going(0, there), &mut world),
+            Some(zoning::Save {
+                position: Some(there),
+                vehicle: None,
+            })
+        );
+        // Carried on from the arrival wait, still no save.
+        world.carried_from = super::super::riders::CarriedFrom::Wait;
+        assert_eq!(save_on_leaving(&going(0, there), &mut world), None);
+    }
+
     #[test]
     fn only_a_boat_transfer_saves_the_place_aboard_and_the_boat() {
         use eq_network_game::{movement::carrier_world, world::SpawnKind, GameDialect};
@@ -1330,8 +1381,12 @@ mod tests {
             world.vehicle = Some("SirensBane00".into());
             world
         };
+        let there = Position {
+            x: -40.0,
+            ..Position::default()
+        };
         let mut world = aboard();
-        let save = save_on_leaving(riders::ZONE_REASON, &mut world).unwrap();
+        let save = save_on_leaving(&going(riders::ZONE_REASON, there), &mut world).unwrap();
         assert_eq!(save.vehicle.as_deref(), Some("SirensBane00"));
         let local = save.position.unwrap();
         // The restore in the next zone keeps this z (read R36c).
@@ -1344,27 +1399,31 @@ mod tests {
         ] {
             assert!((got - want).abs() < 0.01, "{local:?}");
         }
-        // Any other transfer forgets the boat and sends the empty save.
+        // Any other transfer forgets the boat and saves where it goes.
+        let ordinary = Some(zoning::Save {
+            position: Some(there),
+            vehicle: None,
+        });
         let mut world = aboard();
-        assert_eq!(
-            save_on_leaving(0, &mut world),
-            Some(zoning::Save::default())
-        );
+        assert_eq!(save_on_leaving(&going(0, there), &mut world), ordinary);
         assert_eq!(world.vehicle, None);
         assert_eq!(world.riding.departure_z(), None);
         // So does a boat transfer once the boat is no longer found.
         let mut world = aboard();
         world.vehicle = Some("Stormbreaker".into());
         assert_eq!(
-            save_on_leaving(riders::ZONE_REASON, &mut world),
-            Some(zoning::Save::default())
+            save_on_leaving(&going(riders::ZONE_REASON, there), &mut world),
+            ordinary
         );
         assert_eq!(world.vehicle, None);
         // Carried on from the arrival wait: no save, and the name kept.
         let mut world = aboard();
         world.vehicle = Some("Stormbreaker".into());
         world.carried_from = super::super::riders::CarriedFrom::Wait;
-        assert_eq!(save_on_leaving(riders::ZONE_REASON, &mut world), None);
+        assert_eq!(
+            save_on_leaving(&going(riders::ZONE_REASON, there), &mut world),
+            None
+        );
         assert_eq!(world.vehicle.as_deref(), Some("Stormbreaker"));
         assert_eq!(
             world.carried_from,

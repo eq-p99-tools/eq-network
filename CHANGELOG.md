@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Every Titanium save on zoning (`OP_SaveOnZoneReq` 0x1540) carries a place,
+  a heading and its checksum, as read R49-36b shows the program fills every
+  one, not only a boat transfer's (row 6.145). Off a boat the place is where
+  the accepted zone request goes, with the request's heading, as 11 recorded
+  official saves hold it; the heading at +0x11 is cut toward zero to a 32-bit
+  integer, and a reason 6 transfer's saves 0xffffffff (all three
+  capture-derived). The unidentified fields stay zero, and EQMac's save is unchanged.
+  See docs/boat-riding.md, "The save before leaving".
 - A Bard's song under the Titanium program's rules (read R49-21; gap 3.5,
   checklist 6.442, 6.542), on P99 and Titanium EQEmu only. See
   API-CONTRACT.md, "A Bard's song under the Titanium program's rules".
