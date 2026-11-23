@@ -5,6 +5,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read `/played`'s three Titanium profile fields (read R49-8 a, checklist 6.490b): the account's entitled days (+0x3314), the character's creation time (+0x32ec) and its played minutes (+0x32f4), as `WorldEvent::PlayedTime` with each profile. Breaking: a new `WorldEvent` variant.
 - Send and hear `/surname` as read R49-10 reads the Titanium program (6.507, the client's #616 follow-up).
   - A quoted surname's spaces now go as given; only an empty word, a control character, anything outside ASCII or 32 bytes and more are refused, in the encoder and the session alike. The session no longer trims the word.
   - Any answer word but 0 is taken (`accepted: true`), where 2 and more were refused before.

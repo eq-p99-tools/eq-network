@@ -1636,6 +1636,9 @@ pub enum WorldEvent {
     /// Whether looted coins are shared with the group, as the profile says
     /// at admission.
     AutoSplit(bool),
+    /// `/played`'s fields as each Titanium profile gives them (read R49-8 a,
+    /// checklist 6.490b).
+    PlayedTime(crate::played::PlayedTime),
     /// The zone of the player's primary bind point, as each zone-in's
     /// profile says it (checklist 6.524). The server sends no change when a
     /// bind lands mid-session, so it is believed current only from one
