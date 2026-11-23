@@ -73,6 +73,9 @@ impl Kind {
     /// slower choice, since eq-network keeps no list of the commands a
     /// host may send.
     pub(super) fn of_channel(text: &str) -> Self {
+        // The command goes as typed; its `/` or `;` is the byte the server
+        // skips before the word.
+        let text = text.strip_prefix(['/', ';']).unwrap_or(text);
         let first = text.split_whitespace().next().unwrap_or_default();
         if REACHES_NO_ONE
             .iter()
@@ -308,6 +311,9 @@ mod tests {
             assert_eq!(Kind::of(&chat), Kind::Local, "{chat:?}");
         }
         assert_eq!(Kind::of_channel("2 hello"), Kind::Counted);
+        assert_eq!(Kind::of_channel(";2 hello"), Kind::Counted);
+        assert_eq!(Kind::of_channel("/join test1"), Kind::Local);
+        assert_eq!(Kind::of_channel("/leaveall"), Kind::Local);
         assert_eq!(Kind::of_channel("#name hello"), Kind::Counted);
         // A command that reaches a named person, and one not listed.
         assert_eq!(Kind::of_channel("invite Someone test1"), Kind::Counted);

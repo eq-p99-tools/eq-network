@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn a_link_logs_in_comes_up_and_carries_commands_and_messages() {
         let (link, sent, connects) = link(Some(Stub::Takes));
-        assert_eq!(link.send("list"), Err("There is no chat server link"));
+        assert_eq!(link.send("/list"), Err("There is no chat server link"));
         link.open(login(), true);
         let news = until(&link, |news| {
             news.iter().any(|n| matches!(n, News::Event(_)))
@@ -841,7 +841,7 @@ mod tests {
                 text: "hi".into(),
             })
         );
-        link.send("join test1").unwrap();
+        link.send("/join test1").unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while sent.lock().unwrap().len() < 2 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
@@ -851,7 +851,7 @@ mod tests {
         assert_eq!(sent[0].0, chat_server::LOGIN_OPCODE);
         assert_eq!(
             sent[1],
-            (chat_server::COMMAND_OPCODE, b"\0join test1\0".to_vec())
+            (chat_server::COMMAND_OPCODE, b"/join test1\0".to_vec())
         );
         assert_eq!(sent.len(), 2);
         assert_eq!(*connects.lock().unwrap(), 1);
@@ -906,7 +906,7 @@ mod tests {
             if loss == LinkLoss::Malformed {
                 assert!(why[0].starts_with("opcode 0x7777 (9 bytes) was unreadable"));
             }
-            assert!(link.send("list").is_err());
+            assert!(link.send("/list").is_err());
             std::thread::sleep(Duration::from_millis(20));
             assert_eq!(*connects.lock().unwrap(), 1, "{loss:?}");
             assert_eq!(link.drain().len(), 0);
@@ -917,7 +917,7 @@ mod tests {
         link.open(login(), false);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(
-            link.send("list"),
+            link.send("/list"),
             Err("The chat server has not taken the login")
         );
         assert!(link.running());
@@ -1024,7 +1024,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(60));
         assert!(quiet.running());
         assert_eq!(quiet.drain(), []);
-        quiet.send("list").unwrap();
+        quiet.send("/list").unwrap();
         quiet.close();
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
             .iter()
             .any(|(opcode, _)| *opcode == CLOSED));
         // A lost link says it has ended, not that it is still coming up.
-        assert_eq!(link.send("list"), Err("The chat server link has ended"));
+        assert_eq!(link.send("/list"), Err("The chat server link has ended"));
         assert_eq!(*connects.lock().unwrap(), 1);
         assert_eq!(link.drain(), []);
     }
@@ -1146,7 +1146,7 @@ mod tests {
         link.open(login(), false);
         until(&link, |news| news.contains(&News::Link(ChannelLink::Up)));
         let refused = (0..OUTBOUND * 3)
-            .map(|_| link.send("list"))
+            .map(|_| link.send("/list"))
             .filter(Result::is_err)
             .collect::<Vec<_>>();
         assert!(refused.contains(&Err("Too many chat channel commands are waiting")));
@@ -1177,16 +1177,16 @@ mod tests {
         };
         for _ in 0..20 {
             assert_eq!(
-                ask("2 early").as_deref(),
+                ask(";2 early").as_deref(),
                 Some("There is no chat server link")
             );
         }
         link.open(login(), false);
         until(&link, |news| news.contains(&News::Link(ChannelLink::Up)));
         for line in 0..super::super::chat_pace::ANY_CHAT {
-            assert_eq!(ask("list"), None, "{line}");
+            assert_eq!(ask("/list"), None, "{line}");
         }
-        let refused = ask("2 a synthetic private line").expect("paced");
+        let refused = ask(";2 a synthetic private line").expect("paced");
         assert!(
             refused.starts_with("You are sending chat too fast."),
             "{refused}"
@@ -1300,7 +1300,7 @@ mod tests {
         let created = Instant::now();
         let command = |session_id| ClientCommand::ChatChannel {
             session_id,
-            text: "list".into(),
+            text: "/list".into(),
             created,
         };
         for (session_id, reason) in [
