@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Every Titanium save on zoning (`OP_SaveOnZoneReq` 0x1540) carries a place,
+  a heading and its checksum, as read R49-36b shows the program fills every
+  one, not only a boat transfer's (row 6.145). Off a boat the place is where
+  the accepted zone request goes, with the request's heading, as 11 recorded
+  official saves hold it; the heading at +0x11 is cut toward zero to a 32-bit
+  integer, and a reason 6 transfer's saves 0xffffffff (all three
+  capture-derived). The unidentified fields stay zero, and EQMac's save is unchanged.
+  See docs/boat-riding.md, "The save before leaving".
 - The Titanium buff slot finder's steps 4 and 6 and the effect-327 top, as
   read R49-22e reads 0x414071 (checklist 6.612).
   - **Breaking:** `buffs::placement::Finder` is now
