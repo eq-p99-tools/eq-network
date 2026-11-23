@@ -296,7 +296,8 @@ fn player_states_come_and_go_by_their_own_opcodes() {
 fn rof2s_zone_decoder_reads_exactly_its_listed_numbers() {
     use crate::message::{rof2, Message, Part, ROF2_READS};
     // A one-byte body is too short for every RoF2 record, so a read number
-    // says it is unreadable and any other says nothing.
+    // says it is unreadable, the spells part's for a spell's beginning or
+    // interruption as on Titanium, and any other says nothing.
     for opcode in 0..=u16::MAX {
         let messages = rof2(opcode, &[0xa5]);
         if ROF2_READS.contains(&opcode) {
@@ -304,7 +305,7 @@ fn rof2s_zone_decoder_reads_exactly_its_listed_numbers() {
                 matches!(
                     messages.as_slice(),
                     [Message::Unreadable {
-                        part: Part::World,
+                        part: Part::World | Part::Spells,
                         ..
                     }]
                 ),

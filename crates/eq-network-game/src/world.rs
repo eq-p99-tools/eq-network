@@ -429,6 +429,18 @@ pub fn titanium_coins(profile: &[u8]) -> Result<Coins> {
     })
 }
 
+/// The zone of the primary bind point from the Titanium player profile:
+/// the first of `binds[5]`, 20-byte records at byte 24, zone first
+/// (`EQEmu`'s `titanium_structs.h` `PlayerProfile_Struct`, which its
+/// Titanium translator copies unchanged).
+///
+/// # Errors
+/// Rejects profiles with an unexpected length, and a zone past 16 bits.
+pub fn titanium_bind_zone(profile: &[u8]) -> Result<u16> {
+    ensure!(profile.len() == 19592, "unexpected Titanium profile layout");
+    u16::try_from(word(profile, 24)).context("Titanium bind zone out of range")
+}
+
 /// What abandoned a camp. The Titanium program says one line when standing
 /// (or a stun) ends a camp and another when moving does (sitting 9p, read).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1480,6 +1492,14 @@ pub enum WorldEvent {
     /// Whether looted coins are shared with the group, as the profile says
     /// at admission.
     AutoSplit(bool),
+    /// The zone of the player's primary bind point, as each zone-in's
+    /// profile says it (checklist 6.524). The server sends no change when a
+    /// bind lands mid-session, so it is believed current only from one
+    /// profile to the next (inferred, pending R49-6m).
+    BoundIn {
+        /// The bind point's zone number; 0 where the profile says 0.
+        zone_id: u16,
+    },
     /// The player turned the sharing of looted coins on or off
     /// (`/autosplit`); the server answers nothing.
     AutoSplitSet {

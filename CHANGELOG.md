@@ -17,6 +17,41 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorldEvent::ChatRefused`, channel commands by `ChatChannelRefused`, with
   the whole seconds to wait and never the line. The chat link's own login
   is not counted. **Breaking:** `WorldEvent::ChatRefused` is a new variant.
+- Read RoF2's casting, stuns and illusions as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.522). The new `rof2_casting` module reads
+  `OP_BeginCast` (0x318f, 10 bytes, the spell in 32 bits refused past 16),
+  `OP_Action` (0x744c, the 56-byte `ActionAlt_Struct`), `OP_InterruptCast`
+  (0x048c, unencoded, through Titanium's reader, now the named
+  `spells::interrupted`), `OP_Stun` (0x36a4, 8 bytes, the last four the
+  encoder's constants), `OP_Illusion` (0x312a, 336 bytes, a 16-bit race)
+  and `OP_SetFace` (0x1af3, the server's 24-byte face change with both eye
+  colors), each giving Titanium's event for the same server values. The
+  action's float instrument modifier reads back as the server's integer,
+  `round(value * 10)` within a tolerance that grows with the value, up to
+  100,000; the server's 0 to 9, which the encoder's unsigned arithmetic
+  wraps alike, read 0. Coverage lists the six, with the Drakkin words as
+  the illusion's and face change's part. An admitted RoF2 session hands
+  the host each and still sends and offers nothing.
+- Keep a late scribe answer's hold until its cursor removal (6.526). A
+  scribe that timed out and then got its late book confirmation, after the
+  player moved the scroll, lost its receipt to any other inventory update,
+  so the cursor removal that followed applied as a plain removal. The
+  receipt now passes updates that leave the cursor alone, so that removal
+  still marks the inventory stale. Anything else naming the cursor, a
+  snapshot, an invalidation or 5 s since the confirmation ends it; a
+  cursor removal 5 s or more after the confirmation is now a plain removal.
+- Tell the player's bind zone (checklist 6.524). `world::titanium_bind_zone`
+  reads the primary bind's zone from Titanium's profile (`binds[5]` at byte
+  24, 20-byte records, as `EQEmu`'s `titanium_structs.h` lays them out), and
+  the `EQMac` profile's first bind, already read for the move home after
+  death, gives the same. Each says it as the new
+  `WorldEvent::BoundIn { zone_id }`, told once after the admission, after
+  the buffs and experience. A zone past 16 bits is unreadable and gives
+  none; the zone-in goes on. It needs no capability and sends nothing.
+  Stock `EQEmu` sends a Titanium client nothing when a bind lands
+  mid-session, so the zone is believed current only until the next zone-in
+  (inferred, pending R49-6m). `EQMac`'s move home is unchanged.
+  **Breaking:** a new variant on the exhaustive `WorldEvent`.
 
 - Read RoF2's chat and the server's own lines as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.521). `chat::parse_for` with

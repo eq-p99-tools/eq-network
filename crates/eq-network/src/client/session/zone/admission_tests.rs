@@ -828,7 +828,11 @@ impl Script {
                 },
             ),
         );
-        for (opcode, body) in rof2_looks_and_news().into_iter().chain(rof2_chat()) {
+        for (opcode, body) in rof2_looks_and_news()
+            .into_iter()
+            .chain(rof2_chat())
+            .chain(rof2_casting())
+        {
             script.packet(opcode, body);
         }
         script.packet(DESPAWN_OPCODE, despawn_body(77));
@@ -970,6 +974,47 @@ fn rof2_chat() -> Vec<(u16, Vec<u8>)> {
         (0x0083, special),
         (0x1024, formatted),
         (0x213f, [338u32, 13, 0].map(u32::to_le_bytes).concat()),
+    ]
+}
+
+/// The other player casting on the player, an interruption, a stun of the
+/// player, and an illusion and a face change of the other player (6.522),
+/// as `RoF2` messages.
+fn rof2_casting() -> Vec<(u16, Vec<u8>)> {
+    let word = |value: u32| value.to_le_bytes();
+    let mut action = [
+        &4321u16.to_le_bytes()[..],
+        &77u16.to_le_bytes(),
+        &51u16.to_le_bytes(),
+    ]
+    .concat();
+    action.extend_from_slice(&[0; 4]);
+    action.extend_from_slice(&1.5f32.to_bits().to_le_bytes());
+    action.extend_from_slice(&[0; 12]);
+    action.push(231);
+    action.extend_from_slice(&[0; 6]);
+    action.extend_from_slice(&word(1234));
+    action.extend_from_slice(&[49, 4]);
+    action.extend_from_slice(&[0; 17]);
+    let mut interrupt = [word(77), word(439)].concat();
+    interrupt.extend_from_slice(b"Other\0");
+    let mut illusion = vec![0; 336];
+    illusion[..4].copy_from_slice(&word(77));
+    illusion[68..70].copy_from_slice(&75u16.to_le_bytes());
+    illusion[88..92].copy_from_slice(&6.5f32.to_bits().to_le_bytes());
+    let mut face = vec![1, 2, 3, 4, 5, 6, 7, 0];
+    face.extend_from_slice(&[0; 12]);
+    face.extend_from_slice(&word(77));
+    vec![
+        (
+            0x318f,
+            [&word(1234)[..], &77u16.to_le_bytes(), &word(3000)].concat(),
+        ),
+        (0x744c, action),
+        (0x048c, interrupt),
+        (0x36a4, [word(2000), [0, 163, 67, 0]].concat()),
+        (0x312a, illusion),
+        (0x1af3, face),
     ]
 }
 
@@ -1151,10 +1196,17 @@ fn an_admitted_rof2_session_hands_the_host_each_look_and_health_message() {
         .iter()
         .filter_map(|event| match event {
             WorldEvent::Posture { spawn_id: 77, .. } => Some("posture".into()),
+            // The illusion is the casting batch's (6.522).
             WorldEvent::Appearance {
                 spawn_id: 77,
                 change,
-            } => Some(format!("{change:?}")),
+            } if !matches!(
+                change,
+                eq_network_game::appearance::AppearanceChange::Illusion(_)
+            ) =>
+            {
+                Some(format!("{change:?}"))
+            }
             WorldEvent::HitPoints {
                 spawn_id: 77,
                 current,
@@ -1272,6 +1324,54 @@ fn an_admitted_rof2_session_records_its_chat_and_the_servers_lines() {
     assert_eq!(records[3]["string_id"], 1032);
     assert_eq!(records[4]["string_id"], 338);
     for opcode in ["0x2b2d", "0x0083", "0x1024", "0x213f"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_casting_stun_and_illusions() {
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    // The stun of the player sends nothing either.
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let casting: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Spell(eq_network_game::spells::SpellUpdate::Began {
+                caster_id: 77,
+                spell_id: 1234,
+                duration_ms: 3000,
+            }) => Some("began"),
+            WorldEvent::SpellEffect(effect)
+                if effect.target_id == 4321 && effect.instrument_modifier == 15 =>
+            {
+                Some("effect")
+            }
+            WorldEvent::Spell(eq_network_game::spells::SpellUpdate::Interrupted {
+                caster_id: 77,
+                message_id: 439,
+                ..
+            }) => Some("interrupted"),
+            WorldEvent::Stun(Some(duration)) if duration.as_millis() == 2000 => Some("stun"),
+            WorldEvent::Appearance {
+                spawn_id: 77,
+                change: eq_network_game::appearance::AppearanceChange::Illusion(_),
+            } => Some("illusion"),
+            WorldEvent::FaceChanged {
+                spawn_id: Some(77),
+                eye_colors: Some([3, 4]),
+                ..
+            } => Some("face"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        casting,
+        ["began", "effect", "interrupted", "stun", "illusion", "face"]
+    );
+    for opcode in ["0x318f", "0x744c", "0x048c", "0x36a4", "0x312a", "0x1af3"] {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"

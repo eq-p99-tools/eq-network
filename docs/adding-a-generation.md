@@ -127,7 +127,7 @@ unreachable because validation refuses the generation:
   reader with `RoF2`'s opcode pair. Each keeps the refusals of Titanium's reader for the same
   values. What the `RoF2` program does with the invisibility values, the appearance kinds, the
   elite material and hero's forge model, the size message's constants and the animation speed
-  is a read still owed. `OP_Illusion` stays unlisted.
+  is a read still owed. `OP_Illusion` is the casting batch's (6.522).
 - The player's own news and the combat records (`rof2_news`, 6.519): the death, level,
   experience, food and water, coins and time of day go out unencoded, the bytes Titanium gets,
   and Titanium's readers read them; the mana change is the server's 20 bytes with the slot that
@@ -141,6 +141,15 @@ unreachable because validation refuses the generation:
   every other line keeps Titanium's shape under `RoF2`'s numbers. Links are 56 characters,
   passed through unchanged, with the item at Titanium's digits. Outbound chat still refuses
   `RoF2`.
+- Its casting, stuns and illusions (`rof2_casting`, 6.522): the begin-cast record with the spell
+  in 32 bits first; the action in its 56-byte form, whose instrument modifier is a float the
+  encoder makes from the server's integer, read back as that integer, with the server's 0 to 9
+  wrapped alike and read 0; the interruption, unencoded, through Titanium's reader; the stun's
+  duration and four constants; the illusion's 336 bytes with a 16-bit race; and the face change
+  as its own message with both eye colors, where Titanium's encoder sends an illusion of race
+  -1. What the `RoF2` program does with the action's gem, slot and item-cast type, the stun's
+  constants, the illusion's bytes 70 and 71 and its constant, and the Drakkin words is a read
+  still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.
