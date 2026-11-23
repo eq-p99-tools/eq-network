@@ -944,7 +944,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 127;
+    const KINDS: usize = 130;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1015,6 +1015,9 @@ mod tests {
             ClientCommand::Shield { .. } => 124,
             ClientCommand::RequestTitles { .. } => 125,
             ClientCommand::SetTitle { .. } => 126,
+            ClientCommand::TrainAlternateAdvancement { .. } => 127,
+            ClientCommand::ActivateAlternateAdvancement { .. } => 128,
+            ClientCommand::SetAlternateAdvancementSplit { .. } => 129,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1613,6 +1616,19 @@ mod tests {
                 title_id: 7,
                 suffix: false,
             },
+            ClientCommand::TrainAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+            },
+            ClientCommand::ActivateAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+                target: Some(300),
+            },
+            ClientCommand::SetAlternateAdvancementSplit {
+                session_id,
+                percentage: 50,
+            },
             ClientCommand::Emote {
                 session_id,
                 text: "waves.".into(),
@@ -2063,6 +2079,14 @@ mod tests {
                 assert!(!servers.iter().any(|features| features
                     .capabilities()
                     .contains(&crate::world::Capability::SendingFeedback)));
+                continue;
+            }
+            if command.capability() == Some(crate::world::Capability::AlternateAdvancement) {
+                // Built and tested, and listed by no server type until its
+                // own local EQEmu live row (6.556).
+                assert!(!servers.iter().any(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::AlternateAdvancement)));
                 continue;
             }
             if Features::is_departure(&command) {

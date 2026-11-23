@@ -239,6 +239,11 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Surname { .. }
         | ClientCommand::RequestTitles { .. }
         | ClientCommand::SetTitle { .. }
+        | ClientCommand::TrainAlternateAdvancement { .. }
+        | ClientCommand::SetAlternateAdvancementSplit { .. }
+        // The server judges a cast in flight itself; the program's own
+        // check is read R49-39b.
+        | ClientCommand::ActivateAlternateAdvancement { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -431,6 +436,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Surname { session_id, .. }
         | ClientCommand::RequestTitles { session_id }
         | ClientCommand::SetTitle { session_id, .. }
+        | ClientCommand::TrainAlternateAdvancement { session_id, .. }
+        | ClientCommand::ActivateAlternateAdvancement { session_id, .. }
+        | ClientCommand::SetAlternateAdvancementSplit { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
         | ClientCommand::ChallengeDuel { session_id, .. }
@@ -692,6 +700,15 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             arguments: Vec::new(),
         },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
+        ClientCommand::TrainAlternateAdvancement { .. }
+        | ClientCommand::ActivateAlternateAdvancement { .. }
+        | ClientCommand::SetAlternateAdvancementSplit { .. } => {
+            WorldEvent::AlternateAdvancementRefused {
+                session_id,
+                reason,
+                refusal: None,
+            }
+        }
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
             session_id,
             reason,

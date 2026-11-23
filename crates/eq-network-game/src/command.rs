@@ -899,6 +899,35 @@ pub enum GameCommand {
         /// Whether it is the suffix.
         suffix: bool,
     },
+    /// Buy this AA rank: a definition the server's table offered this
+    /// admission ([`crate::alternate_advancement::Action::Train`]). Spends
+    /// points, which nothing gives back; the server answers a purchase with
+    /// its own lines and the new table, and a refused one with nothing.
+    TrainAlternateAdvancement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The rank's definition id.
+        rank_id: u32,
+    },
+    /// Use an owned AA rank's ability, on a target or none
+    /// ([`crate::alternate_advancement::Action::Activate`]); the server
+    /// answers a reuse wait with its own line.
+    ActivateAlternateAdvancement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The owned rank's definition id.
+        rank_id: u32,
+        /// The target's spawn, or None.
+        target: Option<u16>,
+    },
+    /// The share of experience that goes to AAs, 0 (off) to 100
+    /// ([`crate::alternate_advancement::Action::Split`]).
+    SetAlternateAdvancementSplit {
+        /// Current zone admission.
+        session_id: u64,
+        /// The share, 0 to 100.
+        percentage: u8,
+    },
     /// Emote, in the player's own words: `/emote`.
     Emote {
         /// Current zone admission.
@@ -1307,6 +1336,9 @@ impl GameCommand {
             Self::Surname { .. } => "Surname",
             Self::RequestTitles { .. } => "RequestTitles",
             Self::SetTitle { .. } => "SetTitle",
+            Self::TrainAlternateAdvancement { .. } => "TrainAlternateAdvancement",
+            Self::ActivateAlternateAdvancement { .. } => "ActivateAlternateAdvancement",
+            Self::SetAlternateAdvancementSplit { .. } => "SetAlternateAdvancementSplit",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1443,6 +1475,9 @@ impl GameCommand {
             | Self::Surname { session_id, .. }
             | Self::RequestTitles { session_id }
             | Self::SetTitle { session_id, .. }
+            | Self::TrainAlternateAdvancement { session_id, .. }
+            | Self::ActivateAlternateAdvancement { session_id, .. }
+            | Self::SetAlternateAdvancementSplit { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1605,6 +1640,9 @@ impl GameCommand {
             Self::Random { .. } => Capability::Rolling,
             Self::Surname { .. } => Capability::Surnaming,
             Self::RequestTitles { .. } | Self::SetTitle { .. } => Capability::Titling,
+            Self::TrainAlternateAdvancement { .. }
+            | Self::ActivateAlternateAdvancement { .. }
+            | Self::SetAlternateAdvancementSplit { .. } => Capability::AlternateAdvancement,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1676,6 +1714,9 @@ impl GameCommand {
             | Self::Surname { .. }
             | Self::RequestTitles { .. }
             | Self::SetTitle { .. }
+            | Self::TrainAlternateAdvancement { .. }
+            | Self::ActivateAlternateAdvancement { .. }
+            | Self::SetAlternateAdvancementSplit { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -2000,6 +2041,9 @@ pub fn encode(
         | GameCommand::Surname { .. }
         | GameCommand::RequestTitles { .. }
         | GameCommand::SetTitle { .. }
+        | GameCommand::TrainAlternateAdvancement { .. }
+        | GameCommand::ActivateAlternateAdvancement { .. }
+        | GameCommand::SetAlternateAdvancementSplit { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }

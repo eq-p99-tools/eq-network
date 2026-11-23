@@ -5,6 +5,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Send Titanium's AA requests, built and tested but listed by no server
+  type until their local `EQEmu` live row (6.556): training a rank,
+  activating an owned rank's ability and the experience split, each as the
+  16-byte `OP_AAAction` (0x0681) `EQEmu` reads. The session checks each
+  against a bounded view of this admission's AA facts (at most 4096
+  definitions; withdrawals followed), with only checks `EQEmu` makes too,
+  and refuses what it can't tell. One train at a time until the server's
+  answer or 5 s; activations and split changes at most one a second (ours,
+  inferred). Which ids the program sends is read R49-39, inferred until then.
+
+  **Breaking** (for exhaustive matches in the client): `GameCommand` gains
+  `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` and
+  `SetAlternateAdvancementSplit`; `WorldEvent` gains
+  `AlternateAdvancementRefused`; `Capability` gains `AlternateAdvancement`
+  (`Capability::ALL` is now 81 long); `request::Request` gains
+  `AlternateAdvancement`. New: `alternate_advancement::{Action, Refusal,
+  ACTION_OPCODE, titanium_action}`.
+
 - Read `EQMac`'s alternate advancement on local TAKP, read only (6.548):
   `OP_RespondAA` (0x1542) by Mac AA id, the profile's AA array and points,
   `OP_AAExpUpdate` (0x2342) and the server's reuse timers on `OP_AAAction`
