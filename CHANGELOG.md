@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A rider's restore aboard keeps the z of the last save sent, whatever kind
+  (read R49-22f, checklist 6.613). Every save writes the program's record's
+  third field, which its profile loader never writes, so an ordinary
+  transfer's save now sets it too, and leaving the boat no longer forgets it.
+  Labelled departures: no leave-game or periodic save is sent yet (6.614,
+  6.615), resurrection's write is not copied, and the value is kept per
+  session. Unreachable on stock `EQEmu`, whose profile names no vehicle.
+
 - Say why a zone sent no inventory at admission (gap 3.11, checklist 6.437):
   stock `EQEmu` sends a Titanium client no `OP_CharInventory` exactly when
   the character holds nothing (its Titanium encoder drops an empty one), or

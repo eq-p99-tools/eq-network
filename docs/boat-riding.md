@@ -79,8 +79,10 @@ EQEmu leaves this field empty.
   read R36c) stores the profile's three coordinates into its record's first,
   second and first fields again, and never writes the third. So the restore
   point takes the profile's y (13120) and z (13124) as its x and y, and as its
-  z the boat-frame z this client's last boat save carried. That z is kept
-  across zones and forgotten with the vehicle; without one it is zero. An
+  z the z this session's last save carried: the boat-frame z after a boat
+  save, the world z the ordinary save carries otherwise (zero while that save
+  carries no place), as every save writes it (read R49-22f, 6.613). Leaving
+  the boat keeps it; with no save sent yet it is zero. An
   ordinary admission is unchanged.
   The host stands the player at that point, floor-sweeps from one unit above
   it, retries at (0, 0, 25) in the frame, and answers with
@@ -123,8 +125,11 @@ both the boat and any held arrival (0x4564ba).
   from the arrival wait. The wider case is an open parity question.
 - Logging in aboard, rather than zoning with the boat, can restore to a
   different height. The program's restore z is whatever its last save of any
-  kind wrote, since every save writes the world position (0x4976bf). This
-  client keeps only the boat save's z and uses zero without one.
+  kind wrote (read R49-22f): the zone request's, the leave-game save before a
+  camp or `/q`, and the periodic save every 300 character ticks. This client
+  sends only the zone request's (6.614 and 6.615 are open), does not copy
+  resurrection's write of the first coordinate there, and keeps the z per
+  session rather than across a new login in one process.
 - The record-to-axis mapping behind the restore point follows the zone
   request's order and is inferred. `Arrival::Aboard` carries both the
   profile's fields as received and the point used, so one recording settles

@@ -476,10 +476,10 @@ impl World {
         self.body.suspend();
     }
 
-    /// Forgets the vehicle and the boat-frame z its departure saved.
+    /// Forgets the vehicle. The z the last save carried stays: only the
+    /// next save writes it (read R49-22f).
     pub(super) fn forget_vehicle(&mut self) {
         self.vehicle = None;
-        self.riding.depart_at(None);
     }
 
     /// Puts the admitted player where the server says they are.
