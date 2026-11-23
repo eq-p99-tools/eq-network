@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The chat server login and link follow the Titanium program (read R49-12 a,
+  checklist 6.616).
+  - **The login's bytes change on the wire:** after the key and its NUL
+    come the program's language tag `us`, its NUL, and a last 0. The lead
+    byte stays one 0: the read's 0x01 before it is taken as the opcode
+    (inferred).
+  - A logged-in link checks every 5 seconds and ends after more than 30
+    seconds in which the server sent nothing, told once as
+    `ChannelLink::Lost { reason: Dropped }`. What counts as a word from the
+    server is unread, so anything the transport takes counts (inferred).
+    No new `LinkLoss` variant; not breaking.
+
 - Each Bard song stop says the Titanium program's line (0x40f06d, read
   R49-21): `WorldEvent::SongStopped { session_id, spell_id, string_id }`,
   with 0x318f, at the player's stop, a gem click while singing, a forget's
