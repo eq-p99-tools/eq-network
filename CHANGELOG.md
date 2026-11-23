@@ -12,6 +12,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not yet checked live. On TAKP and Quarm, item requests on one corpse are
   now at least 10 ms apart, the servers' `loot_cooldown_timer`; one asked
   sooner is refused.
+
 - Lift the hosts' script holds (6.578): a host may now send a report, a
   bandolier swap, a task's acceptance or a task's cancel from a script, a
   social or a hotbutton as well as from the player's own typing or click,
