@@ -700,6 +700,11 @@ fn titanium_owned(
                         context.config.local_only,
                     );
                 }
+                if packet.opcode == rules::TITANIUM_LOG_SERVER_OPCODE {
+                    if let Ok(world_rules) = rules::titanium_rules(&packet.body) {
+                        context.world_ruleset.set(Some(world_rules.pvp));
+                    }
+                }
                 if !news(packet.opcode, &packet.body, log)? && !chatted {
                     unheard(server.wire(), packet.opcode, &packet.body, log)?;
                 }
@@ -866,6 +871,7 @@ pub(super) mod tests {
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
             chat_pace: std::sync::Arc::default(),
+            world_ruleset: std::cell::Cell::new(None),
         };
         let mut received = Vec::new();
         let mut handler = |event| {

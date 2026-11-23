@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Pick Pockets on a player follows the world's ruleset (6.631 follow-up),
+  read from the world's rules packet (`OP_LogServer`, the value
+  `WorldRules::pvp` already decodes). Under ruleset 4 the two flag lines
+  (0x307a, 0x307b) are skipped; the player is refused with 0x307c when
+  not eligible for player combat, and with 0x307d when the target's level
+  is outside five of theirs either way or is 5 or lower. The program's
+  eligibility test reads a team value no packet field is mapped to yet:
+  the player's own PvP flag stands in for it (inferred). Under any other
+  ruleset only the flag lines apply, and this library's own level-range
+  words are gone. A session that hasn't read the rules (the Mac-era and
+  RoF2 worlds today) keeps the flags and the level range in this
+  library's words. Not breaking: the new state is internal.
 - **Breaking:** A same-zone zone line places the player locally on stock
   EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
   program's 0x48aaa6 sends one position record and lands the player itself,
