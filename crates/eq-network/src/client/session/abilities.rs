@@ -157,11 +157,7 @@ fn target_refusal(
     // The player's own spawn carries the size the server gave them by race,
     // which counts for reach.
     let size = world
-        .spawns
-        .all()
-        .find(|spawn| spawn.spawn_id == own_id)
-        .map(|spawn| spawn.size)
-        .filter(|size| *size > 0.0)
+        .player_size()
         .unwrap_or_else(|| player_size(player.race));
     let own = Body {
         race: player.race,

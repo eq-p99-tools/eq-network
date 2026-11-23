@@ -414,6 +414,24 @@ impl World {
         Some((player.spawn_id, position))
     }
 
+    /// The admitted player's size as the program counts it for reach (spawn
+    /// +0x23c, read R16e b): their own spawn's size where above 0, which
+    /// spawn and appearance updates keep; where that is 0 or not yet heard,
+    /// the size `EQEmu` gives their race on entry, inferred for the program's
+    /// model default (+0x54); 0 for a race it does not list, so no reach
+    /// built on it ever grows past what the server told.
+    pub(super) fn player_size(&self) -> Option<f32> {
+        let player = self.player.as_ref()?;
+        Some(
+            self.spawns
+                .all()
+                .find(|spawn| spawn.spawn_id == player.spawn_id)
+                .map(|spawn| spawn.size)
+                .filter(|size| *size > 0.0)
+                .unwrap_or_else(|| eq_network_game::abilities::player_size(player.race)),
+        )
+    }
+
     /// The server offered a transfer: every command waits for its answer, and
     /// the player stops where they are. Death and transfers stop and restart
     /// the player's movement here and nowhere else, so the two stay in step.
