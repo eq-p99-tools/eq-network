@@ -269,7 +269,8 @@ const QUARM: &[ServerProtocol] = &[ServerProtocol::Quarm];
 /// Stock `EQEmu`'s, to the `RoF2` client.
 const ROF2: &[ServerProtocol] = &[ServerProtocol::EqEmuRof2];
 
-/// What the session leaves unread of Titanium's profile.
+/// What the session leaves unread of Titanium's profile. The bandolier
+/// sets and the potion belt are read (6.559), on every Titanium server.
 const TITANIUM_PROFILE: &[Part] = &[
     Part("leadership", Reason::Planned(Step::AlternateAdvancement)),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
