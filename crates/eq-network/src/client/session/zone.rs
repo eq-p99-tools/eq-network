@@ -3443,6 +3443,9 @@ mod ability_tests;
 mod quarm_inventory_tests;
 
 #[cfg(test)]
+mod belongings_motion_tests;
+
+#[cfg(test)]
 mod item_move_tests;
 
 #[cfg(test)]
