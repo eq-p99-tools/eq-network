@@ -90,8 +90,14 @@ unreachable because validation refuses the generation:
 - The world stage against stock `EQEmu` (`world::rof2`, 6.499): the login info, the list, the
   entry (`OP_EnterWorld`) and the handoff (`OP_ZoneServerInfo`) or the zone-unavailable notice.
   Between zones it enters once the world's post-entry message arrives. It sends nothing stock
-  `EQEmu` ignores; what the `RoF2` program sends there is a read still owed. The handoff, zone
-  connection and admission still refuse.
+  `EQEmu` ignores; what the `RoF2` program sends there is a read still owed.
+- The zone connection and entry (`admission::rof2`, 6.501): the entry, the zone's unasked
+  description (its short name read), the spawn request, and the ready after the zone's objects.
+  The profile and spawn are not read, so the entry completes with no player snapshot: the
+  session then only records (no in-zone message is sent, and nothing is read through another
+  generation's layout), or with a player at the controls ends with the admission error. What
+  the `RoF2` program sends during entry, and what prompts its spawn request and ready, is a read
+  still owed. The handoff between zones still refuses.
 
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.

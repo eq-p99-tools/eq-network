@@ -10,7 +10,7 @@
 //! word, the values those options give it, and when the official client
 //! sends it again are not read yet (recording checklist 6.494b and c; read
 //! request R49 part 2). So the kinds are named for what the servers do with
-//! them, and [`ServerFilters::default`] is the packet each generation's
+//! them, and `ServerFilters::default()` is the packet each generation's
 //! client is known to send today, byte for byte.
 
 use crate::{command::EncodedCommand, GameDialect};
@@ -179,7 +179,7 @@ impl FilterCategory {
     }
 
     /// The mode the client is known to send today, which
-    /// [`ServerFilters::default`] keeps: shown, except damage over time,
+    /// `ServerFilters::default()` keeps: shown, except damage over time,
     /// whose Titanium 0 `EQEmu` reads as the player's own.
     #[must_use]
     pub const fn default_mode(self) -> FilterMode {

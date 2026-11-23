@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Build RoF2's zone connection and entry against stock `EQEmu` from its
+  public source, labelled inferred for RoF2 (6.501). `Rof2::connect_zone`
+  speaks the modern transport, and `Rof2Admission` sends the 76-byte entry,
+  reads the zone's 948-byte description (only its short name, terminated
+  and checked) that the zone sends RoF clients unasked, asks for the zone's
+  spawns, and sends its ready once the zone's objects are sent. The profile
+  and spawn are not read, so the entry completes with no player snapshot:
+  the session only records, sending nothing in the zone, or ends with the
+  admission error when a player is at the controls. Still unreachable: a
+  RoF2 configuration is refused before a socket opens, and the handoff
+  between zones still refuses.
 - Record every server message the session drops or cannot read (6.500).
   `ClientEvent::Gap(Box<Gap>)` tells of each one, beside the diagnostic
   line it always wrote: a message no table row lists, one listed but left

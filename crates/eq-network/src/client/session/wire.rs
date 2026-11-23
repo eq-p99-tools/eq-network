@@ -7,7 +7,7 @@
 //! [`ServerType`](super::servers::ServerType) feature.
 
 use super::{
-    admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    admission::{Admission, EqMacAdmission, Handshake, Rof2Admission, TitaniumAdmission},
     coverage::{self, ServerMessage},
     login::{self, Credentials},
     servers::Shield,
@@ -477,6 +477,23 @@ impl Wire for Rof2 {
         world::rof2::world(context, assets, ip, flags, log)
     }
 
+    /// Stock `EQEmu`'s zones speak the modern transport to the `RoF2` client
+    /// as they do to Titanium's (inferred, 6.501).
+    fn connect_zone(&self, address: SocketAddr, stop: &AtomicBool) -> Result<Box<dyn Transport>> {
+        Ok(Box::new(crate::transport::Session::connect_cancellable(
+            address, true, stop,
+        )?))
+    }
+
+    fn admit(
+        &self,
+        character: &str,
+        _revolution: f32,
+        handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Box<dyn Admission>> {
+        Ok(Box::new(Rof2Admission::start(character, handshake)?))
+    }
+
     fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
         // Titanium's, inferred for RoF2 (6.489).
         eq_network_game::exchange::TITANIUM_CLOSES
@@ -610,23 +627,6 @@ mod tests {
         }
     }
 
-    /// A zone connection for a stage that must send nothing.
-    struct Silent;
-    impl Transport for Silent {
-        fn send(&mut self, _opcode: u16, _body: &[u8]) -> Result<()> {
-            panic!("the refusing admission sends nothing");
-        }
-        fn receive(&mut self) -> Result<Option<crate::transport::Application>> {
-            Ok(None)
-        }
-        fn close(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn last_received_seconds(&self) -> u64 {
-            0
-        }
-    }
-
     #[test]
     fn the_rof2_placeholder_logs_in_sends_and_reads_nothing() {
         use crate::client::{ClientConfig, ServerProtocol};
@@ -644,8 +644,9 @@ mod tests {
             config.validate().unwrap_err().to_string(),
             "the RoF2 client generation cannot log in yet"
         );
-        // Its world stage is built (and tested in `world::rof2`); every
-        // zone stage past the handoff still refuses.
+        // Its world stage and zone entry are built (and tested in
+        // `world::rof2` and `admission::rof2`); the handoff between zones
+        // still refuses.
         let assets = Assets {
             client: "none".into(),
             files: std::collections::BTreeMap::new(),
@@ -660,38 +661,7 @@ mod tests {
             handoff.to_string(),
             "this client generation cannot hand off between zones yet"
         );
-        let mut session = Silent;
-        let mut shield = None;
-        let mut checksums = Vec::new();
-        let admitted = Rof2
-            .admit(
-                "Tester",
-                512.0,
-                &mut Handshake {
-                    session: &mut session,
-                    shield: &mut shield,
-                    key: b"EXAMPLEKEY",
-                    checksums: &mut checksums,
-                    filters: &eq_network_game::filters::ServerFilters::default(),
-                    log: &mut log,
-                },
-            )
-            .err()
-            .unwrap();
-        assert_eq!(
-            admitted.to_string(),
-            "this client generation cannot enter a zone yet"
-        );
         drop(log);
-        let stop = AtomicBool::new(false);
-        let zone = Rof2
-            .connect_zone(SocketAddr::from(([127, 0, 0, 1], 9)), &stop)
-            .err()
-            .unwrap();
-        assert_eq!(
-            zone.to_string(),
-            "this client generation cannot connect to a zone yet"
-        );
         let say = Request::Command(eq_network_game::command::GameCommand::SendChat(
             OutboundChat::Say("Hail".into()),
         ));
