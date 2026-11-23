@@ -1,5 +1,17 @@
 # API and integration contracts
 
+## An item's song and the host's spell data
+
+`ItemUse::installed_class_spell: Option<bool>` is the host's word, from its
+installed spell data, on whether the clicked item's spell is the player's
+class's (spells fields 104-119 below 255 for that class). A host without an
+installed record (no spell data, or P99's replayed definitions) sends
+`None`. The session uses it only for a song it is already keeping from that
+click, to choose between sending the Bard's stop and ending the song here;
+it never starts a song, names a spell or sends a stop with no song. `None`
+keeps the memorized test (6.442, 6.542). **Breaking:** every `ItemUse`
+literal names the field.
+
 ## Server filters
 
 `ClientConfig::server_filters` is the set a character starts with; the

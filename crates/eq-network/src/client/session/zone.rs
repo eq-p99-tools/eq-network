@@ -1166,6 +1166,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseItem(ItemUse {
+                installed_class_spell: None,
                 request_id: 1,
                 session_id,
                 revision: 1,

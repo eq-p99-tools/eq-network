@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Take an item's song as the class's when the host's installed spell data
+  says so (gap 3.5, checklist 6.542, part 2). The new
+  `ItemUse::installed_class_spell: Option<bool>` is the host's word; with
+  `Some(true)` a Bard's `/stopsong` sends the stop for an item's song of a
+  class spell not memorized, as the program does (0x40db0b, read R16), and
+  with `Some(false)` it ends here only. `None` keeps the memorized test.
+  The word only chooses for a song the session already keeps; it never
+  starts one or sends a stop alone. **Breaking:** `ItemUse` gains the field.
 - Read RoF2's targets, charms, cash rewards, linked reuse timers and the
   answers to begging, pick pocketing and bandaging as stock `EQEmu` sends
   them, labelled inferred for RoF2 (6.544). The new `rof2_answers` module

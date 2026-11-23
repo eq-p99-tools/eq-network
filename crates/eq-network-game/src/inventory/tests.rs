@@ -802,6 +802,7 @@ fn item_cast_uses_current_effect_and_titanium_item_slot_without_consuming_invent
     assert_eq!(inventory, before);
     let now = std::time::Instant::now();
     let request = ItemUse {
+        installed_class_spell: None,
         request_id: 1,
         session_id: 12,
         revision: inventory.revision(),
