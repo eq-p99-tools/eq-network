@@ -26,6 +26,44 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     packet's word 7 is 0. Titanium damage over time takes `Show` (0) and
     `Hide` (1), the client's choices, for the default `Show`; stock
     `EQEmu` reads 0 from a client before `SoD` as the player's own.
+- Pet orders and charms, as read R49-22a reads the Titanium program (6.610,
+  gap 3.5).
+  - **An order with no pet is sent** on every server type, as the program
+    sends it (0x49975b). The "You have no pet" refusal (13091, which is really
+    the program's line for targeting a pet with none) is gone. EQEmu's,
+    Quarm's (fc75fcf) and TAKP's (44afcbf) handlers return in silence. The
+    guard on a changed pet identity stays: it is ours, and it only refuses.
+  - **A Titanium charm of a race 108, 216 or 472 spawn is ignored**, as the
+    program's `OP_Charm` handler ignores it (0x453d7b), with a diagnostic.
+    New: `control::CHARM_IGNORED_RACES`. The +0x1b3 byte it also checks is
+    unread.
+
+- Read `/played`'s three Titanium profile fields (read R49-8 a, checklist 6.490b): the account's entitled days (+0x3314), the character's creation time (+0x32ec) and its played minutes (+0x32f4), as `WorldEvent::PlayedTime` with each profile. Breaking: a new `WorldEvent` variant.
+- A Titanium door click names the item held on the cursor, as read R49-22b
+  reads the program (checklist 6.537, gap 3.4).
+  - Bytes 8 to 11 of `OP_ClickDoor` carry the cursor item's ID from the
+    session's own inventory, or -1 with nothing there or the inventory not
+    loaded.
+  - Bytes 4 to 7 carry the player's Pick Lock value (at most 254) for a
+    lockpick (item type 12, not a container), and 0 for anything else, keys
+    included.
+  - Byte 1 stays 3, as recorded: it is stack contents, not a field.
+  - Stock `EQEmu` reads none of it, so keyed doors behave as before there.
+    `EQMac` still refuses a click with an item on the cursor; RoF2 sends -1.
+  - Not yet built: trapped door types (item -1 and the Disarm Traps value;
+    the read lists only part of the types) and type 57 contact clicks.
+  - **Breaking:** `doors::titanium_click` takes `held: Option<HeldItem>`, and
+    `Request::ClickDoor` becomes `Request::ClickDoor { door_id, held }`. New:
+    `doors::{HeldItem, LOCKPICK_ITEM_TYPE}`.
+- Send and hear `/surname` as read R49-10 reads the Titanium program (6.507, the client's #616 follow-up).
+  - A quoted surname's spaces now go as given; only an empty word, a control character, anything outside ASCII or 32 bytes and more are refused, in the encoder and the session alike. The session no longer trims the word.
+  - Any answer word but 0 is taken (`accepted: true`), where 2 and more were refused before.
+  - Every `WorldEvent::SurnameAnswer` reaches the host, asked or not, and nothing holds a second request: the program shows each answer and paces a request by its own question.
+- Every Titanium door is a wall (6.607), as the program's collision move filter
+  0x42cdb1 has it (portcullis follow-up read, correcting R1): a shut
+  portcullis of open types 60-77 now stops the player like a hinged door.
+  `Solidity::of` gives `wall: true` for every open type; its floor rule is
+  unchanged. No API change.
 
 - Word a spoken tongue's skill as the Titanium program does (6.495, reads
   R49-4 and R49-4b), for the client's languages slice.

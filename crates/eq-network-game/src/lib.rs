@@ -109,6 +109,7 @@ pub mod objects;
 pub mod p99;
 /// Pets: commands, owners and buffs.
 pub mod pets;
+pub mod played;
 /// A Rogue's poison put on the weapon: the request and the server's answer.
 pub mod poisons;
 /// What the server puts on the player's screen outside the chat window:

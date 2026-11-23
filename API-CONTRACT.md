@@ -263,12 +263,49 @@ door's origin where it stands now, is refused in our own words with no string
 today's: 3-D to the door's origin where it stands now, within 20, which is
 stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule.
 
+## The item held in a door click
+
+A Titanium door click names what the player holds on the cursor, as read R49-22b
+reads the program (checklist 6.537; 0x49812e and 0x4906c5).
+`Request::ClickDoor { door_id, held }` and
+`doors::titanium_click(id, player_id, held: Option<HeldItem>)` write 16 bytes:
+- the door at +0;
+- the skill at +4, at most 254;
+- the cursor item's ID at +8, or -1 for an empty cursor;
+- the clicker at +12.
+
+`HeldItem::skill` is the player's Pick Lock value when the cursor holds a
+lockpick (`LOCKPICK_ITEM_TYPE`, 12, and not a container). Anything else, keys
+included, carries 0. Bytes 1 to 3 are not a field: the program leaves stack
+contents there. The official client's recordings show 3 in byte 1, and the
+encoder keeps it.
+
+The session takes the item and the skill from its own tracked inventory and
+profile, never from the host. No item on the cursor, or an inventory not yet
+loaded or made stale, sends -1, and a stack or an item with charges is named by
+its ID alone. The click never moves, drops or gives the item, and the ID appears
+in no event or diagnostic the host hears. The program refuses no keyed or locked
+door itself, and neither does the session: the lock lines are the server's.
+
+Not yet built:
+- A trapped door type sends item -1 and the Disarm Traps value. The read names
+  only part of that list of types, so a follow-up waits for the rest.
+- A type 57 door's contact click. Door +0xa4, +0xb4 and +0xb8 are not key
+  data, which corrects R16e.
+
+Stock `EQEmu` reads none of these fields: it takes the key from its own copy of
+the inventory and the key ring, and answers with its own lines and
+`OP_MoveDoor`. `EQMac`'s program asks for a clear cursor first, so its session
+still refuses a click with an item there, and its encoder refuses a `held` item.
+RoF2 sends -1 until its click is read.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:
 `Vertical::of` (rise or sink, travel and speeds by open type, 0x4368b3), `Slide::of`
 (type 15 and 78-81, 0x4366e8), `Solidity::of` (whether the floor sweep stands a
-player on a door, 0x490370, and whether its wall stops them, 0x42ce5d),
+player on a door, 0x490370, and whether it stops them: every door does,
+0x42cdb1),
 `returns_after` and `returns_at` (the client's own return, 0x48faa5) and `field`
 (door +0x66, the param's low 16 bits as an i16). The field stays as spawned; the
 server message that changes it later (0x45e626) is not traced. `Solidity` is a
@@ -465,6 +502,20 @@ duplicate spawn report of the same ID. Pass the latest identity in
 name the target; the session refuses an order whose identity or target no
 longer matches ("Your pet has changed") before anything is sent, and
 `SelectTarget::expected_pet` pins a pet-specific selection the same way.
+That guard is the session's own, not the program's, and it only ever refuses.
+An order with no pet (`pet: None` while the session knows of none) goes out:
+the program sends every `/pet` order without asking whether there is a pet
+(eqgame.exe 0x49975b, read R49-22a), and EQEmu's, Quarm's (fc75fcf) and
+TAKP's (44afcbf) handlers return in silence when there is none. The Mac
+program is inferred the same (6.610).
+
+The Titanium session ignores a `WorldEvent::Charm` whose pet spawn's race is
+in `control::CHARM_IGNORED_RACES` (108, 216 and 472), as the program's
+`OP_Charm` handler does (0x453d7b), and says so in a diagnostic. The handler
+also ignores a pet whose byte +0x1b3 is set; that field is unread (row
+22a-i). The handler prints no line and changes no target, and neither does
+the session. `EQMac` and RoF2 keep applying every charm until their
+programs are read.
 `PetCommand::GuardMe` is Titanium command 6. The Project 1999 provider
 selects the classic order set, which excludes Hold, Feign, NoCast and Focus.
 The EQEmu provider selects the expanded set. Local submission leaves
@@ -2215,14 +2266,16 @@ ready reaches the host as chat with string 393 and the server's color.
 Where the server type takes `/surname` (`Capability::Surnaming`: stock
 `EQEmu`, TAKP and Quarm, each from its own source and not yet checked live),
 send
-`GameCommand::Surname` with the word the player typed. It goes as typed:
-never cut, its case left for the server to set. Only what the record cannot
-carry is refused (`WorldEvent::SocialRefused`): an empty word, a space, a
-control character, anything outside ASCII, or 32 bytes and more. One request
-waits at a time, until its answer, a zone change, or 10 s. The server
-answers with `WorldEvent::SurnameAnswer` (`accepted`, and the surname it
-names) or with a line of its own for each refusal; an answer to no request
-is withheld. The name a taken surname gives the spawns comes from the zone's
+`GameCommand::Surname` with the word the host's `/surname` settled on (the
+Titanium program's is the first word, quotes taken whole, cut to 19 bytes:
+read R49-10). It goes as given, a quoted word's spaces included, its case
+left for the server to set. Only what the record cannot carry is refused
+(`WorldEvent::SocialRefused`): an empty word, a control character, anything
+outside ASCII, or 32 bytes and more. Nothing holds a second request: the
+program paces it by its own question. The server answers with
+`WorldEvent::SurnameAnswer` (`accepted`, any word but 0 as the program reads
+it, and the surname it names) or with a line of its own for each refusal;
+every answer reaches the host, asked or not, as the program shows each. The name a taken surname gives the spawns comes from the zone's
 own `WorldEvent::LastName`, not from the answer. `EQMac`'s request and
 answer (100 bytes) are listed by TAKP and Quarm (6.604 E5), and `EQMac`'s
 `OP_GMLastName` gives `WorldEvent::LastName` too. There the session also
@@ -2230,7 +2283,8 @@ refuses first what the servers' comments say the `EQMac` program refuses
 (inferred, never more than the server does): a character under level 20,
 and a surname over 19 characters. A character who already has a surname is
 the server's to refuse, with its own line. A surname stays for
-good, or for days, so a host sends it only on the player's own typed word.
+good, or for days, so a host sends it only on the player's own word,
+answered yes.
 
 ## Titles
 

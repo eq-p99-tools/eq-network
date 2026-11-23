@@ -3,9 +3,10 @@
 //! door back on its own.
 //!
 //! Read from `eqgame.exe` (Titanium): the per-frame door step 0x4368b3, the
-//! floor-sweep filter 0x42d05f with its door test 0x490370, the wall contact
-//! 0x42ce5d and the return timer 0x48faa5 (read R1, 11-09). The program moves
-//! a door only on the server's 0x700d action; a click sends 0x043b and changes
+//! floor-sweep filter 0x42d05f with its door test 0x490370, the wall filter
+//! 0x42cdb1 and the return timer 0x48faa5 (read R1, 11-09, and the portcullis
+//! follow-up read, 11-23, which corrects R1 on walls). The program moves a
+//! door only on the server's 0x700d action; a click sends 0x043b and changes
 //! nothing on its own.
 
 use super::{Door, CLICK_OPCODE};
@@ -173,17 +174,20 @@ impl Solidity {
 
     /// The program's rule for a door of `open_type` in zone `zone_id`.
     ///
+    /// The collision move 0x48acef stops the player at every door: its one
+    /// filter, 0x42cdb1, collides with any door actor whatever its open type
+    /// or state, so a shut portcullis (type 65) is a wall and a raised one is
+    /// passed under by its pose (portcullis follow-up read, which corrects
+    /// R1's "wall contact skips 60-77").
+    ///
     /// The floor sweep takes a door only when 0x490370 holds: types 30-45,
-    /// 50-51, 54-59 and 153-155, and three zones' own types. Wall contact
-    /// (0x42ce5d) skips 60-77.
+    /// 50-51, 54-59 and 153-155, and three zones' own types. (Its second
+    /// filter 0x42ce5d is not applied here yet.)
     #[must_use]
     pub const fn of(open_type: u8, zone_id: u16) -> Self {
         let floor = matches!(open_type, 30..=45 | 50 | 51 | 54..=59 | 153..=155)
             || matches!((open_type, zone_id), (27, 154) | (26, 205 | 212) | (8, 208));
-        Self {
-            floor,
-            wall: !matches!(open_type, 60..=77),
-        }
+        Self { floor, wall: true }
     }
 }
 
@@ -588,20 +592,23 @@ mod tests {
     }
 
     #[test]
-    fn the_floor_sweep_takes_only_the_programs_types_and_walls_skip_sixty_to_seventy_seven() {
+    fn the_floor_sweep_takes_only_the_programs_types_and_every_door_is_a_wall() {
         for floor in [30, 45, 50, 51, 54, 59, 153, 155] {
             assert!(Solidity::of(floor, 1).floor, "type {floor}");
         }
-        for not in [0, 5, 8, 15, 29, 46, 52, 53, 60, 120, 156] {
+        for not in [0, 5, 8, 15, 29, 46, 52, 53, 60, 65, 120, 156] {
             assert!(!Solidity::of(not, 1).floor, "type {not}");
         }
         assert!(Solidity::of(27, 154).floor && !Solidity::of(27, 1).floor);
         assert!(Solidity::of(26, 205).floor && Solidity::of(26, 212).floor);
         assert!(Solidity::of(8, 208).floor && !Solidity::of(8, 1).floor);
-        for open_type in 60..=77 {
-            assert!(!Solidity::of(open_type, 1).wall);
+        // 0x42cdb1 collides with every door actor: a shut portcullis (65)
+        // stops the player like a hinged door, in any zone.
+        for open_type in 0..=u8::MAX {
+            for zone in [1, 59, 154] {
+                assert!(Solidity::of(open_type, zone).wall, "type {open_type}");
+            }
         }
-        assert!(Solidity::of(59, 1).wall && Solidity::of(78, 1).wall);
         assert_eq!(Solidity::default(), Solidity::BOTH);
     }
 

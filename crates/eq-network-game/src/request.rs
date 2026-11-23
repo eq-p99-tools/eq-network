@@ -389,7 +389,13 @@ pub enum Request {
         with: u16,
     },
     /// Use a door within reach.
-    ClickDoor(u8),
+    ClickDoor {
+        /// The door.
+        door_id: u8,
+        /// What the player holds on the cursor, if the session knows it;
+        /// Titanium sends it, `EQMac` refuses a click with one (6.537).
+        held: Option<doors::HeldItem>,
+    },
     /// An `EQEmu` vessel control request; the session checks support and eligibility.
     ControlBoat {
         /// The selected vessel.
@@ -778,7 +784,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerTrade { asker, busy: true } => exchange::busy(sender.spawn(), *asker)?,
         Request::AcceptTrade { .. } => exchange::accept(sender.spawn())?,
         Request::CancelTrade { .. } => exchange::cancel(sender.spawn())?,
-        Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
+        Request::ClickDoor { door_id, held } => {
+            doors::titanium_click(*door_id, sender.spawn(), *held)
+        }
         Request::ControlBoat { spawn_id, intent } => crate::boats::titanium(*spawn_id, *intent)?,
         Request::BoardBoat(name) => crate::boats::riders::titanium_board(name)?,
         Request::LeaveBoat => crate::boats::riders::titanium_leave(),
@@ -861,6 +869,17 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         }
         Request::SafeFall => hazards::safe_fall(true),
     })
+}
+
+/// `EQMac`'s door click: its program asks for a clear cursor first, so a
+/// click holding an item is refused (the session checks the cursor too).
+fn eqmac_door(
+    door_id: u8,
+    held: Option<doors::HeldItem>,
+    sender: Sender<'_>,
+) -> Result<EncodedCommand> {
+    anyhow::ensure!(held.is_none(), "EQMac's program asks for a clear cursor");
+    doors::eqmac::click(door_id, sender.spawn())
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
@@ -960,7 +979,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         )),
         Request::Combine(container) => tradeskills::eqmac_combine(*container),
         Request::ControlBoat { spawn_id, intent } => crate::boats::eqmac(*spawn_id, *intent),
-        Request::ClickDoor(door_id) => doors::eqmac::click(*door_id, sender.spawn()),
+        Request::ClickDoor { door_id, held } => eqmac_door(*door_id, *held, sender),
         Request::Consume {
             slot,
             meal,
@@ -1236,7 +1255,9 @@ mod tests {
             let packet = packet.unwrap();
             assert_eq!((packet.opcode, &packet.body), (opcode, &body));
         }
-        assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
+        assert!(titanium(&Request::Surname("Ex\tample".into()), PLAYER).is_err());
+        // A quoted word's spaces go (read R49-10).
+        assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_ok());
         assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
     }
 
@@ -1450,10 +1471,15 @@ mod tests {
         // What a packet cannot carry is refused, as the codec refuses it.
         assert!(titanium(&Request::Trade(7), PLAYER).is_err());
         // A packet repeating the sender takes their name and spawn.
-        assert_eq!(
-            titanium(&Request::ClickDoor(3), PLAYER).unwrap(),
-            doors::titanium_click(3, 7)
-        );
+        for held in [None, Some(doors::HeldItem { id: 1001, skill: 0 })] {
+            let door = Request::ClickDoor { door_id: 3, held };
+            assert_eq!(
+                titanium(&door, PLAYER).unwrap(),
+                doors::titanium_click(3, 7, held)
+            );
+            // EQMac's program refuses a click with an item on the cursor.
+            assert_eq!(eqmac(&door, PLAYER).is_ok(), held.is_none());
+        }
         assert_eq!(
             titanium(&Request::SummonCorpse("Tester's corpse4".into()), PLAYER).unwrap(),
             corpses::summon("Tester's corpse4", "Tester").unwrap()

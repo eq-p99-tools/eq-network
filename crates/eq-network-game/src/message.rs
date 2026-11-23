@@ -515,6 +515,10 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         |error| unreadable(Part::World, &error),
         |on| Message::Event(WorldEvent::AutoSplit(on)),
     ));
+    messages.push(crate::played::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |played| Message::Event(WorldEvent::PlayedTime(played)),
+    ));
     messages.push(crate::food::titanium_profile(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
@@ -1174,6 +1178,7 @@ mod tests {
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
                 Message::Event(WorldEvent::AutoSplit(true)),
+                Message::Event(WorldEvent::PlayedTime(_)),
                 Message::Event(WorldEvent::Nourishment(_)),
                 Message::Event(WorldEvent::Bandoliers(_)),
                 Message::Event(WorldEvent::PotionBelt(_)),
@@ -1194,6 +1199,10 @@ mod tests {
                 )),
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(None)),
                 Message::VehicleName(None),
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
                 Message::Unreadable {
                     part: Part::World,
                     ..
