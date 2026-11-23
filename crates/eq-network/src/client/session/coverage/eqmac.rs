@@ -6,13 +6,10 @@ use super::{
     Reading::{Partly, Read, Unread},
     Reason::Needless,
     ServerMessage,
-    Step::{
-        AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
-        Social,
-    },
-    BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
-    EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK, LOG_SERVER, OWN_NAME,
-    PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    Step::{Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids, Social},
+    BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_AA, EQMAC_DESCRIPTION, EQMAC_ILLUSION,
+    EQMAC_PROFILE, EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK,
+    LOG_SERVER, OWN_NAME, PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -55,9 +52,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         // The world's text for one player, which the zone relays; nothing
         // in TAKP's or Quarm's world sends it today.
         0x1440 => sent("OP_MultiLineMsg", EQMAC, Read(&[Chat])),
-        0x1442 => sent("OP_AAAction", EQMAC, planned(AlternateAdvancement)),
+        0x1442 => sent("OP_AAAction", EQMAC, Partly(&[Zone], EQMAC_AA)),
         0x1540 => sent("OP_Emote", EQMAC, Read(&[Chat])),
-        0x1542 => sent("OP_RespondAA", EQMAC, planned(AlternateAdvancement)),
+        0x1542 => sent("OP_RespondAA", EQMAC, Partly(&[Zone], EQMAC_AA)),
         0x1640 => sent("OP_RandomReply", EQMAC, planned(EqMacWorld)),
         0x1642 => sent_private("OP_TraderShop", EQMAC, planned(Bazaar)),
         0x1741 => sent("OP_GuildInvite", EQMAC, Partly(&[Zone], INVITE)),
@@ -66,7 +63,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1941 => sent("OP_GuildRemove", EQMAC, Partly(&[Zone], REMOVAL)),
         0x1942 => sent("OP_ManaUpdate", EQMAC, Read(&[Zone])),
         0x2140 => sent("OP_CorpsePosition", EQMAC, Read(&[Zone])),
-        0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
+        0x2342 => sent("OP_AAExpUpdate", EQMAC, Partly(&[Zone], EQMAC_AA)),
         0x2442 => sent_private("OP_TraderBuy", EQMAC, planned(Bazaar)),
         0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
         0x2542 => sent("OP_FaceChange", EQMAC, Read(&[Zone])),
