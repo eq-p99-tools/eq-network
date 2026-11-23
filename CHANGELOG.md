@@ -17,6 +17,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   program's formula (R49-3), and that P99's server takes them as it takes
   the official client's (6.491). TAKP and Quarm are unchanged.
 
+- Put a Rogue's poison on the weapon (`OP_ApplyPoison`, Titanium 0x0c2c and
+  `EQMac` 0xba41): `GameCommand::ApplyPoison { slot }` sends the 8-byte
+  `{slot, success 0}` the servers take, in each generation's slot numbering,
+  behind the new `Capability::ApplyingPoison`. One request is in flight at a
+  time; the slot must hold an item of type 42. The server's answer arrives as
+  `WorldEvent::PoisonAnswered` and its own inventory record removes the
+  poison. Refusals come as `WorldEvent::ApplyPoisonRefused`. The program's
+  side (what starts it, its gates, its lines and any wait) is pending read
+  R49-1. **Breaking:** new variants on the exhaustive command, event and
+  capability enums.
+
+- Speak in a chosen language (parity item 9). `chat::Tongue` (private fields,
+  made only by `Tongue::COMMON` or `Tongue::spoken` from the player's profile)
+  travels on `SendChatInAdmission { tongue }`, and `chat::encode_outbound_in`
+  writes its language and the speaker's skill on both generations;
+  `encode_outbound_for` and `SendChat` stay in the common tongue. A received
+  channel message keeps its language and skill as sent
+  (`ChatEvent::language`, new `ChatEvent::language_skill`). What the official
+  client puts in the skill field, and on which channels, waits for program
+  read R49-4b; RoF2 refuses. **Breaking:** `SendChatInAdmission` constructors
+  need `tongue`; the JSON of every channel message gains `language` and
+  `language_skill`.
+
 - Add RoF2 as a placeholder client generation and server type, so each
   decision a third generation needs has an answer before any of it is built.
   `GameDialect::Rof2` and `ServerProtocol::EqEmuRof2` (stock `EQEmu` with the

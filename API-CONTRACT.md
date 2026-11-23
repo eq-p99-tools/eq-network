@@ -64,12 +64,13 @@ gaps.
 
 ## Admission-scoped chat
 
-`GameCommand::SendChatInAdmission { session_id, message }` binds queued chat to
+`GameCommand::SendChatInAdmission { session_id, message, tongue }` binds queued chat to
 the originating zone admission. The session refuses a mismatched admission
 before notifying or invoking features, and the talk handler checks again before
 encoding. This is a local queue guard; the message uses the ordinary chat wire
 layout, capability and timing. It adds no server acknowledgement or retry.
-`SendChat` remains available for callers intentionally using unscoped chat.
+`SendChat` remains available for callers intentionally using unscoped chat,
+always in the common tongue.
 The pure `encode` helper does not own a session and cannot perform this guard;
 hosts using it directly must validate their own admission first.
 
@@ -560,6 +561,19 @@ still an error, not either completion event.
 but post it only for an admission offering meals. Protocol and server-specific
 allowance policies remain with the existing inventory owner.
 
+## Applying a poison
+
+`Capability::ApplyingPoison` gates `GameCommand::ApplyPoison { slot }`. The
+inventory feature offers it with `Inventory`, on Titanium and `EQMac`
+admissions; RoF2 offers no features. The session refuses, with
+`WorldEvent::ApplyPoisonRefused` and nothing sent, while the inventory is not
+current, while the slot has moves unconfirmed, while an earlier request waits
+for its answer, and when the slot holds no item of type 42. It never removes
+the poison itself: the server's own inventory record does, applied or not.
+`WorldEvent::PoisonAnswered { slot, applied }` is the server's answer and ends
+the request in flight. The Titanium program's own gates and lines are pending
+read R49-1 (recording checklist 6.493).
+
 ## Command diagnostic identity
 
 `GameCommand::name()` returns its exhaustive variant name as a static string,
@@ -807,6 +821,30 @@ corpse or trigger an automatic retry. Server `LootUpdate::Opened` denials,
 existing server-update path; an unqualified completion does not identify a cause.
 Ordinary inventory/coin events remain the only holdings authority. No packet,
 capability, inventory owner or automatic EQMac loot-all behavior changes here.
+
+## Spoken languages
+
+`chat::Tongue` is the language a message is spoken in and the speaker's skill
+in it. Its fields are private: a tongue is `Tongue::COMMON` (language 0, skill
+100) or `Tongue::spoken(&PlayerState, language)`, which takes the skill from
+the profile and is `None` when the profile lacks the language or holds no skill
+in it. No caller can send a language or a skill of its own.
+`SendChatInAdmission` carries one; `chat::encode_outbound_in` writes it
+(Titanium: language u32 at 128, skill u32 at 144; `EQMac`: u16s at 128 and
+134); `encode_outbound_for` and `SendChat` write the common tongue. RoF2 is
+refused. Which channels carry a chosen tongue is the host's choice: `EQEmu` and
+TAKP take the language from every channel, use their own record of the skill,
+and turn OOC, GM, broadcast and petition chat back to the common tongue
+themselves. What the official client writes in the skill field is inferred,
+pending program read R49-4b.
+
+A received `OP_ChannelMessage` now fills `ChatEvent::language` and
+`ChatEvent::language_skill` on both generations, as sent: `EQEmu` sends 27 for a
+tongue the listener knows too little of (skill under 24) and the lower of the
+two skills; TAKP sends the language and the speaker's skill. Values past 254
+read 255. No garbling or learning happens here: the servers raise language
+skill themselves and send the skill update `PlayerState::languages` follows.
+The JSON of a channel message gains the keys `language` and `language_skill`.
 
 ## Language-zero name selector
 
