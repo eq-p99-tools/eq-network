@@ -1,5 +1,39 @@
 # API and integration contracts
 
+## Titanium liquid reports and their damage record (read R49-3)
+
+Every Titanium session, `EQEmu` local or not and P99, offers `Drowning` and
+`LavaHeat`, as the Titanium program reports them on any server. After each
+accepted Titanium report, the session sends `OP_EnvDamage` and then the
+program's damage record, `OP_Damage` 0x5c78
+(`hazards::titanium_damage_record`, read R49-3 c). Falls get the same
+record (R49-3a). `EQEmu` relays the record to every client in the zone,
+the sender included for every type but a fall, and applies nothing. P99's
+handling is unknown, and its first use there is the attended liquid row.
+The record is skipped where the player's HP,
+less the amount, would be below -10, the program's death path. The session
+judges that from the server's last HP plus what the items add, and only
+where it can count the items (inferred, 6.491b). No Titanium server type
+counts them yet, so the record goes.
+
+On Titanium the session also refuses any report in the freeze stance
+(posture 102) and for a carrier race (0x8d, 0x48, 0x49, 0x72, 0x194), as
+the program's shared report function does (R49-3 d, R49-3a).
+
+`WorldEvent::HazardReported { session_id, hazard, amount, record }` follows
+every report the session sent, falls included, so a front end can print the
+program's own line (R49-3 e). `record` says whether the damage record
+followed, so a front end can expect its echo.
+
+Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
+`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
+sends it yet, since cold is unwired until R49-26.
+
+**Breaking:**
+- `WorldEvent::HazardReported`;
+- `LiquidHazard::ZoneHeat` and `Hazard::ZoneHeat` on exhaustive enums;
+- `Hazard` is now `Serialize`.
+
 ## An item's song and the host's spell data
 
 `ItemUse::installed_class_spell: Option<bool>` is the host's word, from its
@@ -466,10 +500,9 @@ acceptance nor water state. The host asserts water from the installed zone.
 `Capability::ALL` grows from 50 to 52 with `Drowning` and `LavaHeat`;
 `GameCommand` gains `LiquidDamage { session_id, hazard, amount, observation }`
 and `WorldEvent` gains `LiquidHazardRevision { session_id, revision }`.
-Only the Titanium `EQEmu` policy offers the two capabilities, and only on a
-session whose connection is constrained to local endpoints; P99, Quarm, TAKP
-and a remote `EQEmu` keep falls only and refuse `LiquidDamage` before
-anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
+Every Titanium policy, `EQEmu` local or not and P99, offers the two
+capabilities (see "Titanium liquid reports and their damage record"); Quarm
+and TAKP keep falls only and refuse `LiquidDamage` before anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
 refuses every other hazard.
 
 The session raises `LiquidHazardRevision` at admission and whenever an input
@@ -484,9 +517,8 @@ milliseconds, the player is admitted and not dead or transferring, its
 accepted report of the same hazard. Anything else is refused with a
 diagnostic and no wire change; the next revision is the host's signal to
 sample again. An accepted report is sent as the Titanium environmental
-record with damage type 251 (drowning) or 250 (lava); the Titanium program's
-own liquid reports are unrecorded, so that layout is inferred (recording
-checklist 6.392). `PlayerState.titanium_environment` carries the profile's
+record with damage type 251 (drowning) or 250 (lava), 244 for zone 200's
+lava, laid out as the Titanium program builds it (read R49-3 c). `PlayerState.titanium_environment` carries the profile's
 zone, base fire resistance and whether any alternate advancement rank is
 present. Titanium `eqgame.exe` copies the profile dword at byte 12876 at
 0x4b9f3c and uses it at 0x418756. The cited EQEmu Titanium encoder writes
