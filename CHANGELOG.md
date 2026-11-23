@@ -5,6 +5,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Capability::BardRefreshTimers` (checklist 6.642): where the Titanium
+  program's gem timers for a Bard apply (read R49-21 c). A refresh of a
+  Bard's own gem (`OP_MemorizeSpell` kind 3) sets the program's wait before
+  the next spell to now, where anyone else's adds the spell's recovery. It
+  comes with the Titanium song rules, on P99 and stock `EQEmu`; not the
+  Mac-era server types, whose program is unread. The host keeps the timers;
+  nothing is sent for it. **Breaking:** a new `Capability` variant.
 - Build the Mac-era program's arrival aboard a boat (TAKP 0x53df6e, read
   9c, checklist 6.641), not offered yet: Quarm and TAKP keep `BoatRiding`
   off until an attended first ride.

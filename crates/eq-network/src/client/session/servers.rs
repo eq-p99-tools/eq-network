@@ -2868,6 +2868,25 @@ mod tests {
     }
 
     #[test]
+    fn the_titanium_song_rules_bring_the_bard_refresh_timers() {
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert_eq!(
+                offers(server_type(protocol)).contains(&Capability::BardRefreshTimers),
+                matches!(
+                    protocol,
+                    ServerProtocol::EqEmu | ServerProtocol::Project1999
+                ),
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_titanium_servers_offer_the_bard_stop_request() {
         for protocol in [
             ServerProtocol::Project1999,

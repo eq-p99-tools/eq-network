@@ -884,6 +884,11 @@ impl Feature for Casting {
         if self.melody == MelodyUse::Offered {
             offered.push(Capability::Melody);
         }
+        // A Bard's refresh starts no recovery (read R49-21 c), with the
+        // rest of the Titanium song rules.
+        if self.song_rules == SongRules::Titanium {
+            offered.push(Capability::BardRefreshTimers);
+        }
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);
         }
