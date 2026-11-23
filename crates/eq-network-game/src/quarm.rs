@@ -500,6 +500,14 @@ fn decoded_profile_zone(data: &[u8]) -> Result<Option<u16>> {
         .filter(|zone| *zone != 0))
 }
 
+/// The AA array and points of the zone's packed profile (checklist 6.548).
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_aa(body: &[u8]) -> Result<[crate::alternate_advancement::Update; 2]> {
+    crate::alternate_advancement::eqmac_profile(&unpack(body, true)?)
+}
+
 /// The player's group as the profile lists it each time a zone admits them
 /// (`mac_structs.h` `groupMembers`), with the leader unknown; None outside a
 /// group.

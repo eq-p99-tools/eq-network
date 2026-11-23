@@ -22,6 +22,17 @@ pub const TIMER_OPCODE: u16 = 0x0681;
 /// The player's AA experience, unspent points and experience split
 /// (`AltAdvStats_Struct`).
 pub const PROGRESS_OPCODE: u16 = 0x5f58;
+/// `EQMac`'s ranks by Mac AA id (TAKP's `AATable_Struct`).
+pub const EQMAC_RANKS_OPCODE: u16 = 0x1542;
+/// `EQMac`'s AA experience, unspent points and split (`AltAdvStats_Struct`).
+pub const EQMAC_PROGRESS_OPCODE: u16 = 0x2342;
+/// `EQMac`'s server reuse timer (`UseAA_Struct`); the client's 256-byte text
+/// form of this opcode is a request, not read here.
+pub const EQMAC_TIMER_OPCODE: u16 = 0x1442;
+/// The number of rank bytes in `EQMac`'s `OP_RespondAA`, after its first.
+pub const EQMAC_RANK_SLOTS: usize = 226;
+/// The number of entries in `EQMac`'s profile AA array.
+pub const EQMAC_PROFILE_SLOTS: usize = 120;
 /// The number of eight-byte entries in Titanium's selection array.
 pub const SELECTION_SLOTS: usize = 240;
 /// Local bound on one definition's effect list; excess remains unavailable.
@@ -136,6 +147,66 @@ pub struct Timer {
     pub end: u32,
 }
 
+/// One nonzero `EQMac` AA entry, keyed by the Mac AA id. These ids are the
+/// client's own; the server sends no definitions for them (checklist 6.548).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct MacRank {
+    /// The Mac AA id.
+    pub id: u8,
+    /// The raw value: the rank in `OP_RespondAA`; in the profile TAKP sends
+    /// the rank times 16 (`Handle_Connect_OP_ZoneEntry`), kept as sent.
+    pub value: u8,
+}
+
+/// TAKP's `OP_RespondAA`, 227 bytes.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct MacRanks {
+    /// The first byte, which TAKP fills with `GetAAPointsSpent()`: the
+    /// points spent (inferred from TAKP's use; the struct names it
+    /// `unknown`).
+    pub spent: u8,
+    /// The nonzero ranks, entry `r` naming Mac AA id `r + 1`. TAKP always
+    /// sets id 211, Fleet of Foot, to 3 as a Mac client workaround; it is
+    /// passed through as sent (inferred to be that workaround alone).
+    pub ranks: Vec<MacRank>,
+}
+
+/// The `EQMac` profile's AA points (`expAA` at 5420, `perAA` at 5425,
+/// `aapoints` at 5902).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct MacPoints {
+    /// `aapoints`: points unspent.
+    pub aapoints: u16,
+    /// `expAA`: raw experience inside the current AA point, not scaled.
+    pub exp_aa: u32,
+    /// `perAA`: the share of experience that goes to AAs.
+    pub per_aa: u8,
+}
+
+/// `EQMac`'s `OP_AAExpUpdate` `AltAdvStats_Struct`, 8 bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct MacProgress {
+    /// `experience` at 0: the server scales it to 0..330 of the next point.
+    pub experience: i32,
+    /// `unspent` at 4: points unspent.
+    pub unspent: i16,
+    /// `percentage` at 6: the share of experience that goes to AAs.
+    pub percentage: i8,
+}
+
+/// `EQMac`'s server `OP_AAAction` `UseAA_Struct`, 12 bytes: one reuse timer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct MacTimer {
+    /// `begin` at 0: when the timer started, by the server's clock; 0 when
+    /// the server reset it.
+    pub begin: i32,
+    /// `ability` at 4: the Mac AA id (TAKP's `EmuToEQMacAA`), not a timer id
+    /// as on Titanium.
+    pub ability: i16,
+    /// `end` at 8: the server's clock when it sent this, not a deadline.
+    pub end: i32,
+}
+
 /// Received facts and explicit withdrawal after an unreadable AA packet.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub enum Update {
@@ -159,6 +230,17 @@ pub enum Update {
     Progress(Option<Progress>),
     /// One reuse timer as sent; nothing withdraws a timer.
     Timer(Timer),
+    /// `EQMac`'s `OP_RespondAA`; None withdraws it after an unreadable one.
+    MacRanks(Option<MacRanks>),
+    /// The `EQMac` profile's AA array, nonzero ids only; None withdraws it
+    /// after an unreadable profile.
+    MacSelections(Option<Vec<MacRank>>),
+    /// The `EQMac` profile's points; None withdraws them.
+    MacPoints(Option<MacPoints>),
+    /// `EQMac`'s AA experience and split; None withdraws them.
+    MacProgress(Option<MacProgress>),
+    /// One `EQMac` reuse timer as sent; nothing withdraws a timer.
+    MacTimer(MacTimer),
 }
 
 impl Update {
@@ -171,7 +253,16 @@ impl Update {
             | Self::Selections(_)
             | Self::Definition { .. }
             | Self::DefinitionsUnknown => true,
-            Self::Points(_) | Self::Progress(_) | Self::Timer(_) => false,
+            // No `EQMac` fact names an effect: its definitions are the
+            // client's, never sent.
+            Self::Points(_)
+            | Self::Progress(_)
+            | Self::Timer(_)
+            | Self::MacRanks(_)
+            | Self::MacSelections(_)
+            | Self::MacPoints(_)
+            | Self::MacProgress(_)
+            | Self::MacTimer(_) => false,
         }
     }
 }
@@ -337,6 +428,116 @@ pub fn invalidated(opcode: u16, body: &[u8]) -> Option<Update> {
     } else {
         Update::DefinitionsUnknown
     })
+}
+
+/// Whether an `EQMac` zone packet is one [`eqmac`] reads.
+#[must_use]
+pub const fn is_eqmac(opcode: u16) -> bool {
+    matches!(
+        opcode,
+        EQMAC_RANKS_OPCODE | EQMAC_PROGRESS_OPCODE | EQMAC_TIMER_OPCODE
+    )
+}
+
+fn signed(body: &[u8], at: usize) -> i32 {
+    word(body, at).cast_signed()
+}
+
+fn half(body: &[u8], at: usize) -> i16 {
+    i16::from_le_bytes([body[at], body[at + 1]])
+}
+
+/// Decodes one `EQMac` AA packet as TAKP sends it (checklist 6.548).
+///
+/// # Errors
+/// Rejects an unexpected length or an opcode [`is_eqmac`] doesn't name.
+pub fn eqmac(opcode: u16, body: &[u8]) -> Result<Update> {
+    match opcode {
+        EQMAC_RANKS_OPCODE => {
+            ensure!(
+                body.len() == 1 + EQMAC_RANK_SLOTS,
+                "unexpected EQMac AA ranks length {}",
+                body.len()
+            );
+            Ok(Update::MacRanks(Some(MacRanks {
+                spent: body[0],
+                ranks: (1u8..)
+                    .zip(&body[1..])
+                    .filter(|(_, rank)| **rank != 0)
+                    .map(|(id, rank)| MacRank { id, value: *rank })
+                    .collect(),
+            })))
+        }
+        EQMAC_PROGRESS_OPCODE => {
+            ensure!(
+                body.len() == 8,
+                "unexpected EQMac AA experience length {}",
+                body.len()
+            );
+            Ok(Update::MacProgress(Some(MacProgress {
+                experience: signed(body, 0),
+                unspent: half(body, 4),
+                percentage: i8::from_le_bytes([body[6]]),
+            })))
+        }
+        EQMAC_TIMER_OPCODE => {
+            ensure!(
+                body.len() == 12,
+                "unexpected EQMac AA timer length {}",
+                body.len()
+            );
+            Ok(Update::MacTimer(MacTimer {
+                begin: signed(body, 0),
+                ability: half(body, 4),
+                end: signed(body, 8),
+            }))
+        }
+        _ => anyhow::bail!("not an EQMac AA opcode"),
+    }
+}
+
+/// Withdrawal accompanying an unreadable `EQMac` AA packet; an unreadable
+/// timer withdraws nothing.
+#[must_use]
+pub const fn eqmac_invalidated(opcode: u16) -> Option<Update> {
+    match opcode {
+        EQMAC_RANKS_OPCODE => Some(Update::MacRanks(None)),
+        EQMAC_PROGRESS_OPCODE => Some(Update::MacProgress(None)),
+        _ => None,
+    }
+}
+
+/// The AA array and points of an unpacked `EQMac` profile, in that order;
+/// id 0 entries are skipped. `crate::quarm::profile_aa` unpacks the zone's.
+///
+/// # Errors
+/// Rejects a profile of another size.
+pub fn eqmac_profile(body: &[u8]) -> Result<[Update; 2]> {
+    ensure!(
+        body.len() == crate::quarm::PROFILE_SIZE,
+        "unexpected EQMac AA profile length {}",
+        body.len()
+    );
+    let array = &body[5612..5612 + EQMAC_PROFILE_SLOTS * 2];
+    Ok([
+        Update::MacSelections(Some(
+            array
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .filter(|[id, _]| *id != 0)
+                .map(|[id, value]| MacRank {
+                    id: *id,
+                    value: *value,
+                })
+                .collect(),
+        )),
+        Update::MacPoints(Some(MacPoints {
+            aapoints: u16::from_le_bytes([body[5902], body[5903]]),
+            exp_aa: word(body, 5420),
+            per_aa: body[5425],
+        })),
+    ])
 }
 
 #[cfg(test)]
@@ -529,5 +730,105 @@ mod tests {
             invalidated(PROGRESS_OPCODE, &progress[..11]),
             Some(Update::Progress(None))
         );
+    }
+
+    #[test]
+    fn eqmac_ranks_experience_and_timers_read_as_takp_sends_them() {
+        let mut ranks = [0u8; 227];
+        ranks[0] = 7;
+        ranks[1] = 2;
+        ranks[211] = 3;
+        ranks[226] = 1;
+        assert_eq!(
+            eqmac(EQMAC_RANKS_OPCODE, &ranks).unwrap(),
+            Update::MacRanks(Some(MacRanks {
+                spent: 7,
+                ranks: vec![
+                    MacRank { id: 1, value: 2 },
+                    MacRank { id: 211, value: 3 },
+                    MacRank { id: 226, value: 1 },
+                ],
+            }))
+        );
+        let mut progress = [0u8; 8];
+        progress[..4].copy_from_slice(&(-5i32).to_le_bytes());
+        progress[4..6].copy_from_slice(&(-1i16).to_le_bytes());
+        progress[6] = 0x80;
+        progress[7] = 0xff;
+        assert_eq!(
+            eqmac(EQMAC_PROGRESS_OPCODE, &progress).unwrap(),
+            Update::MacProgress(Some(MacProgress {
+                experience: -5,
+                unspent: -1,
+                percentage: -128,
+            }))
+        );
+        let mut timer = [0u8; 12];
+        timer[..4].copy_from_slice(&100i32.to_le_bytes());
+        timer[4..6].copy_from_slice(&211i16.to_le_bytes());
+        // TAKP's constant at 6 is unread.
+        timer[6..8].copy_from_slice(&2154i16.to_le_bytes());
+        timer[8..].copy_from_slice(&160i32.to_le_bytes());
+        assert_eq!(
+            eqmac(EQMAC_TIMER_OPCODE, &timer).unwrap(),
+            Update::MacTimer(MacTimer {
+                begin: 100,
+                ability: 211,
+                end: 160,
+            })
+        );
+        for (opcode, body) in [
+            (EQMAC_RANKS_OPCODE, ranks.as_slice()),
+            (EQMAC_PROGRESS_OPCODE, progress.as_slice()),
+            (EQMAC_TIMER_OPCODE, timer.as_slice()),
+        ] {
+            let long = [body, &[0]].concat();
+            for bad in [&body[..body.len() - 1], long.as_slice()] {
+                let error = eqmac(opcode, bad).unwrap_err().to_string();
+                assert!(error.ends_with(&format!("length {}", bad.len())), "{error}");
+            }
+        }
+        assert_eq!(
+            eqmac_invalidated(EQMAC_RANKS_OPCODE),
+            Some(Update::MacRanks(None))
+        );
+        assert_eq!(
+            eqmac_invalidated(EQMAC_PROGRESS_OPCODE),
+            Some(Update::MacProgress(None))
+        );
+        assert_eq!(eqmac_invalidated(EQMAC_TIMER_OPCODE), None);
+        // No Mac fact names an effect, so none moves the environmental sums.
+        for update in [
+            eqmac(EQMAC_RANKS_OPCODE, &ranks).unwrap(),
+            eqmac(EQMAC_PROGRESS_OPCODE, &progress).unwrap(),
+            eqmac(EQMAC_TIMER_OPCODE, &timer).unwrap(),
+        ] {
+            assert!(!update.changes_effects(), "{update:?}");
+        }
+    }
+
+    #[test]
+    fn the_eqmac_profile_gives_nonzero_ids_and_points() {
+        let mut profile = vec![0u8; crate::quarm::PROFILE_SIZE];
+        profile[5420..5424].copy_from_slice(&4321u32.to_le_bytes());
+        profile[5425] = 25;
+        // An id 0 entry with a value is skipped; the value is kept raw.
+        profile[5612..5618].copy_from_slice(&[12, 32, 0, 9, 211, 48]);
+        profile[5902..5904].copy_from_slice(&5u16.to_le_bytes());
+        assert_eq!(
+            eqmac_profile(&profile).unwrap(),
+            [
+                Update::MacSelections(Some(vec![
+                    MacRank { id: 12, value: 32 },
+                    MacRank { id: 211, value: 48 },
+                ])),
+                Update::MacPoints(Some(MacPoints {
+                    aapoints: 5,
+                    exp_aa: 4321,
+                    per_aa: 25,
+                })),
+            ]
+        );
+        assert!(eqmac_profile(&profile[1..]).is_err());
     }
 }
