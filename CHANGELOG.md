@@ -25,6 +25,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   row for 0x5089 lists the zone decoder as a reader. An admitted RoF2
   session still sends nothing and offers nothing. Still unreachable: a
   RoF2 configuration is refused before a socket opens.
+- Challenge another player to a duel (6.492b). **Breaking:**
+  `GameCommand::ChallengeDuel { session_id, target, created }` is a new
+  variant, under `Capability::Dueling`, so exhaustive matches on
+  `GameCommand` take an arm. `Request::DuelRequest` now encodes on Titanium
+  (`socials::titanium_duel_request`: `OP_RequestDuel`, the other player then
+  the player, each 32 bits, the order `EQEmu`'s handler needs; inferred,
+  pending R49-6h). The duel feature sends a challenge only at a player in
+  its spawn list other than the player, one at a time and five seconds
+  apart, and refuses anything else with `WorldEvent::SocialRefused`, since
+  `EQEmu` looks the one challenged up unchecked. The challenge is remembered
+  for sixty seconds at most, and ends sooner on the server's
+  `OP_DuelAccept`, the other client's refusal, the one challenged leaving,
+  or a zone change. While it lasts, the record `EQEmu` sends the challenger
+  before the duel starts opens no question and sends nothing; today it
+  would have asked the player to accept their own duel. Both bounds and
+  the refusal lines are ours, labelled. Only stock `EQEmu` offers dueling,
+  as before.
 - Send petitions, bug reports and feedback to the server's staff (gap list
   3.6, recording checklist 6.511), laid out from stock `EQEmu`'s and TAKP's
   handlers: `eq_network_game::reports` encodes Titanium's `OP_Petition`
