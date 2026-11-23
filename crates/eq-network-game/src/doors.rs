@@ -111,6 +111,11 @@ impl Doors {
     /// ([`crate::reach`]); not a claim about server lock/key rules.
     pub const USE_DISTANCE: f32 = 20.0;
 
+    /// How far from a door's origin where it stands now a clicked point may
+    /// lie, before the player's size: ours, not the program's, a guard
+    /// against a host's fault (6.530).
+    pub const MOST_POINT_FROM_DOOR: f32 = 200.0;
+
     /// Encodes ordinary use after checking the current door table and player position.
     ///
     /// # Errors
@@ -145,11 +150,10 @@ impl Doors {
 
     /// [`Self::check_click`] for a door standing `raised` above its placed
     /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
-    /// the reach runs to the door's origin where it stands now. The program
-    /// measures from the clicked point on the door as drawn to the player,
-    /// within the player's size and 20 (0x4906c5, 0x435b55, 0x644368; read
-    /// R16b, R16e); this check, without the clicked point or the size, is
-    /// short of that rule (recording checklist 6.436).
+    /// the reach runs to the door's origin where it stands now. It is for a
+    /// click with no clicked point (a key, a script): the program measures
+    /// from the clicked point ([`Self::check_click_at`]), so this is
+    /// stricter than the program (recording checklist 6.436).
     ///
     /// # Errors
     /// As [`Self::check_click`].
@@ -172,6 +176,67 @@ impl Doors {
             ..door.position
         };
         ensure!(reach.admits(position, now), OutOfReach);
+        Ok(())
+    }
+
+    /// Checks a Titanium click on a door at `point`, where the click ray hit
+    /// the door's model as drawn: the program measures in 3-D from that
+    /// point to the player and refuses only past the player's size and 20
+    /// (0x49812e, 0x4906c5, 0x48f790, 0x435b55, 0x644368; read R16b, R16e).
+    /// There is no door-radius term. `raised` is the lift offset, as
+    /// [`Self::check_click_raised`], for the guard below.
+    ///
+    /// The comparison is the program's "more than" exactly, and nothing but
+    /// the size and 20 enters the limit (recording checklist 6.530).
+    ///
+    /// The point is the host's; the session has no door geometry to check
+    /// it lies on the door. As a guard against a host's fault, ours and not
+    /// the program's, a point more than [`Self::MOST_POINT_FROM_DOOR`] and
+    /// the player's size from the door's origin where it stands now is
+    /// refused as malformed.
+    ///
+    /// # Errors
+    /// As [`Self::check_click`]; also a point, size or lift offset that is
+    /// not finite, a negative size, or a point that far from the door. Only
+    /// a player too far from the point is [`OutOfReach`].
+    pub fn check_click_at(
+        &self,
+        id: u8,
+        player_id: u16,
+        position: Position,
+        click: Clicked,
+    ) -> Result<()> {
+        ensure!(id != STATIC_ID, "a static object cannot be used");
+        let door = self
+            .doors
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
+        ensure!(player_id != 0, "player position is unavailable");
+        let Clicked {
+            point,
+            size,
+            raised,
+        } = click;
+        ensure!(
+            [point.x, point.y, point.z, size, raised]
+                .iter()
+                .all(|value| value.is_finite())
+                && size >= 0.0,
+            "The point you clicked is not a place."
+        );
+        let now = Position {
+            z: door.position.z + raised,
+            ..door.position
+        };
+        ensure!(
+            distance(point, now) <= Self::MOST_POINT_FROM_DOOR + size,
+            "The point you clicked is not on that door."
+        );
+        let distance = distance(point, position);
+        ensure!(
+            distance.is_finite() && distance <= size + Self::USE_DISTANCE,
+            OutOfReach
+        );
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static
@@ -218,6 +283,24 @@ impl Doors {
                 .collect(),
         )
     }
+}
+
+/// A click on a door at a point: where the click ray hit its model, the
+/// player's size as the program counts it (spawn +0x23c), and how far a lift
+/// stands above its placed height now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clicked {
+    /// Where the click ray hit the door's model as drawn.
+    pub point: Position,
+    /// The player's size, in world units.
+    pub size: f32,
+    /// The door's height above its placed height now.
+    pub raised: f32,
+}
+
+/// The 3-D distance between two places.
+fn distance(from: Position, to: Position) -> f32 {
+    (to.x - from.x).hypot(to.y - from.y).hypot(to.z - from.z)
 }
 
 /// Titanium's `OP_ClickDoor` for the player using a door, already checked.

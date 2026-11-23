@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Measure a Titanium door click from the point clicked on the door
+  (checklist 6.530, read R16b and R16e). `GameCommand::ClickDoor` gains
+  `point: Option<Position>`, where the host's click ray hit the door's
+  model as drawn. With a point, the session admits the click when the
+  point is no more than the player's size and 20 from the player in 3-D
+  (`doors::Doors::check_click_at`, `doors::Clicked`), so a lift resting
+  above can be called from its deck by the part clicked. The size is the
+  own spawn's as the server told it; where that is 0 or unheard, `EQEmu`'s
+  race size (inferred); 0 for an unlisted race. A point that is not finite
+  or lies more than 200 and the size from the door is refused in our own
+  words (our guard). With no point the origin rule is unchanged, and
+  `EQMac` ignores the point. Melee reach takes the player's size from the
+  same helper, with the same numbers.
+  **Breaking:** a new field on `GameCommand::ClickDoor`.
+
 - Keep a late scribe answer's hold until its cursor removal (6.526). A
   scribe that timed out and then got its late book confirmation, after the
   player moved the scroll, lost its receipt to any other inventory update,

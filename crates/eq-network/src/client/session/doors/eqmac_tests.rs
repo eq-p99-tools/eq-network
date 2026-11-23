@@ -38,6 +38,7 @@ fn click() -> ClientCommand {
     ClientCommand::ClickDoor {
         session_id: 5,
         door_id: 7,
+        point: None,
         created: Instant::now(),
     }
 }
@@ -182,5 +183,44 @@ fn special_unknown_stale_and_held_item_requests_are_refused_without_a_packet() {
         assert!(
             matches!(&outcome.events[..], [ClientEvent::World(DoorAction { error: Some(reason), .. })] if reason == "put down the item on your cursor first")
         );
+    }
+}
+
+#[test]
+fn an_eqmac_click_takes_no_clicked_point() {
+    let reach = eq_network_game::reach::EQMAC.doors.distance;
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let wire = super::super::servers::server_type(protocol).wire();
+        // Out of the read reach, with a point beside the player: refused.
+        let (mut owner, mut world) = setup();
+        let mut player = testing::player(7);
+        player.position.x = reach + 1.0;
+        world.player.admit(player);
+        let beside = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 7,
+            point: Some(Position {
+                x: reach + 1.0,
+                ..Position::default()
+            }),
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(wire, |out| owner.handle(&beside, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [], "{protocol:?}");
+        // At the door, with a point far off: sent, as with no point.
+        let (mut owner, mut world) = setup();
+        let far = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 7,
+            point: Some(Position {
+                x: 1000.0,
+                ..Position::default()
+            }),
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(wire, |out| owner.handle(&far, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eqmac::click(7, 7).unwrap()], "{protocol:?}");
     }
 }

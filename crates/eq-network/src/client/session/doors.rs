@@ -7,11 +7,11 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    doors::{eqmac, titanium, DoorUpdate, OutOfReach},
+    doors::{eqmac, titanium, Clicked, DoorUpdate, OutOfReach},
     inventory::InventorySlot,
     message::Message,
     request::Request,
-    world::{WorldEvent, WorldEvent::DoorAction},
+    world::{Position, WorldEvent, WorldEvent::DoorAction},
     GameDialect,
 };
 use std::{collections::BTreeMap, time::Instant};
@@ -137,7 +137,10 @@ impl Doors {
         reach: eq_network_game::reach::Reach,
     ) -> Result<Request> {
         let ClientCommand::ClickDoor {
-            door_id, created, ..
+            door_id,
+            point,
+            created,
+            ..
         } = command
         else {
             unreachable!("only door clicks are clicked");
@@ -147,8 +150,32 @@ impl Doors {
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
         let raised = world.lifts.offset(*door_id, Instant::now()).unwrap_or(0.0);
-        self.table
-            .check_click_raised(*door_id, spawn_id, position, reach, raised)?;
+        // The program measures a click from where its ray hit the door, within
+        // the player's size and 20 (read R16b, R16e; 6.530). With no point,
+        // the reach runs to the door's origin, which is stricter.
+        let at_point = |point: Position| {
+            self.table.check_click_at(
+                *door_id,
+                spawn_id,
+                position,
+                Clicked {
+                    point,
+                    size: world.player_size().unwrap_or(0.0),
+                    raised,
+                },
+            )
+        };
+        let at_origin = || {
+            self.table
+                .check_click_raised(*door_id, spawn_id, position, reach, raised)
+        };
+        match self.dialect {
+            GameDialect::Titanium => point.map_or_else(at_origin, at_point)?,
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => point.map_or_else(at_origin, at_point)?,
+            // EQMac's read reach takes no clicked point.
+            GameDialect::EqMac => at_origin()?,
+        }
         match self.dialect {
             GameDialect::Titanium => {}
             // Titanium's, inferred for RoF2 (6.489).
@@ -354,6 +381,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
+            point: None,
             created: Instant::now(),
         };
         let at = |z: f32| {
@@ -379,6 +407,188 @@ mod tests {
             clicked.result.unwrap();
             assert_eq!(clicked.sent.len(), sent, "from {x}, {z}");
         }
+    }
+
+    /// A Titanium door at the origin, admitted, with a player of `race` at
+    /// `at`; the click names `point`.
+    fn clicked_from(
+        race: u32,
+        at: Position,
+        point: Option<Position>,
+    ) -> (Doors, World, ClientCommand) {
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![titanium_door(1, 0, 0)]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let mut player = testing::player(7);
+        player.race = race;
+        player.position = at;
+        world.player.admit(player);
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            point,
+            created: Instant::now(),
+        };
+        (doors, world, click)
+    }
+
+    fn place(x: f32, y: f32, z: f32) -> Position {
+        Position {
+            x,
+            y,
+            z,
+            ..Position::default()
+        }
+    }
+
+    /// What a click did: how many requests went out, and the string named.
+    fn outcome(
+        doors: &mut Doors,
+        world: &mut World,
+        click: &ClientCommand,
+    ) -> (usize, Option<u32>, Option<String>) {
+        let outcome = testing::run(|out| doors.handle(click, world, out));
+        outcome.result.unwrap();
+        let [ClientEvent::World(DoorAction {
+            string_id, error, ..
+        })] = &outcome.events[..]
+        else {
+            panic!("one door answer: {:?}", outcome.events);
+        };
+        (outcome.sent.len(), *string_id, error.clone())
+    }
+
+    #[test]
+    fn a_titanium_click_reaches_from_its_point_within_the_players_size_and_twenty() {
+        let point = place(0.0, 0.0, 10.0);
+        // A size 6 player (race 1) at exactly 26 is sent; the next float out
+        // is refused with the program's line (more than size + 20).
+        for (race, limit) in [(1, 26.0_f32), (12, 23.0)] {
+            let (mut doors, mut world, click) =
+                clicked_from(race, place(limit, 0.0, 10.0), Some(point));
+            assert_eq!(outcome(&mut doors, &mut world, &click), (1, None, None));
+            let (mut doors, mut world, click) =
+                clicked_from(race, place(limit.next_up(), 0.0, 10.0), Some(point));
+            assert_eq!(
+                outcome(&mut doors, &mut world, &click),
+                (
+                    0,
+                    Some(OutOfReach::STRING),
+                    Some("door is out of reach".into())
+                ),
+                "race {race}"
+            );
+        }
+        // The limit is 3-D: 18 across and 18 up is 25.5.
+        let (mut doors, mut world, click) = clicked_from(1, place(18.0, 0.0, 28.0), Some(point));
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 1);
+        let (mut doors, mut world, click) = clicked_from(1, place(19.0, 0.0, 29.0), Some(point));
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 0);
+        // A race the server table does not list counts size 0: 20 and no more.
+        let (mut doors, mut world, click) = clicked_from(0, place(20.0, 0.0, 10.0), Some(point));
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 1);
+        let (mut doors, mut world, click) =
+            clicked_from(0, place(20.0_f32.next_up(), 0.0, 10.0), Some(point));
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 0);
+    }
+
+    #[test]
+    fn the_players_own_spawn_size_sets_the_click_limit_as_it_changes() {
+        let point = place(0.0, 0.0, 0.0);
+        let (mut doors, mut world, click) = clicked_from(1, place(30.0, 0.0, 0.0), Some(point));
+        // Race 1 counts 6 while the own spawn is unheard: 30 is past 26.
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 0);
+        // The server told size 10 for the own spawn: 30 is in reach.
+        let mut own = testing::spawn(7, eq_network_game::world::SpawnKind::Player);
+        own.size = 10.0;
+        world.spawns.insert(own.clone());
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 1);
+        // Shrunk to 2: the server's size wins over the race's 6, so 22 and
+        // no further.
+        own.apply_appearance(&eq_network_game::appearance::AppearanceChange::Size(2.0));
+        world.spawns.insert(own);
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 0);
+        let at = |x: f32| ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            point: Some(place(x, 0.0, 0.0)),
+            created: Instant::now(),
+        };
+        assert_eq!(outcome(&mut doors, &mut world, &at(8.0)).0, 1);
+        assert_eq!(outcome(&mut doors, &mut world, &at(7.99)).0, 0);
+    }
+
+    #[test]
+    fn a_lift_resting_above_is_called_from_the_point_clicked_on_it() {
+        // Run 5's case: a lift raised 45, its origin 30 across from a player on
+        // its deck; the edge they click is 24 away.
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        let mut lift = titanium_door(1, 59, 45);
+        lift.state_at_spawn = 1;
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let mut player = testing::player(7);
+        player.race = 1;
+        player.position = place(30.0, 0.0, 45.0);
+        world.player.admit(player);
+        let click = |point| ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            point,
+            created: Instant::now(),
+        };
+        assert_eq!(
+            outcome(&mut doors, &mut world, &click(Some(place(6.0, 0.0, 45.0)))),
+            (1, None, None)
+        );
+        // With no point the origin rule stands: 30 is past 20.
+        assert_eq!(
+            outcome(&mut doors, &mut world, &click(None)).1,
+            Some(OutOfReach::STRING)
+        );
+    }
+
+    #[test]
+    fn a_click_with_no_point_keeps_the_origin_rule() {
+        for (x, sent) in [(17.0, 1), (20.0, 1), (20.0_f32.next_up(), 0), (21.0, 0)] {
+            let (mut doors, mut world, click) = clicked_from(1, place(x, 0.0, 0.0), None);
+            assert_eq!(outcome(&mut doors, &mut world, &click).0, sent, "from {x}");
+        }
+    }
+
+    #[test]
+    fn a_point_that_is_no_place_or_far_from_the_door_is_refused_in_our_words() {
+        let at = place(200.0, 0.0, 0.0);
+        for point in [
+            place(f32::NAN, 0.0, 0.0),
+            place(0.0, f32::INFINITY, 0.0),
+            // Next to the player, but past 200 + 6 from the door.
+            place(206.0_f32.next_up(), 0.0, 0.0),
+        ] {
+            let mut doors = Doors::default();
+            let mut world = World::new(5);
+            let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![titanium_door(1, 0, 0)]));
+            doors.admit(&Message::Event(spawn), &mut world).unwrap();
+            let mut player = testing::player(7);
+            player.race = 1;
+            player.position = at;
+            world.player.admit(player);
+            let click = ClientCommand::ClickDoor {
+                session_id: 5,
+                door_id: 1,
+                point: Some(point),
+                created: Instant::now(),
+            };
+            let (sent, string_id, error) = outcome(&mut doors, &mut world, &click);
+            assert_eq!((sent, string_id), (0, None), "{point:?}");
+            assert!(error.unwrap().starts_with("The point you clicked is not"));
+        }
+        // 206 from the door is still a point on it.
+        let (mut doors, mut world, click) =
+            clicked_from(1, place(200.0, 0.0, 0.0), Some(place(206.0, 0.0, 0.0)));
+        assert_eq!(outcome(&mut doors, &mut world, &click).0, 1);
     }
 
     #[test]
@@ -407,6 +617,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
@@ -450,6 +661,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
@@ -486,6 +698,7 @@ mod tests {
         let click = |session_id, created| ClientCommand::ClickDoor {
             session_id,
             door_id: 1,
+            point: None,
             created,
         };
         let error = |command: &ClientCommand| {
@@ -537,6 +750,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 255,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
