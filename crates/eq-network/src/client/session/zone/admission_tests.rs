@@ -880,13 +880,22 @@ fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_gene
     });
     assert_eq!(entered, Some((Vec::new(), Vec::new(), "example".into())));
     // A message numbered as Titanium's spawn is told by number and length,
-    // not read as one.
+    // not read as one, and as unlisted, since no RoF2 stage reads it.
     assert!(
         diagnostics
             .iter()
-            .any(|line| line.contains("(0x7213, 385 bytes), left unread")),
+            .any(|line| line.contains("an unlisted message (0x7213, 385 bytes), left unread")),
         "{diagnostics:?}"
     );
+    // What the entry reads is not told as unread (6.508).
+    for opcode in ["0x6506", "0x5089", "0x1795", "0x5ae2"] {
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|line| line.contains(&format!("({opcode},"))),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
 }
 
 #[test]

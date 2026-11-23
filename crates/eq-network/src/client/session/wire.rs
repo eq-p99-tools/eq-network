@@ -456,6 +456,10 @@ impl Wire for Rof2 {
         GameDialect::Rof2
     }
 
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::rof2(opcode)
+    }
+
     fn login(
         &self,
         config: &ClientConfig,

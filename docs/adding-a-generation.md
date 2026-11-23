@@ -103,6 +103,9 @@ unreachable because validation refuses the generation:
   and `Rof2::encode` refuses, so every command is refused. Gems 9 to 12, appearance, the `/who`
   listing and the spawn's packed position are not read, and what the `RoF2` program reads in
   each field is a read still owed.
+- Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
+  and nothing else, so the gap log tells every other message as unlisted. A test holds the
+  rows to the stages' own opcodes in both directions.
 
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.

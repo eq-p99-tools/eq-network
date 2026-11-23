@@ -42,6 +42,11 @@ const OBJECTS_SENT: u16 = 0x5ae2;
 /// `OP_ClientReady` (inferred, 6.501).
 const READY: u16 = 0x345d;
 
+/// What `RoF2`'s entry reads, for the coverage table's test.
+#[cfg(test)]
+pub(in crate::client::session) const READS: [u16; 4] =
+    [PROFILE_OPCODE, OWN_SPAWN_OPCODE, NEW_ZONE, OBJECTS_SENT];
+
 /// The entry's length: a word, the name's 64 bytes, two words
 /// (`rof2_structs.h`, `ClientZoneEntry_Struct`; `rof2.cpp`,
 /// `DECODE(OP_ZoneEntry)`, which takes exactly this length).
