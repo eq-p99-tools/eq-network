@@ -21,6 +21,39 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     no-bind ids, which are 50 against its count of 48; the server's
     `OP_LogServer` words taken as 0.
 
+- TAKP and Quarm keep a duel as the `EQMac` program does (checklist 6.622;
+  TAKP program reads 11g and 11h; source-derived from TAKP 44afcbf's
+  `Handle_OP_RequestDuel`, `Handle_OP_DuelResponse` and
+  `Handle_OP_DuelAccept` and Quarm fc75fcf's `Handle_OP_RequestDuel`,
+  `Handle_OP_DuelResponse` and `Handle_OP_DuelResponse2`, not live). `/duel`
+  takes any spawn but a corpse; accepting sends 0xcf40 then 0x5d41; the
+  program's own refusals and `/decline` send the 6-byte 0xd040 with the
+  reason; TAKP's relayed refusal is `TurnedDown`; a kill in the duel sends
+  0x5e41, which neither server names. The host's question works as on
+  Titanium, its no staying local. The old held `EQMac` duel in the
+  confirmations module is gone.
+  - **Breaking:** `GameCommand::DeclineDuel`; `Capability::DecliningDuels`
+    (93); `DuelNews::{Declining, NothingToDecline, DecliningWhileDueling}`;
+    `socials::{EQMAC_DUEL_WON_OPCODE, eqmac_duel_auto_decline,
+    eqmac_duel_won}`; `Request::AutoDeclineDuel` and `Request::DuelOver`
+    now encode on `EQMac`.
+- Quarm and TAKP answer another player's inspection as the `EQMac` program
+  does (checklist 6.621; TAKP program read row 11e, 0x4e769d;
+  source-derived from `Client::Handle_OP_InspectAnswer` at TAKP 44afcbf and
+  Quarm fc75fcf, which pass the 1,744-byte answer on unread, not live):
+  `OP_InspectAnswer` (0xb640) names the asker and the player, each worn
+  place's item name and icon (`EQMac` slots 0 to 21, the program's order;
+  0xffff for an empty place) and the player's inspect message. At most one
+  answer goes each second; a request inside it is dropped. The program's
+  unwritten bytes and its 32-byte string (inferred to be a title) are sent
+  as zero, a labelled departure. Each answer says line 0x57c naming the
+  asker when they are a known spawn other than the player; the program's
+  option for it is unread, so it is always said. Asking to inspect, and
+  showing an answer received, stay unoffered on `EQMac`.
+  - **Breaking:** `Capability::InspectAnswer` (92); `SetInspectNote` now
+    needs it instead of `PlayerInspection` (Titanium sessions offer both);
+    `WorldEvent::InspectedBy { session_id, inspector_id, name, string_id }`;
+    `inspection::eqmac::answer`.
 - Build the Mac-era program's boat boarding and leaving (TAKP 0x4c131d,
   read 9a, checklist 6.618), not offered yet: Quarm and TAKP keep
   `BoatRiding` off until the Mac-era arrival is read.
