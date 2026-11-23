@@ -21,6 +21,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handlers; declining sends nothing (inferred). Both new coverage rows keep
   no sample. **Breaking:** the new `News`, `Request`, `GameCommand`,
   `WorldEvent` and `Capability` variants.
+- Read `EQMac`'s alternate advancement on local TAKP, read only (6.548):
+  `OP_RespondAA` (0x1542) by Mac AA id, the profile's AA array and points,
+  `OP_AAExpUpdate` (0x2342) and the server's reuse timers on `OP_AAAction`
+  (0x1442), from TAKP's layouts. The first byte of the ranks is labelled
+  the points spent and id 211's constant 3 is passed through, both
+  inferred from TAKP's use. Quarm shares the decoding, assumed as TAKP, and
+  isn't offered it until an attended Quarm row; remote TAKP waits for the
+  local row. `EQMac` servers send no definitions, so nothing new enters the
+  environmental sums.
+
+  **Breaking** (for the client repin): `alternate_advancement::Update` gains
+  `MacRanks(Option<MacRanks>)`, `MacSelections(Option<Vec<MacRank>>)`,
+  `MacPoints(Option<MacPoints>)`, `MacProgress(Option<MacProgress>)` and
+  `MacTimer(MacTimer)`, with those structs.
+
+- Read RoF2's quest rewards and their sound, renames, the new titles
+  notice and the banker's change as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`
+  (0x1a30, both the reward and the ding record), `OP_MobRename` (0x2c57),
+  `OP_NewTitlesAvailable` (0x0d32) and `OP_BankerChange` (0x791e), which
+  have no encoder for either generation, through Titanium's readers into
+  Titanium's events, with Titanium's refusals. The rename's names reach the
+  host in the event only. Coverage rows for all four; `OP_Sound` and
+  `OP_MobRename` share Titanium's parts. Validate still refuses RoF2.
 - Read the task journal stock `EQEmu` sends a Titanium player (gap list
   section 5, checklist 6.546), from source and not yet checked live. The
   new `tasks` module reads `OP_TaskDescription` (0x5ef7), `OP_TaskActivity`

@@ -136,7 +136,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 58] = [
+pub const ROF2_READS: [u16; 62] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -195,6 +195,10 @@ pub const ROF2_READS: [u16; 58] = [
     crate::rof2_answers::BEGGING_OPCODE,
     crate::rof2_answers::PICK_POCKET_OPCODE,
     crate::rof2_answers::BIND_WOUND_OPCODE,
+    crate::rof2_notices::SOUND_OPCODE,
+    crate::rof2_notices::RENAME_OPCODE,
+    crate::rof2_notices::NEW_TITLES_OPCODE,
+    crate::rof2_notices::BANKER_CHANGE_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
@@ -203,8 +207,9 @@ pub const ROF2_READS: [u16; 58] = [
 /// casting, stuns and illusions (6.522), buffs (6.527), the spell book and
 /// gems (6.532), the mana and endurance pools (6.538), doors, ground objects
 /// and the weather (6.539), rolls, assists, yells and effects (6.541), and
-/// targets, charms, rewards, reuse and skill answers (6.544) are read yet;
-/// a body a reader refuses is unreadable, told by its opcode and length
+/// targets, charms, rewards, reuse and skill answers (6.544), and quest
+/// rewards, renames, new titles and the banker's change (6.549) are read
+/// yet; a body a reader refuses is unreadable, told by its opcode and length
 /// only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
@@ -245,6 +250,7 @@ fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
         .or_else(|| one(crate::rof2_world::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_socials::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_answers::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_notices::read(opcode, body), Part::World))
         .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
         .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
 }
@@ -525,6 +531,17 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             Message::ZonePoints,
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        opcode if crate::alternate_advancement::is_eqmac(opcode) => {
+            match crate::alternate_advancement::eqmac(opcode, body) {
+                Ok(update) => vec![Message::AlternateAdvancement(update)],
+                Err(error) => std::iter::once(unreadable(Part::World, &error))
+                    .chain(
+                        crate::alternate_advancement::eqmac_invalidated(opcode)
+                            .map(Message::AlternateAdvancement),
+                    )
+                    .collect(),
+            }
+        }
         crate::buffs::EQMAC_ACTION_OPCODE => vec![action(crate::buffs::eqmac_action(body))],
         crate::quarm::ZONE_NEW => crate::clock::eqmac_zone_sky(body)
             .map(sky)
@@ -635,6 +652,20 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
             messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));
         }
         Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
+    // Its AA array and points (6.548), last.
+    match crate::quarm::profile_aa(body) {
+        Ok(updates) => messages.extend(updates.map(Message::AlternateAdvancement)),
+        Err(error) => {
+            messages.push(unreadable(Part::World, &error));
+            messages.extend(
+                [
+                    crate::alternate_advancement::Update::MacSelections(None),
+                    crate::alternate_advancement::Update::MacPoints(None),
+                ]
+                .map(Message::AlternateAdvancement),
+            );
+        }
     }
     messages
 }
@@ -1132,7 +1163,47 @@ mod tests {
                     part: Part::World,
                     ..
                 },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::MacSelections(
+                    None
+                )),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::MacPoints(
+                    None
+                )),
             ]
+        ));
+    }
+
+    #[test]
+    fn eqmac_aa_packets_are_read_and_an_unreadable_one_says_so() {
+        use crate::alternate_advancement::{
+            Update, EQMAC_PROGRESS_OPCODE, EQMAC_RANKS_OPCODE, EQMAC_TIMER_OPCODE,
+        };
+        assert!(matches!(
+            eqmac(EQMAC_RANKS_OPCODE, &[0; 227])[..],
+            [Message::AlternateAdvancement(Update::MacRanks(Some(_)))]
+        ));
+        assert!(matches!(
+            eqmac(EQMAC_PROGRESS_OPCODE, &[0; 8])[..],
+            [Message::AlternateAdvancement(Update::MacProgress(Some(_)))]
+        ));
+        assert!(matches!(
+            eqmac(EQMAC_TIMER_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::MacTimer(_))]
+        ));
+        assert!(matches!(
+            &eqmac(EQMAC_RANKS_OPCODE, &[0; 226])[..],
+            [
+                Message::Unreadable { part: Part::World, error },
+                Message::AlternateAdvancement(Update::MacRanks(None)),
+            ] if error.ends_with("length 226")
+        ));
+        assert!(matches!(
+            &eqmac(EQMAC_TIMER_OPCODE, &[0; 256])[..],
+            [Message::Unreadable { part: Part::World, error }] if error.ends_with("length 256")
         ));
     }
 }
