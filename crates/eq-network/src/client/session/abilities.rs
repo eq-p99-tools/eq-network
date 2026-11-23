@@ -283,6 +283,12 @@ impl Abilities {
         if ability == Ability::Sneak && self.sneaking {
             return Err("You are already sneaking".into());
         }
+        // The program's Tracking press does nothing while byte [0x8092d8] is
+        // set (TAKP program read row 10d), inferred to be a trade or give
+        // window; it says nothing, and these words are ours (6.619).
+        if ability == Ability::Tracking && world.exchange.is_some() {
+            return Err("You cannot track while trading".into());
+        }
         let equipment = match ability {
             Ability::Bash if ![2, 9, 10].contains(&player.race) => {
                 Some((14, 8, "You need a shield to bash"))
