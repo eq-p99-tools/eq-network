@@ -777,8 +777,11 @@ impl Script {
     /// It stays idle for `idle` before it stops.
     fn rof2(player: bool, stop: &CancellationToken, idle: Duration) -> Self {
         use eq_network_game::rof2_player::{
-            samples::{profile_body, record_body, spawn_body, Record, Sample},
-            OWN_SPAWN_OPCODE, PROFILE_OPCODE, SPAWN_OPCODE,
+            samples::{
+                despawn_body, profile_body, record_body, spawn_body, update_body, Packed, Record,
+                Sample,
+            },
+            DESPAWN_OPCODE, OWN_SPAWN_OPCODE, POSITION_OPCODE, PROFILE_OPCODE, SPAWN_OPCODE,
         };
         let mut description = vec![0; 948];
         description[64..71].copy_from_slice(b"example");
@@ -809,6 +812,23 @@ impl Script {
         );
         let cut = record_body(&Record::creature());
         script.packet(SPAWN_OPCODE, cut[..cut.len() - 1].to_vec());
+        // The other player moves and leaves, and a removal names the
+        // player's own id (6.514).
+        script.packet(
+            POSITION_OPCODE,
+            update_body(
+                77,
+                0,
+                &Packed {
+                    x: 80,
+                    delta_x: 64,
+                    animation: 40,
+                    ..Packed::default()
+                },
+            ),
+        );
+        script.packet(DESPAWN_OPCODE, despawn_body(77));
+        script.packet(DESPAWN_OPCODE, despawn_body(4321));
         script.packet(0x7213, vec![0; 385]);
         script
     }
@@ -945,6 +965,32 @@ fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_gene
         "{diagnostics:?}"
     );
     assert!(!diagnostics.iter().any(|line| line.contains("a_rat")));
+    // The move and the removals reach the host, the player's own removal
+    // as Titanium's decoder gives it, and nothing is sent in answer.
+    let moved = events.iter().find_map(|event| match event {
+        WorldEvent::Position {
+            spawn_id: 77,
+            position,
+            velocity,
+            forward,
+        } => Some((position.x, velocity[0], *forward)),
+        _ => None,
+    });
+    assert_eq!(moved, Some((10.0, 20.0, 1.0)));
+    let removed: Vec<u16> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Despawn(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed, [77, 4321]);
+    for opcode in ["0x7dfc", "0x7280"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
 }
 
 #[test]

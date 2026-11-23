@@ -48,6 +48,9 @@ const SPAWN: &[Part] = &[
     ),
 ];
 
+/// What the zone decoder leaves unread of a position update (6.514).
+const POSITION: &[Part] = &[Part("the delta heading and the vehicle id", Planned(Rof2))];
+
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
 /// client; nothing for one no stage reads yet.
 pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
@@ -77,6 +80,14 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x6506 => sent("OP_PlayerProfile", ROF2, Partly(&[Admission], PROFILE)),
         0x5089 => sent("OP_ZoneEntry", ROF2, Partly(&[Admission, Zone], SPAWN)),
         0x5ae2 => sent("OP_WorldObjectsSent", ROF2, Read(&[Admission])),
+        // Its spawns' movement and removal (6.514). The removal's last byte
+        // is not a part: `ENCODE(OP_DeleteSpawn)` always writes 1 there.
+        // `OP_MobUpdate` (0x2c84) and `OP_NPCMoveUpdate` (0x5892) stay
+        // unlisted: stock `EQEmu` sends neither (`common/emu_oplist.h` keeps
+        // `OP_MobUpdate` "not used anymore", and nothing in `zone/` sends
+        // either), so the gap log tells one if it ever comes.
+        0x7dfc => sent("OP_ClientUpdate", ROF2, Partly(&[Zone], POSITION)),
+        0x7280 => sent("OP_DeleteSpawn", ROF2, Read(&[Zone])),
         _ => return None,
     })
 }
@@ -94,6 +105,7 @@ mod tests {
             .into_iter()
             .chain(world::rof2::READS)
             .chain(admission::ROF2_READS)
+            .chain(eq_network_game::message::ROF2_READS)
             .collect();
         let listed: BTreeSet<u16> = (0..=u16::MAX)
             .filter(|opcode| {

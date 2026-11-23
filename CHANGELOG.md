@@ -16,6 +16,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changes 500 ms apart. `EQMac` refuses. **Breaking:** new variants on the
   exhaustive `GameCommand`, `Request` and `Capability` (`Capability::ALL`
   holds 78).
+- Read RoF2's spawn movement and removal as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.514). `rof2_player::position` reads the
+  24-byte `OP_ClientUpdate` (0x7dfc), which RoF2 gets unencoded, into
+  `WorldEvent::Position`: its position from the same bit table as the
+  spawn record's, now shared, and its velocity and forward input from the
+  deltas and animation on Titanium's scales. The delta heading and the
+  vehicle id are not read. `rof2_player::despawn` reads the 5-byte
+  `OP_DeleteSpawn` (0x7280) into `WorldEvent::Despawn`; its last byte is
+  the encoder's constant. Both refuse any other length and a zero id.
+  Coverage lists both as read by the zone decoder; `OP_MobUpdate` and
+  `OP_NPCMoveUpdate` stay unlisted, since stock `EQEmu` sends neither. An
+  admitted RoF2 session still sends nothing and offers nothing.
 - Destroy coins on the cursor (gap 3.x, checklist 6.512).
   `GameCommand::DestroyCoins` sends `OP_MoveCoin` from the cursor to slot -1
   with the same kind both sides (Titanium 0x7657, `EQMac` 0x2d41), as stock

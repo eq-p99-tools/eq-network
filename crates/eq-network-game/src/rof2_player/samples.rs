@@ -551,3 +551,20 @@ pub fn pack(packed: &Packed) -> [u32; 5] {
     }
     words
 }
+
+/// A position update: the spawn id, the vehicle id and the packed words.
+pub fn update_body(spawn_id: u16, vehicle_id: u16, packed: &Packed) -> Vec<u8> {
+    let mut body = Body::default();
+    body.short(spawn_id).short(vehicle_id);
+    for word in pack(packed) {
+        body.word(word);
+    }
+    body.bytes
+}
+
+/// A removal: the spawn id and the byte the encoder sets to 1.
+pub fn despawn_body(spawn_id: u32) -> Vec<u8> {
+    let mut body = Body::default();
+    body.word(spawn_id).byte(1);
+    body.bytes
+}
