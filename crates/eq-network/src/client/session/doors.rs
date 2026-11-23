@@ -507,7 +507,7 @@ mod tests {
         // Shrunk to 2: the server's size wins over the race's 6, so 22 and
         // no further.
         own.apply_appearance(&eq_network_game::appearance::AppearanceChange::Size(2.0));
-        world.spawns.insert(own);
+        world.spawns.insert(own.clone());
         assert_eq!(outcome(&mut doors, &mut world, &click).0, 0);
         let at = |x: f32| ClientCommand::ClickDoor {
             session_id: 5,
@@ -517,6 +517,20 @@ mod tests {
         };
         assert_eq!(outcome(&mut doors, &mut world, &at(8.0)).0, 1);
         assert_eq!(outcome(&mut doors, &mut world, &at(7.99)).0, 0);
+        // An illusion's size counts as the spawn's: an Ogre's 9 reaches 29.
+        own.apply_appearance(&eq_network_game::appearance::AppearanceChange::Illusion(
+            eq_network_game::appearance::Illusion {
+                race: 10,
+                gender: 0,
+                texture: None,
+                helm_texture: None,
+                size: 9.0,
+                features: eq_network_game::appearance::Features::default(),
+            },
+        ));
+        world.spawns.insert(own);
+        assert_eq!(outcome(&mut doors, &mut world, &at(1.0)).0, 1);
+        assert_eq!(outcome(&mut doors, &mut world, &at(0.99)).0, 0);
     }
 
     #[test]
