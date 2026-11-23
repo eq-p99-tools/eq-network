@@ -46,7 +46,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0c40 => sent("OP_ShopInventoryPacket", EQMAC, Read(&[Zone])),
         0x1040 => sent("OP_TradeReset", EQMAC, planned(EqMacExchanges)),
         0x1140 => sent("OP_PetitionRefresh", EQMAC, Partly(&[Zone], PETITION)),
-        0x1142 => sent_private("OP_BazaarSearch", EQMAC, planned(Bazaar)),
+        0x1142 => sent_private("OP_BazaarSearch", EQMAC, Read(&[Zone])),
         0x1242 => sent_private("OP_Trader", EQMAC, planned(Bazaar)),
         0x1342 => sent("OP_ShopPlayerRecharge", QUARM, unasked(EqMacExchanges)),
         // The world's text for one player, which the zone relays; nothing

@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Search the Bazaar on TAKP and Quarm (6.580), from EQMacEmu's source,
+  which both servers share: `OP_BazaarSearch` (0x1142) with the Mac-era
+  88-byte search and 20-byte welcome request, and the server's 76-byte
+  result rows, each in a packet of its own, and its end. Offered on TAKP
+  and Quarm as source-derived, not live (row 6.580a open; first use
+  attended). Sent only in the Bazaar (zone 151), with Titanium's pacing.
+  A search with a level bound is refused: the Mac record has none. An item
+  id past 32767 arrives wrapped and can't be trusted as an id.
+
+  **Breaking:** `BazaarListing::trader`, `serial` and `stat` become
+  `Option`, since a Mac row carries no serial or stat and names no trader
+  out of the zone, and `BazaarListing` gains `listings`. New:
+  `bazaar::eqmac::{search, welcome, answer, Answer, SEARCH_OPCODE,
+  SEARCH_LENGTH, WELCOME_LENGTH, ROW_LENGTH, DONE_LENGTH}`.
+
 - Read the guild bank as stock `EQEmu` tells a Titanium client of it
   (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
   emptied), the deposit answer, the bare acknowledgement and the clear, by

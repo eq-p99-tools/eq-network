@@ -22,13 +22,23 @@
 //! browse the session closes itself sends its end, and an approval that
 //! comes after its click stopped waiting is ended too.
 //!
-//! Built, and not yet offered: stock `EQEmu` offers each once its local live
-//! row passes (6.550a, 6.558a).
+//! The Mac-era search (6.580) is the same feature over TAKP's and Quarm's
+//! own records ([`bazaar::eqmac`]): their handler answers each result in a
+//! packet of its own, then the end, so the host hears one
+//! [`BazaarEvent::Results`] per row before [`BazaarEvent::SearchDone`], and
+//! rows past [`bazaar::MOST_ROWS`] are withheld and told as a gap. Both
+//! servers check that a search comes from zone 151 (`Zones::BAZAAR`,
+//! `Client::Handle_OP_BazaarSearch`), as stock `EQEmu` searches only the
+//! player's zone; the session sends one only there on every server.
+//!
+//! Offered on TAKP and Quarm from their source, not live yet (6.580a).
+//! Built, and not yet offered on stock `EQEmu`: it offers each once its
+//! local live row passes (6.550a, 6.558a).
 #![cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "offered on stock EQEmu once rows 6.550a and 6.558a pass"
+        reason = "trader browsing is offered on stock EQEmu once row 6.558a passes"
     )
 )]
 use super::{
@@ -65,18 +75,76 @@ enum Asked {
     Welcome,
 }
 
+/// A generation's search and answer records, by what the session needs
+/// of them: the opcode they share, and the lengths it tells gaps by.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Records {
+    /// The search's and every answer's opcode.
+    opcode: u16,
+    /// One result row's length.
+    row: usize,
+    /// The end's length, which the welcome shares.
+    end: usize,
+}
+
+/// Titanium's ([`bazaar::search`], [`bazaar::answer`]).
+const TITANIUM: Records = Records {
+    opcode: bazaar::SEARCH_OPCODE,
+    row: bazaar::ROW_LENGTH,
+    end: bazaar::WELCOME_LENGTH,
+};
+
+/// The Mac era's ([`bazaar::eqmac`]).
+const EQMAC: Records = Records {
+    opcode: bazaar::eqmac::SEARCH_OPCODE,
+    row: bazaar::eqmac::ROW_LENGTH,
+    end: bazaar::eqmac::DONE_LENGTH,
+};
+
+/// Why a gap the Bazaar tells was not passed on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Unpassed {
+    /// An answer nobody asked for.
+    Unasked,
+    /// A result row past [`bazaar::MOST_ROWS`] in one search.
+    PastMost,
+}
+
 /// The Bazaar's search and welcome request.
-#[derive(Default)]
 pub(super) struct Bazaar {
+    /// The generation's records.
+    records: Records,
     /// The request in flight, and when it went.
     asked: Option<(Asked, Instant)>,
+    /// The rows the search in flight has passed on.
+    rows: usize,
     /// When the last request went.
     sent: Option<Instant>,
-    /// The length of each answer nobody asked for, to tell as gaps.
-    unasked: Vec<usize>,
+    /// The length of each answer not passed on, and why, to tell as gaps.
+    unasked: Vec<(usize, Unpassed)>,
 }
 
 impl Bazaar {
+    /// Over Titanium's records, as stock `EQEmu` speaks them.
+    pub(super) const fn titanium() -> Self {
+        Self::over(TITANIUM)
+    }
+
+    /// Over the Mac era's records, as TAKP and Quarm speak them.
+    pub(super) const fn eqmac() -> Self {
+        Self::over(EQMAC)
+    }
+
+    const fn over(records: Records) -> Self {
+        Self {
+            records,
+            asked: None,
+            rows: 0,
+            sent: None,
+            unasked: Vec::new(),
+        }
+    }
+
     fn waiting(&self, now: Instant) -> Option<Asked> {
         self.asked
             .filter(|(_, at)| now.saturating_duration_since(*at) < WAIT)
@@ -112,30 +180,41 @@ impl Feature for Bazaar {
             }
             return;
         };
-        let Some(length) = length(event) else {
+        let Some(length) = length(event, self.records) else {
             // A browse's, which [`Browsing`] keeps.
             return;
         };
         let waiting = self.waiting(Instant::now());
         match (event, waiting) {
-            (BazaarEvent::Results(_), Some(Asked::Search)) => {}
+            (BazaarEvent::Results(rows), Some(Asked::Search)) => {
+                if self.rows + rows.len() > bazaar::MOST_ROWS {
+                    self.unasked.push((length, Unpassed::PastMost));
+                    *message = Message::Withheld;
+                } else {
+                    self.rows += rows.len();
+                }
+            }
             (BazaarEvent::SearchDone, Some(Asked::Search))
             | (BazaarEvent::Welcome { .. }, Some(Asked::Welcome)) => self.asked = None,
             _ => {
-                self.unasked.push(length);
+                self.unasked.push((length, Unpassed::Unasked));
                 *message = Message::Withheld;
             }
         }
     }
 
     fn tick(&mut self, _now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        for length in self.unasked.drain(..) {
+        for (length, why) in self.unasked.drain(..) {
+            let reason = match why {
+                Unpassed::Unasked => "a bazaar answer no request asked for",
+                Unpassed::PastMost => "a bazaar result past the most one search lists",
+            };
             out.log.gap_unsampled(
-                bazaar::SEARCH_OPCODE,
+                self.records.opcode,
                 Some("OP_BazaarSearch"),
                 length,
                 crate::client::GapKind::Unread {
-                    reason: "a bazaar answer no request asked for".to_owned(),
+                    reason: reason.to_owned(),
                 },
             )?;
         }
@@ -172,17 +251,18 @@ impl Feature for Bazaar {
             return actions::refuse(command, &format!("Cannot search: {error:#}."), out.log);
         }
         self.asked = Some((asked, now));
+        self.rows = 0;
         self.sent = Some(now);
         Ok(())
     }
 }
 
-/// The length of the record a search's answer came in, as
-/// [`bazaar::answer`] reads it; `None` for a browse's event.
-fn length(event: &BazaarEvent) -> Option<usize> {
+/// The length of the record a search's answer came in, in the generation's
+/// `records`; `None` for a browse's event.
+fn length(event: &BazaarEvent, records: Records) -> Option<usize> {
     match event {
-        BazaarEvent::Results(rows) => Some(rows.len() * bazaar::ROW_LENGTH),
-        BazaarEvent::SearchDone | BazaarEvent::Welcome { .. } => Some(bazaar::WELCOME_LENGTH),
+        BazaarEvent::Results(rows) => Some(rows.len() * records.row),
+        BazaarEvent::SearchDone | BazaarEvent::Welcome { .. } => Some(records.end),
         BazaarEvent::Admitted { .. }
         | BazaarEvent::TraderSign { .. }
         | BazaarEvent::ShopEnded
@@ -573,13 +653,13 @@ impl Feature for Browsing {
                 BazaarEvent::Results(rows) => {
                     // The server's word that each trades now, in this zone
                     // (`Local_Scope`; inferred as the program's own).
-                    for row in rows {
+                    for trader in rows.iter().filter_map(|row| row.trader) {
                         if world
                             .spawns
-                            .get(row.trader)
+                            .get(trader)
                             .is_some_and(|known| known.kind == SpawnKind::Player)
                         {
-                            self.traders.insert(row.trader);
+                            self.traders.insert(trader);
                         }
                     }
                 }
@@ -756,13 +836,14 @@ mod tests {
     fn results() -> Message {
         Message::Event(WorldEvent::Bazaar(BazaarEvent::Results(vec![
             BazaarListing {
-                trader: 312,
+                trader: Some(312),
                 item_id: 1001,
-                serial: 77,
+                serial: Some(77),
                 name: "Bone Chips".into(),
                 count: Some(20),
                 price: 1250,
-                stat: 0,
+                stat: Some(0),
+                listings: None,
             },
         ])))
     }
@@ -775,7 +856,7 @@ mod tests {
     fn a_search_goes_only_in_the_bazaar() {
         let mut world = in_bazaar();
         world.zone = (202, 0);
-        let mut feature = Bazaar::default();
+        let mut feature = Bazaar::titanium();
         let outcome = testing::run(|out| feature.handle(&search(), &mut world, out));
         assert_eq!(
             refused(&outcome).as_deref(),
@@ -787,7 +868,7 @@ mod tests {
     #[test]
     fn a_search_goes_as_built_and_its_answer_passes() {
         let mut world = in_bazaar();
-        let mut feature = Bazaar::default();
+        let mut feature = Bazaar::titanium();
         let outcome = testing::run(|out| feature.handle(&search(), &mut world, out));
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(outcome.sent[0].opcode, bazaar::SEARCH_OPCODE);
@@ -809,7 +890,7 @@ mod tests {
     #[test]
     fn one_search_at_a_time_with_a_floor_between() {
         let mut world = in_bazaar();
-        let mut feature = Bazaar::default();
+        let mut feature = Bazaar::titanium();
         assert_eq!(
             testing::run(|out| feature.handle(&search(), &mut world, out))
                 .sent
@@ -873,7 +954,7 @@ mod tests {
     #[test]
     fn a_search_the_codec_refuses_is_refused_in_our_words() {
         let mut world = in_bazaar();
-        let mut feature = Bazaar::default();
+        let mut feature = Bazaar::titanium();
         let long = ClientCommand::BazaarSearch {
             session_id: 5,
             criteria: BazaarCriteria {
@@ -889,7 +970,7 @@ mod tests {
     #[test]
     fn an_answer_nobody_asked_for_is_withheld_and_a_gap_without_its_body() {
         let mut world = in_bazaar();
-        let mut feature = Bazaar::default();
+        let mut feature = Bazaar::titanium();
         let mut rows = results();
         feature.explain(&mut rows, &world);
         assert!(matches!(rows, Message::Withheld));
@@ -913,7 +994,7 @@ mod tests {
         // The first is told at once; the second, of the same kind, is
         // counted as its repeat.
         assert_eq!(gaps.len(), 1);
-        assert_eq!(feature.unasked, Vec::<usize>::new());
+        assert_eq!(feature.unasked, Vec::<(usize, Unpassed)>::new());
         assert!(gaps
             .iter()
             .all(|gap| gap.sample.is_none() && gap.opcode == bazaar::SEARCH_OPCODE));
@@ -923,13 +1004,156 @@ mod tests {
     #[test]
     fn zoning_or_a_new_admission_forgets_the_search_in_flight() {
         let mut world = in_bazaar();
-        let mut feature = Bazaar::default();
+        let mut feature = Bazaar::titanium();
         testing::run(|out| feature.handle(&search(), &mut world, out));
         testing::run(|out| feature.admitted(&mut world, out));
         assert!(feature.asked.is_none());
         let mut end = done();
         feature.explain(&mut end, &world);
         assert!(matches!(end, Message::Withheld));
+    }
+
+    mod eqmac {
+        use super::super::super::{feature::testing, ClientEvent};
+        use super::super::*;
+        use super::{done, in_bazaar, refused, search};
+        use eq_network_game::bazaar::{BazaarCriteria, BazaarListing};
+
+        fn row(name: &str) -> Message {
+            Message::Event(WorldEvent::Bazaar(BazaarEvent::Results(vec![
+                BazaarListing {
+                    trader: None,
+                    item_id: 13073,
+                    serial: None,
+                    name: name.into(),
+                    count: Some(12),
+                    price: 1250,
+                    stat: None,
+                    listings: Some(1),
+                },
+            ])))
+        }
+
+        fn gaps(outcome: &testing::Outcome<Result<()>>) -> Vec<&crate::client::gaps::Gap> {
+            outcome
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    ClientEvent::Gap(gap) => Some(&**gap),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn a_search_goes_in_the_mac_records_only_in_the_bazaar() {
+            let mut world = in_bazaar();
+            world.zone = (202, 0);
+            let mut feature = Bazaar::eqmac();
+            let outcome = testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&search(), &mut world, out)
+            });
+            assert_eq!(
+                refused(&outcome).as_deref(),
+                Some("You can search only in the Bazaar.")
+            );
+            world.zone = (bazaar::ZONE_ID, 0);
+            let outcome = testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&search(), &mut world, out)
+            });
+            let ClientCommand::BazaarSearch { criteria, .. } = search() else {
+                unreachable!()
+            };
+            assert_eq!(
+                (outcome.sent[0].opcode, &outcome.sent[0].body),
+                (0x1142, &bazaar::eqmac::search(&criteria).unwrap())
+            );
+            // The floor holds as on Titanium.
+            feature.explain(&mut done(), &world);
+            let again = testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&search(), &mut world, out)
+            });
+            assert_eq!(
+                refused(&again).as_deref(),
+                Some("Wait a moment before searching again.")
+            );
+        }
+
+        #[test]
+        fn a_level_bound_is_refused_and_nothing_goes() {
+            let mut world = in_bazaar();
+            let mut feature = Bazaar::eqmac();
+            let bounded = ClientCommand::BazaarSearch {
+                session_id: 5,
+                criteria: BazaarCriteria {
+                    max_level: Some(50),
+                    ..BazaarCriteria::default()
+                },
+            };
+            let outcome = testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&bounded, &mut world, out)
+            });
+            assert!(refused(&outcome).is_some_and(|reason| reason.starts_with("Cannot search")));
+            assert!(feature.asked.is_none() && feature.sent.is_none());
+        }
+
+        #[test]
+        fn each_row_passes_until_the_end_and_rows_past_the_most_are_gaps() {
+            let mut world = in_bazaar();
+            let mut feature = Bazaar::eqmac();
+            testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&search(), &mut world, out)
+            });
+            for _ in 0..bazaar::MOST_ROWS {
+                let mut one = row("Bone Chips");
+                feature.explain(&mut one, &world);
+                assert!(matches!(one, Message::Event(_)));
+            }
+            let mut past = row("Bone Chips");
+            feature.explain(&mut past, &world);
+            assert!(matches!(past, Message::Withheld));
+            let mut end = done();
+            feature.explain(&mut end, &world);
+            assert!(matches!(end, Message::Event(_)) && feature.asked.is_none());
+            let told = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+            let told = gaps(&told);
+            assert_eq!(told.len(), 1);
+            assert_eq!(
+                (told[0].opcode, told[0].min_length, told[0].sample.is_none()),
+                (0x1142, bazaar::eqmac::ROW_LENGTH, true)
+            );
+            // The next search counts its rows afresh.
+            feature.sent = Instant::now().checked_sub(FLOOR);
+            testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&search(), &mut world, out)
+            });
+            let mut one = row("Bone Chips");
+            feature.explain(&mut one, &world);
+            assert!(matches!(one, Message::Event(_)));
+        }
+
+        #[test]
+        fn an_end_alone_is_an_empty_search_and_an_unasked_end_a_gap() {
+            let mut world = in_bazaar();
+            let mut feature = Bazaar::eqmac();
+            let mut unasked = done();
+            feature.explain(&mut unasked, &world);
+            assert!(matches!(unasked, Message::Withheld));
+            let told = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+            assert_eq!(
+                gaps(&told)
+                    .iter()
+                    .map(|gap| (gap.opcode, gap.min_length))
+                    .collect::<Vec<_>>(),
+                [(0x1142, bazaar::eqmac::DONE_LENGTH)]
+            );
+            testing::run_on(&super::super::super::wire::EqMac, |out| {
+                feature.handle(&search(), &mut world, out)
+            });
+            let mut end = done();
+            feature.explain(&mut end, &world);
+            assert!(matches!(end, Message::Event(_)) && feature.asked.is_none());
+        }
     }
 
     mod browsing {
@@ -1152,14 +1376,20 @@ mod tests {
             let row = |trader| BazaarListing {
                 trader,
                 item_id: 1001,
-                serial: 77,
+                serial: Some(77),
                 name: "Bone Chips".into(),
                 count: Some(20),
                 price: 1250,
-                stat: 0,
+                stat: Some(0),
+                listings: None,
             };
+            // A Mac-era row names no trader out of the zone.
             feature.explain(
-                &mut event(BazaarEvent::Results(vec![row(TRADER), row(99)])),
+                &mut event(BazaarEvent::Results(vec![
+                    row(Some(TRADER)),
+                    row(Some(99)),
+                    row(None),
+                ])),
                 &world,
             );
             assert_eq!(feature.traders, BTreeSet::from([TRADER]));

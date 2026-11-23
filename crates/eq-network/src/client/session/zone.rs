@@ -2149,15 +2149,14 @@ mod tests {
                 continue;
             }
             // Built and tested, and listed by no server type until each
-            // one's own live check: feedback (6.511f), AAs (6.556), the
-            // Bazaar's search (6.550a), browsing a trader (6.558a), and the
+            // one's own live check: feedback (6.511f), AAs (6.556),
+            // browsing a trader (6.558a), and the
             // bandolier's sets and belt (6.564), its swap (6.566) and belt
             // use (6.568).
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
                     crate::world::Capability::SendingFeedback,
                     crate::world::Capability::AlternateAdvancement,
-                    crate::world::Capability::BazaarSearching,
                     crate::world::Capability::BazaarBrowsing,
                     crate::world::Capability::Bandoliers,
                     crate::world::Capability::PotionBelt,
@@ -3268,7 +3267,8 @@ mod tests {
                 Capability::Meals,
                 Capability::GameplayDepartures,
                 Capability::ApplyingPoison,
-                Capability::ServerFilters
+                Capability::ServerFilters,
+                Capability::BazaarSearching
             ]
         );
         assert_eq!(
@@ -3300,7 +3300,8 @@ mod tests {
                 Capability::Meals,
                 Capability::GameplayDepartures,
                 Capability::ApplyingPoison,
-                Capability::ServerFilters
+                Capability::ServerFilters,
+                Capability::BazaarSearching
             ]
         );
     }
