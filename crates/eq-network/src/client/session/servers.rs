@@ -510,11 +510,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
-    /// Searching the Bazaar, read only. Stock `EQEmu` alone has it on
-    /// Titanium; P99's era has no Bazaar, and TAKP's, Quarm's and `RoF2`'s
-    /// searches are other records. No server offers it until the local
-    /// live row passes (6.550a); then stock `EQEmu` offers
-    /// `offer(Box::<Bazaar>::default())`.
+    /// Searching the Bazaar, read only. P99's era has no Bazaar, and
+    /// `RoF2`'s search is unread. TAKP and Quarm offer the Mac-era search
+    /// from their source (6.580, [`shared::eqmac_bazaar`]), not live yet:
+    /// its row 6.580a stays open, and its first use on either server is
+    /// attended. Stock `EQEmu` offers `offer(Box::new(Bazaar::titanium()))`
+    /// once its local live row passes (6.550a).
     fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
@@ -870,6 +871,13 @@ mod shared {
 
     pub(super) fn ground_items() -> Box<dyn Feature> {
         Box::<GroundObjects>::default()
+    }
+
+    /// The Mac-era Bazaar search, source-derived and not live (6.580):
+    /// TAKP's and Quarm's `Client::Handle_OP_BazaarSearch` and
+    /// `Client::SendBazaarResults` are the same.
+    pub(super) fn eqmac_bazaar() -> Box<dyn Feature> {
+        Box::new(super::super::bazaar::Bazaar::eqmac())
     }
 
     pub(super) fn eqmac_doors() -> Box<dyn Feature> {
@@ -1681,6 +1689,11 @@ impl ServerType for Quarm {
         offer(shared::reading())
     }
 
+    /// Source-derived, not live (6.580a open; first use attended).
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_bazaar())
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::Quarm)
     }
@@ -1907,6 +1920,11 @@ impl ServerType for Takp {
     /// TAKP answers a kind and server-owned text, without a window byte.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::reading())
+    }
+
+    /// Source-derived, not live (6.580a open; first use attended).
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_bazaar())
     }
 
     /// TAKP's AA ranks, points, experience and timers (checklist 6.548),
@@ -2530,11 +2548,13 @@ mod tests {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
         // posture/camp lifecycle, abilities, casting, basic spellbook and
         // personal inventory actions, and, each from its own handlers, its
-        // giving, groups, listing and translocate (6.576). Other features
-        // await their own evidence.
+        // giving, groups, listing and translocate (6.576); both search the
+        // Bazaar from source (6.580), and each answers `/who all` and friends
+        // from its own handlers (6.583). Other features await their own
+        // evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 23);
+        assert_eq!(quarm.features(&setup).len(), 24);
         assert_eq!(
             offers(quarm),
             [
@@ -2565,10 +2585,11 @@ mod tests {
                 Capability::Meals,
                 Capability::FriendsWho,
                 Capability::ApplyingPoison,
+                Capability::BazaarSearching,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 25);
+        assert_eq!(takp.features(&setup).len(), 26);
         assert_eq!(
             offers(takp),
             [
@@ -2600,6 +2621,7 @@ mod tests {
                 Capability::Meals,
                 Capability::FriendsWho,
                 Capability::ApplyingPoison,
+                Capability::BazaarSearching,
             ]
         );
         for server in [quarm, takp] {
@@ -2952,25 +2974,28 @@ mod tests {
     }
 
     #[test]
-    fn no_server_offers_the_bazaar_search_before_its_live_row() {
-        // Built and tested from source (6.550); stock EQEmu offers it once
-        // the local live row passes.
-        for protocol in [
-            ServerProtocol::EqEmu,
-            ServerProtocol::Project1999,
-            ServerProtocol::Quarm,
-            ServerProtocol::Takp,
-            ServerProtocol::EqEmuRof2,
+    fn only_the_mac_era_servers_offer_the_bazaar_search_from_source() {
+        // TAKP and Quarm from their source (6.580); stock EQEmu once its
+        // local live row passes (6.550a); P99's era has no Bazaar.
+        for (protocol, offered) in [
+            (ServerProtocol::EqEmu, false),
+            (ServerProtocol::Project1999, false),
+            (ServerProtocol::Quarm, true),
+            (ServerProtocol::Takp, true),
+            (ServerProtocol::EqEmuRof2, false),
         ] {
-            assert!(
-                !offers(server_type(protocol)).contains(&Capability::BazaarSearching),
+            assert_eq!(
+                offers(server_type(protocol)).contains(&Capability::BazaarSearching),
+                offered,
                 "{protocol:?}"
             );
         }
-        assert_eq!(
-            super::super::bazaar::Bazaar::default().capabilities(),
-            [Capability::BazaarSearching]
-        );
+        for bazaar in [
+            super::super::bazaar::Bazaar::titanium(),
+            super::super::bazaar::Bazaar::eqmac(),
+        ] {
+            assert_eq!(bazaar.capabilities(), [Capability::BazaarSearching]);
+        }
     }
 
     #[test]

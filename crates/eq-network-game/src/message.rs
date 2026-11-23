@@ -594,6 +594,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             Message::ZonePoints,
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        crate::bazaar::eqmac::SEARCH_OPCODE => vec![eqmac_bazaar(body)],
         opcode if crate::alternate_advancement::is_eqmac(opcode) => {
             match crate::alternate_advancement::eqmac(opcode, body) {
                 Ok(update) => vec![Message::AlternateAdvancement(update)],
@@ -748,6 +749,16 @@ fn bazaar(body: &[u8], mut messages: Vec<Message>) -> Vec<Message> {
         Err(error) => Some(unreadable(Part::World, &error)),
     });
     messages
+}
+
+/// What a Mac-era server's `OP_BazaarSearch` says: an event, a kind no
+/// server is known to send, or why it could not be read.
+fn eqmac_bazaar(body: &[u8]) -> Message {
+    match crate::bazaar::eqmac::answer(body) {
+        Ok(crate::bazaar::eqmac::Answer::Event(event)) => Message::Event(WorldEvent::Bazaar(event)),
+        Ok(crate::bazaar::eqmac::Answer::Other(kind)) => Message::UnknownKind(kind.into()),
+        Err(error) => unreadable(Part::World, &error),
+    }
 }
 
 /// A Bazaar event, or why its record could not be read.
@@ -959,6 +970,39 @@ mod tests {
         short_row[0] = 7;
         assert!(matches!(
             titanium(crate::bazaar::SEARCH_OPCODE, &short_row)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn an_eqmac_bazaar_answer_is_a_row_the_end_a_kind_or_unreadable() {
+        let mut row = vec![0; crate::bazaar::eqmac::ROW_LENGTH];
+        row[0] = 7;
+        row[2] = 1;
+        row[12..18].copy_from_slice(b"Rusty ");
+        assert!(matches!(
+            &eqmac(0x1142, &row)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::Results(rows)
+            ))] if rows.len() == 1
+        ));
+        let mut done = vec![0; crate::bazaar::eqmac::DONE_LENGTH];
+        done[0] = 12;
+        assert!(matches!(
+            quarm(0x1142, &done)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::SearchDone
+            ))]
+        ));
+        assert!(matches!(
+            eqmac(0x1142, &[22, 0, 0, 0])[..],
+            [Message::UnknownKind(22)]
+        ));
+        assert!(matches!(
+            eqmac(0x1142, &row[..crate::bazaar::eqmac::ROW_LENGTH - 1])[..],
             [Message::Unreadable {
                 part: Part::World,
                 ..

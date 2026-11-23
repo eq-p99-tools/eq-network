@@ -29,6 +29,8 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 
+pub mod eqmac;
+
 /// Titanium's `OP_BazaarSearch`: the player's search and welcome request,
 /// and the server's results, end of search, welcome and delivery costs.
 pub const SEARCH_OPCODE: u16 = 0x1ee9;
@@ -119,31 +121,7 @@ pub struct BazaarCriteria {
 /// platinum (the server's "no bound"), a price the server's copper cannot
 /// hold, and a level of 0 or past 100.
 pub fn search(criteria: &BazaarCriteria) -> Result<Vec<u8>> {
-    ensure!(
-        criteria.name.len() < NAME_LENGTH,
-        "an item name of at most 63 letters"
-    );
-    ensure!(
-        criteria
-            .name
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic() || byte == b' '),
-        "an item name of plain letters"
-    );
-    for platinum in [criteria.min_platinum, criteria.max_platinum]
-        .into_iter()
-        .flatten()
-    {
-        // `EQEmu` takes 0 as no bound, and multiplies the least price into
-        // 32-bit copper.
-        ensure!(
-            (1..=u32::MAX / 1000).contains(&platinum),
-            "a price of at least 1 platinum"
-        );
-    }
-    if let (Some(least), Some(most)) = (criteria.min_platinum, criteria.max_platinum) {
-        ensure!(least <= most, "a least price no more than the most");
-    }
+    check_name_and_prices(criteria)?;
     for level in [criteria.min_level, criteria.max_level]
         .into_iter()
         .flatten()
@@ -186,6 +164,38 @@ pub fn search(criteria: &BazaarCriteria) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// The name and price bounds every generation's search shares: a name of
+/// at most 63 bytes of printable ASCII, and prices of at least 1 platinum
+/// that the server's copper can hold, the least no more than the most.
+pub(crate) fn check_name_and_prices(criteria: &BazaarCriteria) -> Result<()> {
+    ensure!(
+        criteria.name.len() < NAME_LENGTH,
+        "an item name of at most 63 letters"
+    );
+    ensure!(
+        criteria
+            .name
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' '),
+        "an item name of plain letters"
+    );
+    for platinum in [criteria.min_platinum, criteria.max_platinum]
+        .into_iter()
+        .flatten()
+    {
+        // Both servers take 0 as no bound, and multiply the price by 1000
+        // into 32-bit copper.
+        ensure!(
+            (1..=u32::MAX / 1000).contains(&platinum),
+            "a price of at least 1 platinum"
+        );
+    }
+    if let (Some(least), Some(most)) = (criteria.min_platinum, criteria.max_platinum) {
+        ensure!(least <= most, "a least price no more than the most");
+    }
+    Ok(())
+}
+
 /// Builds the welcome request: the action, then zeros to the welcome's
 /// length. `EQEmu` reads only the action; the length is the welcome's
 /// record (inferred, R49-42a).
@@ -200,12 +210,16 @@ pub fn welcome() -> Vec<u8> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BazaarListing {
     /// The trader's spawn in the zone; a host names the trader from its
-    /// own spawn list.
-    pub trader: u16,
-    /// The item's number.
+    /// own spawn list. `None` where the Mac-era server found the trader in
+    /// no zone (`SellerID` 0).
+    pub trader: Option<u16>,
+    /// The item's number. On the Mac-era protocol it arrives through the
+    /// server's 16-bit field, so a number past 32767 arrives wrapped and is
+    /// not to be trusted as an item's.
     pub item_id: u32,
-    /// The item's serial number, which names this one item of the trader's.
-    pub serial: u32,
+    /// The item's serial number, which names this one item of the
+    /// trader's; the Mac-era rows carry none.
+    pub serial: Option<u32>,
     /// The item's name, without the count the server adds.
     pub name: String,
     /// How many: the stack's charges, or 1; `None` where the server's name
@@ -213,8 +227,12 @@ pub struct BazaarListing {
     pub count: Option<u32>,
     /// The trader's price for it, in copper.
     pub price: u32,
-    /// The searched stat's value on the item, or 0.
-    pub stat: u32,
+    /// The searched stat's value on the item, or 0; the Mac-era rows carry
+    /// none.
+    pub stat: Option<u32>,
+    /// How many of the trader's listings the Mac-era row groups
+    /// (`NumItems`); Titanium's rows carry none.
+    pub listings: Option<u32>,
 }
 
 /// One item on the trader's list while the player browses them, as the
@@ -361,13 +379,14 @@ fn results(body: &[u8]) -> Result<Vec<BazaarListing>> {
                 .context("bazaar item name without its end")?;
             let (name, count) = counted(&String::from_utf8_lossy(&field[..end]));
             Ok(BazaarListing {
-                trader,
+                trader: Some(trader),
                 item_id: word(row, 12),
-                serial: word(row, 16),
+                serial: Some(word(row, 16)),
                 name,
                 count,
                 price: word(row, 24 + NAME_LENGTH),
-                stat: word(row, 28 + NAME_LENGTH),
+                stat: Some(word(row, 28 + NAME_LENGTH)),
+                listings: None,
             })
         })
         .collect()
@@ -375,7 +394,7 @@ fn results(body: &[u8]) -> Result<Vec<BazaarListing>> {
 
 /// Splits the server's `"Name(count)"`; a name the field cut short keeps
 /// all it has and no count.
-fn counted(text: &str) -> (String, Option<u32>) {
+pub(crate) fn counted(text: &str) -> (String, Option<u32>) {
     text.strip_suffix(')')
         .and_then(|rest| rest.rsplit_once('('))
         .and_then(|(name, count)| {
@@ -609,13 +628,14 @@ mod tests {
         assert_eq!(
             rows[0],
             BazaarListing {
-                trader: 312,
+                trader: Some(312),
                 item_id: 1001,
-                serial: 77,
+                serial: Some(77),
                 name: "Bone Chips".into(),
                 count: Some(20),
                 price: 1250,
-                stat: 3,
+                stat: Some(3),
+                listings: None,
             }
         );
         assert_eq!(

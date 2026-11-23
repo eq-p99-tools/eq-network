@@ -2149,15 +2149,14 @@ mod tests {
                 continue;
             }
             // Built and tested, and listed by no server type until each
-            // one's own live check: feedback (6.511f), the Bazaar's search
-            // (6.550a), browsing a trader (6.558a), and the bandolier's sets
-            // and belt (6.564), its swap (6.566) and belt use (6.568). AAs
-            // are listed on local EQEmu (6.581), so they take the owner
-            // check below.
+            // one's own live check: feedback (6.511f), browsing a trader
+            // (6.558a), and the bandolier's sets and belt (6.564), its swap
+            // (6.566) and belt use (6.568). AAs are listed on local EQEmu
+            // (6.581), so they take the owner check below, as does the
+            // Mac-era Bazaar search, offered on TAKP and Quarm (6.580).
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
                     crate::world::Capability::SendingFeedback,
-                    crate::world::Capability::BazaarSearching,
                     crate::world::Capability::BazaarBrowsing,
                     crate::world::Capability::Bandoliers,
                     crate::world::Capability::PotionBelt,
@@ -3276,7 +3275,8 @@ mod tests {
                 Capability::GameplayDepartures,
                 Capability::FriendsWho,
                 Capability::ApplyingPoison,
-                Capability::ServerFilters
+                Capability::ServerFilters,
+                Capability::BazaarSearching
             ]
         );
         assert_eq!(
@@ -3311,7 +3311,8 @@ mod tests {
                 Capability::GameplayDepartures,
                 Capability::FriendsWho,
                 Capability::ApplyingPoison,
-                Capability::ServerFilters
+                Capability::ServerFilters,
+                Capability::BazaarSearching
             ]
         );
     }
