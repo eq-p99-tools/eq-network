@@ -827,6 +827,48 @@ impl Script {
                 },
             ),
         );
+        // How the other player looks and how hurt they are (6.518): they
+        // sit, grow, change their chest, swing, are stunned and recover, and
+        // drop to half health; the player's own hit points come too.
+        let word = |value: u32| value.to_le_bytes();
+        let looks: [(u16, Vec<u8>); 8] = [
+            (
+                0x0971,
+                [&77u16.to_le_bytes()[..], &14u16.to_le_bytes(), &word(110)].concat(),
+            ),
+            (
+                0x4707,
+                [
+                    word(77),
+                    6.0f32.to_bits().to_le_bytes(),
+                    word(0),
+                    1.0f32.to_bits().to_le_bytes(),
+                ]
+                .concat(),
+            ),
+            (
+                0x2828,
+                [&77u16.to_le_bytes()[..], &word(90), &word(120)].concat(),
+            ),
+            (0x37b1, vec![77, 0, 50]),
+            (
+                0x7994,
+                [
+                    &77u16.to_le_bytes()[..],
+                    &word(70_000),
+                    &[0; 16],
+                    &word(0),
+                    &[1],
+                ]
+                .concat(),
+            ),
+            (0x7177, vec![77, 0, 5, 10]),
+            (0x559a, [word(77), word(32)].concat()),
+            (0x2d25, [word(77), word(32)].concat()),
+        ];
+        for (opcode, body) in looks {
+            script.packet(opcode, body);
+        }
         script.packet(DESPAWN_OPCODE, despawn_body(77));
         script.packet(DESPAWN_OPCODE, despawn_body(4321));
         script.packet(0x7213, vec![0; 385]);
@@ -985,12 +1027,62 @@ fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_gene
         })
         .collect();
     assert_eq!(removed, [77, 4321]);
-    for opcode in ["0x7dfc", "0x7280"] {
+    for opcode in [
+        "0x7dfc", "0x7280", "0x0971", "0x4707", "0x2828", "0x37b1", "0x7994", "0x7177", "0x559a",
+        "0x2d25",
+    ] {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"
         );
     }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_each_look_and_health_message() {
+    let (sent, _, events) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    // Each look and health message reaches the host as one event (6.518).
+    let looks: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Posture { spawn_id: 77, .. } => Some("posture".into()),
+            WorldEvent::Appearance {
+                spawn_id: 77,
+                change,
+            } => Some(format!("{change:?}")),
+            WorldEvent::HitPoints {
+                spawn_id: 77,
+                current,
+                maximum,
+                ..
+            } => Some(format!("hp {current}/{maximum}")),
+            WorldEvent::HealthPercent {
+                spawn_id: 77,
+                percent,
+            } => Some(format!("health {percent}")),
+            WorldEvent::WearChange(change) if change.spawn_id == 77 => {
+                Some(format!("wear {}", change.material))
+            }
+            WorldEvent::Animation(animation) if animation.spawn_id == 77 => {
+                Some(format!("animation {}", animation.action))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        looks,
+        [
+            "posture",
+            "Size(6.0)",
+            "hp 90/120",
+            "health 50",
+            "wear 70000",
+            "animation 5",
+            "StatesAdded(SpawnStates(32))",
+            "StatesRemoved(SpawnStates(32))",
+        ]
+    );
 }
 
 #[test]
