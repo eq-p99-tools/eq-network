@@ -2252,10 +2252,10 @@ pub enum WorldEvent {
         /// New server skill value.
         value: u32,
     },
-    /// A quest's word on the player's base stats: each stat's new value or
-    /// its rise, which the record does not tell apart ([`crate::stats`]);
-    /// the next profile has them as the server keeps them.
-    StatsChanged(crate::stats::StatChange),
+    /// A word on a spawn's base stat, as the Titanium program reads it
+    /// ([`crate::stats`], read R49-6f). `EQEmu`'s own 141-byte form is
+    /// unreadable here, as it is to the program, and counted as a gap.
+    StatsChanged(crate::stats::StatIncrease),
     /// A skill's button is ready again, by the servers' number for the
     /// skill: `EQMac`'s servers' word, before the official client's own
     /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
@@ -2578,7 +2578,7 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::stats::INCREASE_STATS_OPCODE => {
             return Ok(Some(WorldEvent::StatsChanged(
-                crate::stats::titanium_change(body)?,
+                crate::stats::titanium_increase(body)?,
             )));
         }
         crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
@@ -3534,17 +3534,20 @@ mod tests {
     }
 
     #[test]
-    fn a_quests_word_on_the_players_stats_is_read() {
-        let mut body = vec![0; 141];
-        body[1] = 5;
+    fn a_stat_increase_is_read_as_the_program_reads_it_and_eqemus_form_is_not() {
+        let body: Vec<u8> = [7u32, 1, 5]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
         assert_eq!(
             titanium_update(0x5b7b, &body).unwrap(),
-            Some(WorldEvent::StatsChanged(crate::stats::StatChange {
-                strength: 5,
-                ..crate::stats::StatChange::default()
+            Some(WorldEvent::StatsChanged(crate::stats::StatIncrease {
+                spawn_id: 7,
+                stat: 1,
+                amount: 5,
             }))
         );
-        assert!(titanium_update(0x5b7b, &body[..140]).is_err());
+        assert!(titanium_update(0x5b7b, &[0; 141]).is_err());
     }
 
     #[test]

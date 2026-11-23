@@ -2068,7 +2068,9 @@ opponent during the duel, changes nothing. A challenge from the one the
 player challenged starts the duel with nothing sent (`Begun`).
 
 The opponent's death ends the duel: `Won` when the player killed them
-during it, otherwise `Ended`. The program then sends an 8-byte 0x3bad,
+during it, otherwise `Ended`. Before a duel starts, the death of the one
+challenging or the one challenged also tells `Ended` (inferred, pending a
+follow-up read). The program then sends an 8-byte 0x3bad,
 whose body is unread, so the session sends nothing there yet. The
 player's own death, zoning and logging out forget the duel.
 
@@ -2080,7 +2082,8 @@ exactly what `/duel` at the challenger sends. A no forgets the challenge
 here and sends nothing: Titanium has no decline. It closes with
 `WorldEvent::ConsentClosed`, `AnswerSent` after an answer and
 `Interrupted` when the duel state is forgotten. A stale answer is refused
-and sends nothing. `Request::AnswerDuel` with `accept: false` is refused
+and sends nothing. Outside a zone, `/duel` and the answer are refused;
+the session makes no posture or motion test, as the program makes none. `Request::AnswerDuel` with `accept: false` is refused
 on Titanium.
 
 `EQEmu` maps 0x3bad, not 0x3ea0, to its decline, so on stock `EQEmu` a

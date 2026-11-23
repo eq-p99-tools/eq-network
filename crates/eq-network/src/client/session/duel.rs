@@ -201,6 +201,11 @@ impl TitaniumDuel {
     }
 
     /// `OP_Death` (0x4a8cd5): the opponent's or challenger's death ends it.
+    ///
+    /// Either id counts, the one challenging the player or the one the
+    /// player challenged, so a death before the duel starts also tells
+    /// `Ended` (0x2f45). That the program matches both ids before a duel is
+    /// inferred, pending the follow-up read of 0x4a8cd5.
     fn died(
         &mut self,
         (dead, killer): (u16, u32),
@@ -243,7 +248,9 @@ impl Feature for TitaniumDuel {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if !world.ready() || world.lifecycle.blocks_motion() {
+        // Ours: outside a zone there's no one to send to. The program has no
+        // posture or motion test for `/duel`, so none is made here.
+        if !world.ready() {
             return actions::refuse(command, "You can't do that now.", out.log);
         }
         match *command {

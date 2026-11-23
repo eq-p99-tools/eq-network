@@ -6,13 +6,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - Follow the Titanium program's read R49-6 for duels, stuns, becoming a
-  corpse, `/lfg`, the quest reward and `/sheathe` and `/aggressive`.
+  corpse, `/lfg`, the quest reward, stat increases and `/sheathe` and
+  `/aggressive`.
   - **Breaking.** `WorldEvent::DuelNews(socials::DuelNews)` is new, and
     `Capability::WeaponStances` and `GameCommand::ToggleStance` are new.
     `GameCommand::ChallengeDuel`'s `target` is now the player's target, or
     0 for none. `Request::AnswerDuel` with `accept: false` is refused on
     Titanium, and `Request::AutoDeclineDuel` and `Request::PlayerState` are
-    new.
+    new. `WorldEvent::StatsChanged` now carries `stats::StatIncrease`.
   - **Duel.** The program has no challenge window and no decline. A
     challenge is news. `/duel` at the challenger accepts with
     `OP_RequestDuel`, then `OP_DuelAccept`; anywhere else it challenges.
@@ -31,6 +32,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Stances.** `/sheathe` and `/aggressive` flip state bit 2 or 8 and send
     `OP_PlayerStateAdd` or `OP_PlayerStateRemove`, on stock `EQEmu` only.
     The first P99 use is attended.
+  - **Stats.** `OP_IncreaseStats` is read as the program reads it, 12 bytes
+    `{spawn, stat, amount}` (`stats::StatIncrease`, which replaces
+    `stats::StatChange`; breaking). `EQEmu`'s own 141-byte form is
+    unreadable, as it is to the program, and each one is counted as a gap
+    with its length.
 
 - Apply Poison as the Titanium program does it (read R49-1, 6.493): the
   session sits a standing player, waits 10 s seated, then sends the request.
