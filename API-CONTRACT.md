@@ -165,6 +165,7 @@ always in the common tongue.
 The pure `encode` helper does not own a session and cannot perform this guard;
 hosts using it directly must validate their own admission first.
 
+<<<<<<< HEAD
 ## Door clicks and the clicked point
 
 `GameCommand::ClickDoor` carries `point: Option<Position>`: where the host's own
@@ -183,6 +184,28 @@ door's origin where it stands now, is refused in our own words with no string
 (our guard, not the program's). With no point (a key, a script) the reach is
 today's: 3-D to the door's origin where it stands now, within 20, which is
 stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule.
+=======
+## Chat pacing
+
+One pace holds all the chat a host asks for: `SendChat` and `SendChatInAdmission`
+on every zone channel and tells, and `ChatChannel` commands and messages on the chat
+server link, whether typed, from a social or hotbutton, or from a script. It is the
+character's, so it spans zones. At most 10 lines of any chat go in any 5 s, and at most
+12 shout, auction, out-of-character, tell and channel messages (`2 hello`, `#name hello`)
+and chat server commands in any 60 s; only `join`, `leave`, `leaveall`, `list`, `listall`
+and `announce`, which reach no one else, are left out of that count, and an unknown word
+is counted. Both windows slide, so any span of that length holds no more; stock
+`EQEmu` counts those kinds 4 to 12 a minute and disconnects a client past 20. The
+numbers are this library's, inferred until the official client's own chat pacing is
+read (recording checklist 6.523, R49-17); the official client has no known limiter, so
+this is a departure that only makes the client slower, on every server type.
+
+A paced line is refused, never kept for later, and a refused line is not counted.
+Zone chat is told by `WorldEvent::ChatRefused { session_id, reason }`, a channel
+command by `ChatChannelRefused`; the reason says how many whole seconds to wait (never
+0) and never repeats the line. Only what a host asked for is counted: the chat link's
+own login and the local fixture's depop are not.
+>>>>>>> origin/main
 
 ## Titanium lifts and door mechanisms
 
@@ -1525,6 +1548,10 @@ out there like any other unoffered command. Every checked server type offers
 the departures while the owner tests them (2026-11-06); a departure on a
 public server is faster or more permissive than the official client, and the
 accessor is the one place to withhold it per server type.
+
+One departure is not opt-in and not gated: chat pacing (see "Chat pacing"),
+inferred, which only ever makes the client slower and holds on every server
+type.
 
 `movement::MovementOptions` starts with both toggles off and ordinary running
 speed. The admission-scoped

@@ -9,6 +9,7 @@ mod camp;
 mod casting;
 mod character;
 pub(super) mod chat_link;
+mod chat_pace;
 mod clock;
 mod combat;
 mod confirmations;
@@ -213,6 +214,8 @@ pub(in crate::client) struct CharacterSession<'a> {
     /// The character's chat server link, opened from the world's offer
     /// where the server type opens one, kept across zones.
     pub(in crate::client) chat: std::sync::Arc<chat_link::ChatLink>,
+    /// The character's one pace for all chat, kept across zones (6.523).
+    pub(in crate::client) chat_pace: chat_pace::SharedPace,
 }
 
 impl<'a> CharacterSession<'a> {
@@ -236,6 +239,7 @@ impl<'a> CharacterSession<'a> {
             server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
+            chat_pace: chat_pace::SharedPace::default(),
         }
     }
 

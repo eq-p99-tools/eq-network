@@ -184,7 +184,7 @@ pub fn eqmac_action(body: &[u8]) -> Result<Action> {
 
 /// An action that is not a spell's: the spin, by its kind and spawns, or
 /// another kind.
-fn other_action(body: &[u8], kind_at: usize) -> Action {
+pub(crate) fn other_action(body: &[u8], kind_at: usize) -> Action {
     let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
     match body[kind_at] {
         0 if short(0) == SPIN_SPAWN && short(2) == SPIN_SPAWN => Action::Spin,

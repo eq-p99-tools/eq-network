@@ -20,6 +20,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same helper, with the same numbers.
   **Breaking:** a new field on `GameCommand::ClickDoor`.
 
+- Pace all chat a host asks for (6.523). Every `SendChat`,
+  `SendChatInAdmission` and `ChatChannel` goes through one pace that spans
+  zones: at most 10 lines in any 5 s, and at most 12 shout, auction,
+  out-of-character, tell and channel messages and chat server commands in
+  any 60 s, below stock `EQEmu`'s disconnect at more than 20 a minute. Only
+  `join`, `leave`, `leaveall`, `list`, `listall` and `announce`, which reach
+  no one else, are left out of that count; an unknown word is counted. Both bounds are inferred
+  (R49-17) and only ever make the client slower. A paced line is refused,
+  not queued and not counted; zone chat is told by the new
+  `WorldEvent::ChatRefused`, channel commands by `ChatChannelRefused`, with
+  the whole seconds to wait and never the line. The chat link's own login
+  is not counted. **Breaking:** `WorldEvent::ChatRefused` is a new variant.
+
+- Read RoF2's casting, stuns and illusions as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.522). The new `rof2_casting` module reads
+  `OP_BeginCast` (0x318f, 10 bytes, the spell in 32 bits refused past 16),
+  `OP_Action` (0x744c, the 56-byte `ActionAlt_Struct`), `OP_InterruptCast`
+  (0x048c, unencoded, through Titanium's reader, now the named
+  `spells::interrupted`), `OP_Stun` (0x36a4, 8 bytes, the last four the
+  encoder's constants), `OP_Illusion` (0x312a, 336 bytes, a 16-bit race)
+  and `OP_SetFace` (0x1af3, the server's 24-byte face change with both eye
+  colors), each giving Titanium's event for the same server values. The
+  action's float instrument modifier reads back as the server's integer,
+  `round(value * 10)` within a tolerance that grows with the value, up to
+  100,000; the server's 0 to 9, which the encoder's unsigned arithmetic
+  wraps alike, read 0. Coverage lists the six, with the Drakkin words as
+  the illusion's and face change's part. An admitted RoF2 session hands
+  the host each and still sends and offers nothing.
 - Keep a late scribe answer's hold until its cursor removal (6.526). A
   scribe that timed out and then got its late book confirmation, after the
   player moved the scroll, lost its receipt to any other inventory update,
