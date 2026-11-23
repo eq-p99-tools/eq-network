@@ -1428,6 +1428,17 @@ revision, capability and scenario. Separate source-derived behavior, synthetic
 codec/state-machine tests, and live evidence. A check on one server type does not
 list a feature on another: one checked on TAKP waits for its own check on Quarm.
 
+A Mac server type may also list a feature from a read of that server's own
+handlers at a named commit, never from another server's: the offer is
+labelled "source-derived, not live" in its server type, its checklist row
+stays open until a live row, and a live defect withdraws the offer on that
+server first. Quarm's source is public (SecretsOTheP/EQMacEmu). Quarm offers
+`Giving`, `Grouping`, `Listing` and `Translocate` this way, from its handlers
+at fc75fcf (6.576). Its own refusals (self-found and challenge modes, Iksar
+zones, GM checks) answer as its lines. A Quarm translocate is answered as on
+TAKP, but Quarm sends no second offer after a yes: it moves the player with
+its ordinary zone change.
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

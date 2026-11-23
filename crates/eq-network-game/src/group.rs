@@ -595,6 +595,32 @@ fn update(body: &[u8]) -> Result<Option<GroupUpdate>> {
 
 #[cfg(test)]
 mod tests {
+    /// Quarm's handlers (SecretsOTheP/EQMacEmu fc75fcf, `zone/client_packet.cpp`)
+    /// drop a group request of any other size: `Handle_OP_GroupInvite2` 193
+    /// (`GroupInvite_Struct`), `GroupFollow` and `GroupDisband` 128
+    /// (`GroupGeneric_Struct`), `GroupCancelInvite` 129 (`GroupCancel_Struct`).
+    #[test]
+    fn eqmac_requests_are_the_sizes_quarms_handlers_check() {
+        for (command, length) in [
+            (
+                crate::group::eqmac_invite("Friend", "Tester", false).unwrap(),
+                193,
+            ),
+            (
+                crate::group::eqmac_invite("Friend", "Tester", true).unwrap(),
+                193,
+            ),
+            (crate::group::eqmac_follow("Leader", "Tester").unwrap(), 128),
+            (crate::group::eqmac_disband("Tester").unwrap(), 128),
+            (
+                crate::group::eqmac_decline("Leader", "Tester").unwrap(),
+                129,
+            ),
+        ] {
+            assert_eq!(command.body.len(), length, "{:#06x}", command.opcode);
+        }
+    }
+
     use super::*;
 
     /// A name in its field, at a place in a body.

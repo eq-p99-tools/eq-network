@@ -478,6 +478,9 @@ mod tests {
             eqmac_translocate_answer(&offer, true).body[COMPLETE..],
             [1, 0, 0, 0]
         );
+        // Quarm's `Handle_OP_Translocate` (fc75fcf) drops an answer of any
+        // size but its 92-byte `Translocate_Struct`, and moves on 1.
+        assert_eq!(eqmac_translocate_answer(&offer, true).body.len(), 92);
         assert!(titanium_translocate(&body[..91]).is_err());
     }
 

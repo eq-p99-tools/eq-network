@@ -702,7 +702,7 @@ fn quarm_banking_requires_a_live_admitted_session_even_beside_a_banker() {
 }
 
 #[test]
-fn quarm_inventory_composes_with_meals_and_keeps_exchanges_disabled() {
+fn quarm_inventory_composes_with_meals_and_giving() {
     use eq_network_game::food::Nourishment;
     let mut food = stack(22, 10);
     food.rules.item_type = 14;
@@ -714,10 +714,11 @@ fn quarm_inventory_composes_with_meals_and_keeps_exchanges_disabled() {
         Capability::Looting,
         Capability::Trading,
         Capability::Meals,
+        // Quarm's own trade handlers (6.576).
+        Capability::Giving,
     ] {
         assert!(features.capabilities().contains(&capability));
     }
-    assert!(!features.capabilities().contains(&Capability::Giving));
     let output = submit(
         &mut features,
         &mut world,
@@ -737,7 +738,9 @@ fn quarm_inventory_composes_with_meals_and_keeps_exchanges_disabled() {
             created: Instant::now(),
         },
     );
-    assert!(!output.result.unwrap());
+    // Quarm's exchange owns the offer now (6.576); with no spawn 9 in
+    // reach nothing goes.
+    assert!(output.result.unwrap());
     assert_eq!(output.sent, []);
     let output = testing::run_on(servers::server_type(ServerProtocol::Quarm).wire(), |out| {
         features.observe(

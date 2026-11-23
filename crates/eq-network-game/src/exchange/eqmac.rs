@@ -274,6 +274,11 @@ mod tests {
         decode(opcode, body).unwrap()
     }
 
+    /// TAKP's and Quarm's handlers (Quarm: SecretsOTheP/EQMacEmu fc75fcf)
+    /// drop a request or acknowledgement other than 4 bytes
+    /// (`TradeRequest_Struct`), a cancel other than 4 (`CancelTrade_Struct`)
+    /// and a refusal other than 6 (`RefuseTrade_Struct`); the accept's size
+    /// is unchecked.
     #[test]
     fn the_player_asks_takes_clicks_and_closes_in_sixteen_bit_ids() {
         assert_eq!(

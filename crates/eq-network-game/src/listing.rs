@@ -344,6 +344,19 @@ pub fn titanium_guilds(body: &[u8]) -> Result<Vec<(u32, String)>> {
 
 #[cfg(test)]
 mod tests {
+    /// Quarm's `Handle_OP_SpawnAppearance` (fc75fcf) drops any update but
+    /// the 8-byte `SpawnAppearance_Struct` {spawn u16, type u16, parameter
+    /// u32}, and takes 0, 1, 2 or 3 for the anonymous type (21).
+    #[test]
+    fn eqmac_anonymity_is_the_record_quarm_reads() {
+        let command =
+            crate::listing::eqmac_anonymity(42, crate::listing::Anonymity::Roleplaying).unwrap();
+        assert_eq!(command.opcode, crate::quarm::ZONE_SPAWN_APPEARANCE);
+        assert_eq!(command.body.len(), 8);
+        assert_eq!(command.body[..4], [42, 0, 21, 0]);
+        assert_eq!(command.body[4..], [2, 0, 0, 0]);
+    }
+
     use super::*;
 
     #[test]
