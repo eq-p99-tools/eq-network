@@ -19,6 +19,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     program sends (was 2049, the field's size).
   - The fields the program fills from what this library lacks are named and
     stay zero; the system information always stays empty.
+- The Titanium buff slot finder's steps 4 and 6 and the effect-327 top, as
+  read R49-22e reads 0x414071 (checklist 6.612).
+  - **Breaking:** `buffs::placement::Finder` is now
+    `fn(&Landing) -> Result<Placed, Unplaced>`. `Landing` holds the slots
+    held, each as a `Spell` (id, band, Bard level, the twelve `Effect`s),
+    the landing `Spell`, the step-2 blocker and `others_add_no_slots`
+    (false until the worn items' and abilities' effect 327 are known).
+    `Placed` gives the slot, the slot whose buff the program removes
+    first, and the `Rule` that chose it. `Unplaced` gains `ValueUnknown`
+    and `Refused(Rule)`.
+  - Step 4 compares the landing with every held buff, effect by effect, in
+    the read's order, and replaces a weaker conflict in place, nominates a
+    slot where either side has +0x17d, or refuses. Values are 0x40f339's,
+    as its read gives them: the formula table, the slow rule, the cap at
+    |max| and the base's sign, at the held entry's stored level and the
+    caster's (`Spell::level`, `Effect::max`). An unknown level a formula
+    needs, the random formula 123, and 137 and 138 (the owner's hit
+    points) leave the landing unslotted (`ValueUnknown`).
+  - Step 6: a landing without +0x17d and no room evicts the first held
+    spell with it, from slot 0; the player's +0x256 is taken as 0 [I].
+  - The normal band names slots below 15 plus what the held buffs' effect
+    327 adds (at most 10). Past that the top is unknown unless every slot
+    to 25 is full.
+  - A replace or an eviction is a prediction: the server's next buff state
+    stays the authority. Any missing fact leaves the landing unslotted.
 - `Capability::Melody`: where the server type takes a Bard's `/melody`
   (read R49-33 c): P99 and stock Titanium `EQEmu`; not the Mac-era server
   types, whose program is unread. The host runs the melody with `StopSong` and gem casts, and a
