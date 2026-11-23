@@ -159,6 +159,13 @@ pub enum Request {
         /// Why.
         reason: socials::DuelAutoDecline,
     },
+    /// The Titanium program's word that the duel is over, when the player
+    /// kills the opponent or the opponent leaves
+    /// ([`socials::titanium_duel_over`]); the `EQMac` client's is not read.
+    DuelOver {
+        /// The opponent.
+        opponent: u16,
+    },
     /// `OP_RequestDuel` naming the other player: a challenge, and on
     /// `EQMac`, by TAKP's note, also what its client sends before it
     /// accepts.
@@ -645,6 +652,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::PlayerState { stance, on } => {
             crate::appearance::titanium_player_state(duelist(sender)?, stance.states(), *on)
         }
+        Request::DuelOver { opponent } => socials::titanium_duel_over(*opponent, duelist(sender)?),
         Request::AutoDeclineDuel { challenger, reason } => {
             socials::titanium_duel_auto_decline(*challenger, duelist(sender)?, *reason)
         }

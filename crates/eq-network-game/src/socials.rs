@@ -196,6 +196,15 @@ pub enum DuelUpdate {
         /// Why.
         reason: DuelRefusal,
     },
+    /// Another Titanium program turned the player's challenge down on its
+    /// own (0x3ea0, R49-6d: 0x45d5af). `EQEmu` doesn't map the opcode, so
+    /// it never passes one on; a server that does would send this.
+    AutoDeclined {
+        /// The one who turned it down.
+        by: u16,
+        /// Why, by the program's byte; None for a byte it has no line for.
+        reason: Option<DuelAutoDecline>,
+    },
 }
 
 /// A challenge to a duel the player may answer, once
@@ -234,6 +243,17 @@ impl DuelAutoDecline {
             Self::Ignored => 0,
             Self::Dueling => 1,
             Self::Considering => 2,
+        }
+    }
+
+    /// The reason a byte names, if any.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Ignored),
+            1 => Some(Self::Dueling),
+            2 => Some(Self::Considering),
+            _ => None,
         }
     }
 }
@@ -283,10 +303,32 @@ pub enum DuelNews {
         /// The opponent who died.
         over: u16,
     },
-    /// The duel ended with the opponent's death at another's hand
-    /// (0x2f45, %1 and %2 the opponent's name).
+    /// The duel partner died otherwise: at another's hand, or before the
+    /// duel began (0x2f45, %1 and %2 their name).
     Ended {
-        /// The opponent who died.
+        /// The partner who died.
+        opponent: u16,
+    },
+    /// The one the player challenged turned it down on their program's own
+    /// (R49-6d): 0x567 they ignore the player, 0x568 they are dueling, 0x569
+    /// another challenge waits for them (%1 their name, colour 15). No line
+    /// for None.
+    TurnedDown {
+        /// Who.
+        by: u16,
+        /// Why; None for a byte the program has no line for.
+        reason: Option<DuelAutoDecline>,
+    },
+    /// The one the player challenged left before accepting (0x581, %1 their
+    /// name, colour 15; R49-6d, 0x4581b7).
+    Lapsed {
+        /// Who.
+        target: u16,
+    },
+    /// The opponent left during the duel, which the player wins (0x580, %1
+    /// the player's name, %2 and %3 theirs, colour 0x10d; R49-6d).
+    Forfeited {
+        /// The opponent who left.
         opponent: u16,
     },
 }
@@ -542,6 +584,21 @@ pub fn titanium_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
     }
 }
 
+/// The Titanium program's word that a duel is over, which it sends when
+/// the player kills the opponent or the opponent leaves (R49-6d: 0x4a8cd5,
+/// 0x4581b7): 0x3bad, 8 bytes, the opponent then the player, each 32 bits.
+/// `EQEmu` maps 0x3bad to its 12-byte decline, so it drops this one.
+#[must_use]
+pub fn titanium_duel_over(opponent: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: DUEL_DECLINE_OPCODE,
+        body: [u32::from(opponent), u32::from(own)]
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect(),
+    }
+}
+
 /// `EQEmu`'s Titanium decline: `OP_DuelDecline` (12 bytes,
 /// `DuelResponse_Struct`), the challenger, the player and a zero word. The
 /// official program has no decline command and never sends this (R49-6a),
@@ -730,6 +787,7 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         REQUEST_DUEL_OPCODE => WorldEvent::Duel(titanium_challenge(body)?),
         DUEL_ACCEPT_OPCODE => WorldEvent::Duel(titanium_accepted(body)?),
+        DUEL_AUTO_DECLINE_OPCODE => WorldEvent::Duel(titanium_auto_declined(body)?),
         _ => return Ok(None),
     }))
 }
@@ -813,6 +871,20 @@ fn titanium_accepted(body: &[u8]) -> Result<DuelUpdate> {
     Ok(DuelUpdate::Accepted {
         challenger: spawn(body, 0, "duel acceptance")?,
         accepter: spawn(body, 4, "duel acceptance")?,
+    })
+}
+
+/// Decodes another Titanium program's own refusal, 0x3ea0 (12 bytes): a
+/// word, the one refusing's spawn at +4 and the reason's byte at +8, as
+/// 0x45d5af reads them (R49-6d).
+///
+/// # Errors
+/// Rejects a wrong length and a spawn that is zero or past 16 bits.
+fn titanium_auto_declined(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 12, "invalid duel refusal length");
+    Ok(DuelUpdate::AutoDeclined {
+        by: spawn(body, 4, "duel refusal")?,
+        reason: DuelAutoDecline::from_byte(body[8]),
     })
 }
 
@@ -1084,6 +1156,34 @@ mod tests {
         }
         assert!(titanium_challenge(&words(300, 300)[..7]).is_err());
         assert!(titanium_accepted(&words(300, 7)[..7]).is_err());
+        // Another program's own refusal: the one refusing at +4, the reason
+        // at +8 (0x45d5af), the very bytes this program sends.
+        for (byte, reason) in [
+            (1, Some(DuelAutoDecline::Dueling)),
+            (2, Some(DuelAutoDecline::Considering)),
+            (9, None),
+        ] {
+            let mut sent = titanium_duel_auto_decline(7, 300, DuelAutoDecline::Ignored);
+            sent.body[8] = byte;
+            assert_eq!(
+                titanium_update(DUEL_AUTO_DECLINE_OPCODE, &sent.body).unwrap(),
+                Some(WorldEvent::Duel(DuelUpdate::AutoDeclined {
+                    by: 300,
+                    reason
+                }))
+            );
+        }
+        assert!(titanium_auto_declined(&[0; 11]).is_err());
+        assert!(titanium_auto_declined(&[0; 12]).is_err());
+        // The program's word that the duel is over: the opponent, then the
+        // player.
+        assert_eq!(
+            titanium_duel_over(300, 7),
+            EncodedCommand {
+                opcode: 0x3bad,
+                body: words(300, 7),
+            }
+        );
     }
 
     #[test]

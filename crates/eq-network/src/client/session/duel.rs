@@ -11,9 +11,16 @@
 //! departure the host owns, on by default in eq-client): its yes sends what
 //! `/duel` sends, and its no forgets the challenge here and sends nothing.
 //!
-//! The ignore list's refusal (reason 0) is not taken: the session keeps no
-//! ignore list. The 8-byte 0x3bad the program sends when the player wins is
-//! not sent: its body is not read.
+//! The program's side of the duel, [0x9238d8], is the one the player
+//! challenged or accepted; it alone decides a death (0x4a8cd5), a refusal
+//! (0x3ea0, 0x45d5af) and a departure (`OP_DeleteSpawn`, 0x4581b7), by read
+//! R49-6d. When the player kills the opponent, or the opponent leaves during
+//! the duel, the program sends 0x3bad, 8 bytes, the opponent then the
+//! player; `EQEmu` drops it, taking 0x3bad as its 12-byte decline.
+//!
+//! The ignore list's refusal (reason 0) is not sent: the session keeps no
+//! ignore list, so an ignored player's challenge is asked about like any
+//! other.
 use super::{
     actions,
     confirmations::closed,
@@ -65,9 +72,10 @@ impl TitaniumDuel {
             .send(super::ClientEvent::World(WorldEvent::DuelNews(news)))
     }
 
-    /// The opponent, or the one challenged or challenging.
-    fn involves(&self, spawn: u16) -> bool {
-        self.incoming == Some(spawn) || self.outgoing == Some(spawn)
+    /// Whether the spawn is the player's side of the duel, [0x9238d8]: the
+    /// one challenged, or accepted, and in a duel always the opponent.
+    fn partner(&self, spawn: u16) -> bool {
+        self.outgoing == Some(spawn)
     }
 
     /// A challenge reaching the player, as 0x453231 takes it.
@@ -183,6 +191,10 @@ impl TitaniumDuel {
                 && offer_id.session_id == world.session_id
                 && self.incoming == Some(question.challenger)
                 && !self.active
+                // Ours: `EQEmu` looks the one named up without checking
+                // they exist, so the card never names one gone from the
+                // zone. `/duel` reaches only a target in it.
+                && world.spawns.get(question.challenger).is_some()
         });
         let Some(question) = current else {
             return actions::refuse(
@@ -200,26 +212,60 @@ impl TitaniumDuel {
         self.close_question(out, ConsentClosure::AnswerSent { accept: false })
     }
 
-    /// `OP_Death` (0x4a8cd5): the opponent's or challenger's death ends it.
-    ///
-    /// Either id counts, the one challenging the player or the one the
-    /// player challenged, so a death before the duel starts also tells
-    /// `Ended` (0x2f45). That the program matches both ids before a duel is
-    /// inferred, pending the follow-up read of 0x4a8cd5.
+    /// `OP_Death` (0x4a8cd5): the partner's death ends it. The program
+    /// tests [0x9238d8] alone, so a challenge the player sent that was never
+    /// accepted ends too (0x2f45), and a challenger's death changes nothing
+    /// (R49-6d).
     fn died(
         &mut self,
         (dead, killer): (u16, u32),
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if !self.involves(dead) {
+        if !self.partner(dead) {
             return Ok(());
         }
         let by_player = u16::try_from(killer).is_ok_and(|killer| world.is_player(killer));
         let news = if by_player && self.active {
+            out.request(&Request::DuelOver { opponent: dead })?;
             DuelNews::Won { over: dead }
         } else {
             DuelNews::Ended { opponent: dead }
+        };
+        self.clear(out)?;
+        Self::news(out, news)
+    }
+
+    /// Another program's own refusal (0x45d5af): only from the one the
+    /// player challenged. It ends the player's side and the duel, and
+    /// keeps a challenge waiting for the player (R49-6d).
+    fn turned_down(
+        &mut self,
+        by: u16,
+        reason: Option<DuelAutoDecline>,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if !self.partner(by) {
+            return Ok(());
+        }
+        self.active = false;
+        self.outgoing = None;
+        Self::news(out, DuelNews::TurnedDown { by, reason })
+    }
+
+    /// The partner leaving the zone (`OP_DeleteSpawn`, 0x4581b7): during
+    /// the duel the player wins and the program says so to the server;
+    /// before it the challenge lapses. Either way all is forgotten
+    /// (R49-6d).
+    fn departed(&mut self, spawn: u16, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.partner(spawn) {
+            return Ok(());
+        }
+        let news = if self.active {
+            out.request(&Request::DuelOver { opponent: spawn })?;
+            DuelNews::Forfeited { opponent: spawn }
+        } else {
+            DuelNews::Lapsed { target: spawn }
         };
         self.clear(out)?;
         Self::news(out, news)
@@ -291,6 +337,10 @@ impl Feature for TitaniumDuel {
             Message::Event(WorldEvent::Duel(DuelUpdate::Challenge { from })) => {
                 self.challenged(*from, world, out)
             }
+            Message::Event(WorldEvent::Duel(DuelUpdate::AutoDeclined { by, reason })) => {
+                self.turned_down(*by, *reason, out)
+            }
+            Message::Event(WorldEvent::Despawn(spawn)) => self.departed(*spawn, out),
             // The program has no case for `OP_DuelAccept`, and Titanium
             // carries no client's refusal.
             _ => Ok(()),
@@ -494,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn a_death_ends_the_duel_and_zoning_forgets_it() {
+    fn a_partners_death_ends_the_duel_and_a_challengers_changes_nothing() {
         let died = |spawn_id: u32, killer_id: u32| {
             Message::Event(WorldEvent::Death(Death {
                 spawn_id,
@@ -506,17 +556,111 @@ mod tests {
         };
         let (mut feature, mut world) = (TitaniumDuel::default(), world());
         testing::run(|out| feature.observe(&challenge(12), &mut world, out));
+        // The challenger isn't the program's side yet: their death is no
+        // news (0x4a8cd5 tests [0x9238d8] alone).
+        let challenger = testing::run(|out| feature.observe(&died(12, 30), &mut world, out));
+        assert_eq!(challenger.sent, []);
+        assert_eq!(news(&challenger), []);
+        assert_eq!(feature.incoming, Some(12));
         testing::run(|out| feature.handle(&duel(12), &mut world, out));
+        // Killed by the player during the duel: won, and 0x3bad goes.
         let won = testing::run(|out| feature.observe(&died(12, u32::from(OWN)), &mut world, out));
-        // The 8-byte 0x3bad's body is unread, so nothing goes.
-        assert_eq!(won.sent, []);
+        assert_eq!(won.sent, [socials::titanium_duel_over(12, OWN)]);
+        assert_eq!((won.sent[0].opcode, won.sent[0].body.len()), (0x3bad, 8));
         assert_eq!(news(&won), [DuelNews::Won { over: 12 }]);
         assert!(!feature.active && feature.incoming.is_none() && feature.outgoing.is_none());
+        // A challenge never accepted ends with its target's death.
         testing::run(|out| feature.handle(&duel(13), &mut world, out));
         let ended = testing::run(|out| feature.observe(&died(13, 30), &mut world, out));
+        assert_eq!(ended.sent, []);
         assert_eq!(news(&ended), [DuelNews::Ended { opponent: 13 }]);
+        assert!(feature.outgoing.is_none());
         testing::run(|out| feature.observe(&challenge(12), &mut world, out));
         testing::run(|out| feature.observe(&Message::LoggedOut, &mut world, out));
         assert!(feature.incoming.is_none() && feature.question.is_none());
+    }
+
+    #[test]
+    fn a_refusal_counts_only_from_the_one_challenged_and_keeps_the_waiting_challenge() {
+        let refused =
+            |by, reason| Message::Event(WorldEvent::Duel(DuelUpdate::AutoDeclined { by, reason }));
+        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        testing::run(|out| feature.handle(&duel(13), &mut world, out));
+        // From anyone else: ignored.
+        let other = testing::run(|out| {
+            feature.observe(
+                &refused(12, Some(DuelAutoDecline::Dueling)),
+                &mut world,
+                out,
+            )
+        });
+        assert_eq!(news(&other), []);
+        assert_eq!(feature.outgoing, Some(13));
+        let turned = testing::run(|out| {
+            feature.observe(
+                &refused(13, Some(DuelAutoDecline::Considering)),
+                &mut world,
+                out,
+            )
+        });
+        assert_eq!(turned.sent, []);
+        assert_eq!(
+            news(&turned),
+            [DuelNews::TurnedDown {
+                by: 13,
+                reason: Some(DuelAutoDecline::Considering)
+            }]
+        );
+        assert!(feature.outgoing.is_none() && !feature.active);
+    }
+
+    #[test]
+    fn a_partner_leaving_forfeits_the_duel_or_lapses_the_challenge() {
+        let gone = |spawn| Message::Event(WorldEvent::Despawn(spawn));
+        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        testing::run(|out| feature.handle(&duel(13), &mut world, out));
+        // Someone else leaving changes nothing.
+        assert_eq!(
+            news(&testing::run(|out| feature.observe(
+                &gone(12),
+                &mut world,
+                out
+            ))),
+            []
+        );
+        let lapsed = testing::run(|out| feature.observe(&gone(13), &mut world, out));
+        assert_eq!(lapsed.sent, []);
+        assert_eq!(news(&lapsed), [DuelNews::Lapsed { target: 13 }]);
+        assert!(feature.outgoing.is_none());
+        // During the duel the player wins, and 0x3bad goes.
+        testing::run(|out| feature.observe(&challenge(12), &mut world, out));
+        testing::run(|out| feature.handle(&duel(12), &mut world, out));
+        let forfeited = testing::run(|out| feature.observe(&gone(12), &mut world, out));
+        assert_eq!(forfeited.sent, [socials::titanium_duel_over(12, OWN)]);
+        assert_eq!(news(&forfeited), [DuelNews::Forfeited { opponent: 12 }]);
+        assert!(!feature.active && feature.incoming.is_none() && feature.outgoing.is_none());
+    }
+
+    #[test]
+    fn the_card_never_names_a_challenger_gone_from_the_zone() {
+        let (mut feature, mut world) = (TitaniumDuel::default(), world());
+        let question = offer(&testing::run(|out| {
+            feature.observe(&challenge(12), &mut world, out)
+        }))
+        .unwrap();
+        // A challenger's departure doesn't clear the program's state.
+        testing::run(|out| {
+            feature.observe(&Message::Event(WorldEvent::Despawn(12)), &mut world, out)
+        });
+        let mut gone = World::new(5);
+        gone.admitted = world.admitted;
+        gone.own_spawn = Some(OWN);
+        let yes = ClientCommand::AnswerDuel {
+            offer_id: question.id,
+            session_id: 5,
+            accept: true,
+        };
+        let refused = testing::run(|out| feature.handle(&yes, &mut gone, out));
+        assert_eq!(refused.sent, []);
     }
 }

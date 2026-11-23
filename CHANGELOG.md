@@ -22,7 +22,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     distance test. The host's question stays, as a departure the host
     owns: a yes sends what `/duel` sends, and a no sends nothing. The
     Mac-era duel is held for row 11g. The ignore-list refusal (reason 0)
-    and the 8-byte 0x3bad on a win are not sent.
+    is not sent.
+  - **Duel ends (read R49-6d).** Only the player's side, the one challenged
+    or accepted, ends a duel. Its death is `Won` (with the program's 8-byte
+    0x3bad) or `Ended`. Its leaving is `Forfeited` (with 0x3bad) or
+    `Lapsed`. Its program's own refusal, 0x3ea0, now read as
+    `DuelUpdate::AutoDeclined`, is `TurnedDown`. New:
+    `DuelNews::{TurnedDown, Lapsed, Forfeited}`, `Request::DuelOver` and
+    `socials::titanium_duel_over`.
   - **Stun.** A stun under divine aura (effect 40) is ignored (0x417839).
     A stun during a stun doesn't extend it.
   - **Corpse.** `OP_BecomeCorpse` places the spawn and stops it.

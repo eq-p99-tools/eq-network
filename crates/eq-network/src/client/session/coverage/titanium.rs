@@ -213,6 +213,14 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x3cdc => sent("OP_LogoutReply", EQEMU, Read(&[Zone])),
         // The answer to OP_RequestTitles.
         0x3e89 => sent("OP_SendTitleList", EQEMU, Read(&[Zone])),
+        // The Titanium program reads another program's own refusal of the
+        // player's challenge (R49-6d, 0x45d5af). EQEmu leaves 0x3ea0
+        // unmapped and never passes one on; P99 might (inferred).
+        0x3ea0 => sent(
+            "OP_DuelResponse (the program's own refusal)",
+            P99,
+            Read(&[Zone]),
+        ),
         0x3ea6 => sent("OP_ApproveName", EQEMU, Read(&[World])),
         0x3eba => sent("OP_SendZonepoints", EQEMU, Read(&[Zone])),
         0x3eec => sent("OP_SetGroupTarget", EQEMU, planned(Raids)),

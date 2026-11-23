@@ -2099,12 +2099,21 @@ the session keeps no ignore list. The same challenger again, or the
 opponent during the duel, changes nothing. A challenge from the one the
 player challenged starts the duel with nothing sent (`Begun`).
 
-The opponent's death ends the duel: `Won` when the player killed them
-during it, otherwise `Ended`. Before a duel starts, the death of the one
-challenging or the one challenged also tells `Ended` (inferred, pending a
-follow-up read). The program then sends an 8-byte 0x3bad,
-whose body is unread, so the session sends nothing there yet. The
-player's own death, zoning and logging out forget the duel.
+The player's side of the duel is the one they challenged or accepted
+(read R49-6d), and only it ends one:
+
+- **Its death:** `Won` when the player killed them during the duel, and
+  the session sends the program's 8-byte 0x3bad {opponent, player}
+  (`socials::titanium_duel_over`). Otherwise `Ended`, which also covers a
+  challenge that was never accepted. A challenger's death changes nothing.
+- **Its leaving the zone:** `Forfeited` during the duel, also with 0x3bad,
+  or `Lapsed` before it.
+- **Its own program's refusal** (0x3ea0, `DuelUpdate::AutoDeclined`):
+  `TurnedDown`, with the reason. This ends the player's side and keeps a
+  challenge waiting for the player. `EQEmu` never passes this on.
+
+`EQEmu` takes 0x3bad as its 12-byte decline, so it drops the 8-byte form.
+The player's own death, zoning and logging out forget the duel.
 
 A waiting challenge also comes as `WorldEvent::DuelOffer` with a
 `socials::DuelQuestion`. The program has no such window, so the host shows
@@ -2113,8 +2122,9 @@ with `GameCommand::AnswerDuel`, copying `id` into `offer_id`. A yes sends
 exactly what `/duel` at the challenger sends. A no forgets the challenge
 here and sends nothing: Titanium has no decline. It closes with
 `WorldEvent::ConsentClosed`, `AnswerSent` after an answer and
-`Interrupted` when the duel state is forgotten. A stale answer is refused
-and sends nothing. Outside a zone, `/duel` and the answer are refused;
+`Interrupted` when the duel state is forgotten. A stale answer, or one naming a
+challenger gone from the zone, is refused and sends nothing (ours:
+`EQEmu` looks the one named up without checking they exist). Outside a zone, `/duel` and the answer are refused;
 the session makes no posture or motion test, as the program makes none. `Request::AnswerDuel` with `accept: false` is refused
 on Titanium.
 

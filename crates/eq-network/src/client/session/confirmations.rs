@@ -632,7 +632,8 @@ impl Feature for Duel {
                 self.challenged
                     .take_if(|challenged| challenged.target == from);
             }
-            DuelUpdate::Challenge { .. } => (),
+            // Titanium's own refusal, which the Mac-era duel never sees.
+            DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => (),
         }
         Ok(())
     }
