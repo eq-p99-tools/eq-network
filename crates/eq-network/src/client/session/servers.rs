@@ -1826,6 +1826,48 @@ impl ServerType for Quarm {
     fn talk(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::talk(setup))
     }
+
+    /// Giving items to NPCs and trading with players. Source-derived, not
+    /// live (6.576): Quarm's `Handle_OP_TradeRequest`, `TradeRequestAck`,
+    /// `TradeAcceptClick`, `CancelTrade` and `TradeRefused`
+    /// (SecretsOTheP/EQMacEmu fc75fcf, `zone/client_packet.cpp`) take the
+    /// 4-byte request and acknowledgement {to u16, from u16}, which they
+    /// check names the player, and the 6-byte refusal, as
+    /// [`eq_network_game::exchange::eqmac`] sends them. Quarm adds its own
+    /// refusals (self-found, Iksar zones, GM checks, an engaged NPC) and
+    /// paces requests itself; its `OP_TradeReset` before an NPC's
+    /// acknowledgement stays an unread planned gap.
+    fn exchange(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::exchange())
+    }
+
+    /// Groups. Source-derived, not live (6.576): Quarm's
+    /// `Handle_OP_GroupInvite2`, `GroupFollow`, `GroupCancelInvite` and
+    /// `GroupDisband` (fc75fcf) check the same 193-, 128-, 129- and 128-byte
+    /// records as TAKP, and add their own refusals (solo and challenge
+    /// modes, GM checks).
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::groups())
+    }
+
+    /// Anonymous and roleplaying. Source-derived, not live (6.576):
+    /// Quarm's `Handle_OP_SpawnAppearance` (fc75fcf) takes the 8-byte
+    /// appearance update and its anonymous type 0, 1 or 2, paced by its own
+    /// toggle timer. The away update stays refused, as on TAKP.
+    fn listing(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::listing(false))
+    }
+
+    /// Answered only on the player's word. Source-derived, not live
+    /// (6.576): Quarm's `Handle_OP_Translocate` (fc75fcf) takes the 92-byte
+    /// offer back with `Complete` 1 for a yes. Unlike TAKP it sends no
+    /// second offer: it moves the player itself (`MovePCGuildID`, or
+    /// `GoToBind` for a bind port in the bind zone), which reaches the
+    /// session as its zone change. Quarm's own time limit is a rule, 0 (none)
+    /// by default; the session's hour is ours, as on TAKP.
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::translocate(std::time::Duration::from_secs(3600)))
+    }
 }
 
 /// The HP at which TAKP takes a player as dead: below -10 (`zone/attack.cpp`
@@ -2436,10 +2478,12 @@ mod tests {
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
         // posture/camp lifecycle, abilities, casting, basic spellbook and
-        // personal inventory actions. Other features await their own evidence.
+        // personal inventory actions, and, each from its own handlers, its
+        // giving, groups, listing and translocate (6.576). Other features
+        // await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 18);
+        assert_eq!(quarm.features(&setup).len(), 22);
         assert_eq!(
             offers(quarm),
             [
@@ -2447,6 +2491,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -2459,7 +2504,10 @@ mod tests {
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Reading,
+                Capability::Grouping,
+                Capability::Listing,
                 Capability::EnvironmentalDamage,
+                Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,

@@ -823,6 +823,47 @@ mod tests {
         assert!(world.exchange.is_none());
     }
 
+    /// Quarm echoes the player's own cancel back to them with their own ID
+    /// at +0 when the partner is a player, and with the NPC's when it is an
+    /// NPC (fc75fcf `Handle_OP_CancelTrade`); a second cancel, which the
+    /// `EQMac` program sends, is echoed with their own ID too. The window
+    /// is already closed, so each echo is withheld: the host hears no
+    /// cancel of anyone's, and no second cancel goes out (checklist 6.576).
+    #[test]
+    fn quarms_echo_of_the_players_own_cancel_closes_quietly() {
+        use eq_network_game::exchange::eqmac;
+        let wire = super::super::servers::server_type(crate::client::ServerProtocol::Quarm).wire();
+        let close = ClientCommand::CancelTrade { session_id: 5 };
+        for (partner, with, echoes) in [
+            (Partner::Player, PLAYER, [7, 7]),
+            (Partner::Npc, NPC, [u32::from(NPC), 7]),
+        ] {
+            let mut world = beside_npc();
+            world.exchange.0 = Some(Exchange {
+                with,
+                partner,
+                stage: Stage::Open,
+            });
+            let outcome = testing::run_on(wire, |out| Exchanges.handle(&close, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, [eqmac::cancel(7, with).unwrap()]);
+            assert!(world.exchange.is_none());
+            for by in echoes {
+                let mut echo = news(ExchangeUpdate::Cancelled { by });
+                Exchanges.explain(&mut echo, &world);
+                assert!(
+                    matches!(echo, Message::Withheld),
+                    "echo {by} reached the host"
+                );
+                let outcome =
+                    testing::run_on(wire, |out| Exchanges.observe(&echo, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, [], "answered echo {by}");
+                assert!(outcome.events.is_empty(), "told {:?}", outcome.events);
+            }
+        }
+    }
+
     #[test]
     fn stale_exchange_updates_are_withheld_from_belongings_and_host() {
         use eq_network_game::money::Coin;
