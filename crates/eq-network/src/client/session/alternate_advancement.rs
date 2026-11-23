@@ -1,8 +1,9 @@
 //! Admission-scoped AA facts for local `EQEmu` (selections, definitions,
 //! points, AA experience and reuse timers, checklist 6.547) and local TAKP
 //! (ranks, points, AA experience and timers, 6.548); and Titanium's AA
-//! requests, training, activating and the experience split (6.556), which
-//! no server type lists until their own local `EQEmu` live row passes.
+//! requests, training, activating and the experience split (6.556), and
+//! `EQMac`'s, of which only the split goes yet (6.562). No server type lists
+//! them until their own local live rows pass.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -14,6 +15,7 @@ use eq_network_game::{
     message::Message,
     request::Request,
     world::WorldEvent,
+    GameDialect,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -221,6 +223,18 @@ impl AlternateAdvancement {
     }
 }
 
+/// The least level at which the `EQMac` split may be turned on (inferred
+/// from TAKP's `Client::SetEXP`, read R49-41).
+const MAC_SPLIT_LEVEL: u8 = 51;
+
+/// Why a Mac AA id can't be named, if it can't: TAKP's `OP_RespondAA` holds
+/// ids 1 to 226.
+fn mac_id(rank_id: u32) -> Option<Refusal> {
+    let slots =
+        u32::try_from(eq_network_game::alternate_advancement::EQMAC_RANK_SLOTS).unwrap_or(u32::MAX);
+    (!(1..=slots).contains(&rank_id)).then_some(Refusal::NotOffered)
+}
+
 /// The library's words for a refusal; a host may word it itself.
 const fn words(refusal: Refusal) -> &'static str {
     match refusal {
@@ -311,12 +325,21 @@ impl Feature for AlternateAdvancement {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let dialect = out.wire.dialect();
         let action = match *command {
             ClientCommand::TrainAlternateAdvancement { rank_id, .. } => {
                 if self.waiting() {
                     return refuse(command, Refusal::AwaitingAnswer, out);
                 }
-                if let Some(refusal) = self.view.train(rank_id, world) {
+                let refusal = match dialect {
+                    GameDialect::Titanium => self.view.train(rank_id, world),
+                    // TAKP's buy checks neither level nor class, which the
+                    // Mac client keeps itself (read R49-41b): until the
+                    // session has them, nothing is bought.
+                    GameDialect::EqMac => Some(mac_id(rank_id).unwrap_or(Refusal::Unknown)),
+                    GameDialect::Rof2 => Some(Refusal::NotOffered),
+                };
+                if let Some(refusal) = refusal {
                     return refuse(command, refusal, out);
                 }
                 Action::Train { rank_id }
@@ -330,7 +353,19 @@ impl Feature for AlternateAdvancement {
                 if target == Some(0) {
                     return refuse(command, Refusal::OutOfRange, out);
                 }
-                if let Some(refusal) = self.view.activate(rank_id) {
+                let refusal = match dialect {
+                    GameDialect::Titanium => self.view.activate(rank_id),
+                    // TAKP's text names no target, and the session's
+                    // selection does not prove the server's stored one.
+                    // Which ids are passive is the Mac client's (R49-41b),
+                    // and TAKP answers a passive one with a line while the
+                    // player sits, feigns or rides a boat: nothing goes
+                    // until the session knows.
+                    GameDialect::EqMac if target.is_some() => Some(Refusal::OutOfRange),
+                    GameDialect::EqMac => Some(mac_id(rank_id).unwrap_or(Refusal::Unknown)),
+                    GameDialect::Rof2 => Some(Refusal::NotOffered),
+                };
+                if let Some(refusal) = refusal {
                     return refuse(command, refusal, out);
                 }
                 Action::Activate { rank_id, target }
@@ -343,6 +378,23 @@ impl Feature for AlternateAdvancement {
                 // bounds, and any level floor, are read R49-39c.
                 if percentage > 100 {
                     return refuse(command, Refusal::OutOfRange, out);
+                }
+                let refusal = match dialect {
+                    GameDialect::Titanium => None,
+                    GameDialect::EqMac if percentage == 0 => None,
+                    // TAKP takes `on N` at any level and turns it off again
+                    // below 51 at the next experience change
+                    // (`Client::SetEXP`); the program's own floor is read
+                    // R49-41, so ours is 51, inferred.
+                    GameDialect::EqMac => match world.player.as_ref().map(|player| player.level) {
+                        None | Some(0) => Some(Refusal::Unknown),
+                        Some(level) if level < MAC_SPLIT_LEVEL => Some(Refusal::LevelTooLow),
+                        Some(_) => None,
+                    },
+                    GameDialect::Rof2 => Some(Refusal::NotOffered),
+                };
+                if let Some(refusal) = refusal {
+                    return refuse(command, refusal, out);
                 }
                 Action::Split { percentage }
             }
@@ -904,5 +956,93 @@ mod tests {
                 ..
             })
         )));
+    }
+
+    /// A request run on another generation's wire.
+    fn run_on(
+        wire: &'static dyn super::super::wire::Wire,
+        feature: &mut AlternateAdvancement,
+        world: &mut World,
+        command: &ClientCommand,
+    ) -> testing::Outcome<Result<()>> {
+        let outcome = testing::run_on(wire, |out| feature.handle(command, world, out));
+        outcome.result.as_ref().unwrap();
+        outcome
+    }
+
+    #[test]
+    fn on_eqmac_only_the_split_goes_until_the_clients_aa_data() {
+        use super::super::wire::EqMac;
+        let (mut feature, mut world) = admitted(&[]);
+        let activate = |rank_id, target| ClientCommand::ActivateAlternateAdvancement {
+            session_id: 5,
+            rank_id,
+            target,
+        };
+        for (command, expected) in [
+            (train(0), Refusal::NotOffered),
+            (train(227), Refusal::NotOffered),
+            // M1: a Mac id the server would take, held for R49-41b.
+            (train(12), Refusal::Unknown),
+            (activate(300, None), Refusal::NotOffered),
+            // M2: TAKP's text names no target.
+            (activate(12, Some(300)), Refusal::OutOfRange),
+            // M3: passive or not is the client's data.
+            (activate(12, None), Refusal::Unknown),
+        ] {
+            let outcome = run_on(&EqMac, &mut feature, &mut world, &command);
+            assert_eq!(refusal(&outcome), Some(expected), "{command:?}");
+            feature.activated = None;
+        }
+
+        let split = |percentage| ClientCommand::SetAlternateAdvancementSplit {
+            session_id: 5,
+            percentage,
+        };
+        // M4: turning it on needs a known level of 51 or more.
+        for (level, expected) in [(0, Refusal::Unknown), (50, Refusal::LevelTooLow)] {
+            world.player.corrected().unwrap().level = level;
+            let outcome = run_on(&EqMac, &mut feature, &mut world, &split(50));
+            assert_eq!(refusal(&outcome), Some(expected), "{level}");
+        }
+        // Turning it off goes at any level.
+        let off = run_on(&EqMac, &mut feature, &mut world, &split(0));
+        assert_eq!(refusal(&off), None);
+        assert_eq!(
+            (
+                off.sent[0].opcode,
+                &off.sent[0].body[..4],
+                off.sent[0].body.len()
+            ),
+            (0x1442, b"off\0".as_slice(), 256)
+        );
+        feature.split = None;
+        world.player.corrected().unwrap().level = 51;
+        let on = run_on(&EqMac, &mut feature, &mut world, &split(50));
+        assert_eq!(&on.sent[0].body[..6], b"on 50\0");
+        feature.split = None;
+        let over = run_on(&EqMac, &mut feature, &mut world, &split(101));
+        assert_eq!(refusal(&over), Some(Refusal::OutOfRange));
+    }
+
+    #[test]
+    fn rof2_sends_no_aa_request() {
+        use super::super::wire::Rof2;
+        let (mut feature, mut world) = admitted(&table());
+        for command in [
+            train(11),
+            ClientCommand::ActivateAlternateAdvancement {
+                session_id: 5,
+                rank_id: 10,
+                target: None,
+            },
+            ClientCommand::SetAlternateAdvancementSplit {
+                session_id: 5,
+                percentage: 50,
+            },
+        ] {
+            let outcome = run_on(&Rof2, &mut feature, &mut world, &command);
+            assert_eq!(refusal(&outcome), Some(Refusal::NotOffered), "{command:?}");
+        }
     }
 }

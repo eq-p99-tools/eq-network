@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Encode the AA requests for `EQMac` too, listed by no server type until
+  a local TAKP live row (6.562): TAKP's 256-byte text on `OP_AAAction`
+  (0x1442), `buy N`, `activate N`, `on N` and `off`, from fixed words and
+  numbers only (`alternate_advancement::eqmac_action`). On `EQMac` the
+  session sends only the split, on at level 51 or more (inferred); a train
+  and an activation are refused as `Refusal::Unknown` until the Mac
+  client's AA data (read R49-41b), since TAKP's buy checks neither level
+  nor class, and an activation's target is refused. RoF2 refuses all three.
+  New: `alternate_advancement::{eqmac_action, EQMAC_ACTION_OPCODE,
+  EQMAC_ACTION_LENGTH}`; no new variants.
+
 - Send Titanium's AA requests, built and tested but listed by no server
   type until their local `EQEmu` live row (6.556): training a rank,
   activating an owned rank's ability and the experience split, each as the

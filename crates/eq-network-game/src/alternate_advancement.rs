@@ -34,6 +34,11 @@ pub const EQMAC_PROGRESS_OPCODE: u16 = 0x2342;
 /// `EQMac`'s server reuse timer (`UseAA_Struct`); the client's 256-byte text
 /// form of this opcode is a request, not read here.
 pub const EQMAC_TIMER_OPCODE: u16 = 0x1442;
+/// The `EQMac` client's AA request: 256 bytes of text, the same opcode as
+/// the server's timer (TAKP's `Client::Handle_OP_AAAction`).
+pub const EQMAC_ACTION_OPCODE: u16 = EQMAC_TIMER_OPCODE;
+/// The length TAKP takes for an `EQMac` AA request; it drops any other.
+pub const EQMAC_ACTION_LENGTH: usize = 256;
 /// The number of rank bytes in `EQMac`'s `OP_RespondAA`, after its first.
 pub const EQMAC_RANK_SLOTS: usize = 226;
 /// The number of entries in `EQMac`'s profile AA array.
@@ -356,6 +361,41 @@ pub fn titanium_action(action: Action) -> Result<[u8; 16]> {
     for (at, value) in [kind, ability, target, share].into_iter().enumerate() {
         body[at * 4..at * 4 + 4].copy_from_slice(&value.to_le_bytes());
     }
+    Ok(body)
+}
+
+/// `EQMac`'s `OP_AAAction` body for an action: TAKP's text, NUL-padded to
+/// [`EQMAC_ACTION_LENGTH`], built from fixed words and numbers only. TAKP
+/// reads `on N` and `buy N` and `activate N` by their prefix and `atoi`,
+/// and `off` exactly; the program's own bytes (case, spacing, padding) are
+/// read R49-41a, inferred until then. A train and an activation name the
+/// Mac AA id, 1 to [`EQMAC_RANK_SLOTS`]; the server picks the rank to buy
+/// itself, and TAKP's text has no target.
+///
+/// # Errors
+/// Refuses a Mac AA id outside 1 to 226, any target, and a split above 100.
+pub fn eqmac_action(action: Action) -> Result<[u8; EQMAC_ACTION_LENGTH]> {
+    let mac_id = |id: u32| {
+        ensure!(
+            (1..=u32::try_from(EQMAC_RANK_SLOTS)?).contains(&id),
+            "a Mac AA id is 1 to 226"
+        );
+        Ok(id)
+    };
+    let text = match action {
+        Action::Train { rank_id } => format!("buy {}", mac_id(rank_id)?),
+        Action::Activate { rank_id, target } => {
+            ensure!(target.is_none(), "TAKP's activation names no target");
+            format!("activate {}", mac_id(rank_id)?)
+        }
+        Action::Split { percentage: 0 } => "off".to_owned(),
+        Action::Split { percentage } => {
+            ensure!(percentage <= 100, "a split is at most 100");
+            format!("on {percentage}")
+        }
+    };
+    let mut body = [0; EQMAC_ACTION_LENGTH];
+    body[..text.len()].copy_from_slice(text.as_bytes());
     Ok(body)
 }
 
@@ -974,5 +1014,44 @@ mod tests {
             target: Some(0),
         })
         .is_err());
+    }
+
+    #[test]
+    fn each_eqmac_action_is_takps_text_from_numbers_only() {
+        let text = |action| {
+            let body = eqmac_action(action).unwrap();
+            assert_eq!(body.len(), 256);
+            let end = body.iter().position(|byte| *byte == 0).unwrap();
+            // Nothing after the text but NULs, and nothing in it but the
+            // fixed words, a space and digits.
+            assert!(body[end..].iter().all(|byte| *byte == 0));
+            assert!(body[..end]
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b' '));
+            String::from_utf8(body[..end].to_vec()).unwrap()
+        };
+        assert_eq!(text(Action::Train { rank_id: 12 }), "buy 12");
+        assert_eq!(text(Action::Train { rank_id: 226 }), "buy 226");
+        assert_eq!(
+            text(Action::Activate {
+                rank_id: 1,
+                target: None,
+            }),
+            "activate 1"
+        );
+        assert_eq!(text(Action::Split { percentage: 0 }), "off");
+        assert_eq!(text(Action::Split { percentage: 50 }), "on 50");
+        assert_eq!(text(Action::Split { percentage: 100 }), "on 100");
+        for refused in [
+            Action::Train { rank_id: 0 },
+            Action::Train { rank_id: 227 },
+            Action::Activate {
+                rank_id: 12,
+                target: Some(300),
+            },
+            Action::Split { percentage: 101 },
+        ] {
+            assert!(eqmac_action(refused).is_err(), "{refused:?}");
+        }
     }
 }

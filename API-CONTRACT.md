@@ -581,6 +581,28 @@ offered); `reason` says the same in this library's words. The server's own
 answers (the gain line, the reuse wait, the split's on and off lines) reach
 the host as its other lines do.
 
+Since checklist 6.562 the same three commands also encode for the `EQMac`
+generation, still listed by no server type: TAKP's `OP_AAAction` 0x1442 is
+256 bytes of text, NUL-padded and built from fixed words and numbers only:
+`buy N`, `activate N` (N the Mac AA id, 1 to 226, as `Update::MacRanks`
+names it; TAKP picks the rank to buy itself), `on N` for a split of 1 to
+100 and `off` for 0. The exact bytes are read R49-41a, inferred until then.
+On `EQMac` the session sends only the split for now. TAKP's buy checks
+neither level nor class, which the Mac client keeps itself (read R49-41b),
+so a train is refused as `Refusal::Unknown` until the session has the
+client's AA data; an activation is refused the same way, since which ids
+are passive is that data too and TAKP answers a passive one with a line
+while the player sits, feigns or rides a boat. An activation's `target`
+must be None on `EQMac`, refused as `Refusal::OutOfRange` otherwise: TAKP's
+text names no target and uses the server's stored one, which the session's
+own selection does not prove. Turning the split on needs a known level of
+51 or more (`Refusal::LevelTooLow`, or `Refusal::Unknown` when the level
+isn't known): TAKP takes `on N` at any level and turns it off again below
+51 at the next experience change, so ours is 51, inferred until R49-41.
+Turning it off goes at any level. The capability waits for a local TAKP
+live row; Quarm, assumed as TAKP, waits for its own attended row, and P99
+is never offered it.
+
 Malformed packets withdraw their affected observation. An unreadable
 profile withdraws its points with its selections (`Update::Points(None)`),
 unreadable experience withdraws the last (`Update::Progress(None)`), and an
