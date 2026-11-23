@@ -12,6 +12,12 @@
 //! world and zone go on. It sends nothing but the login and the commands the
 //! player gives (reviewer C3); the transport sends its own keepalives.
 //!
+//! Once the login is taken, the link checks every 5 s how long the server
+//! has been silent and ends after more than 30 s, as the Titanium program
+//! does (read R49-12 a, checklist 6.616). [I] What counts as a word from the
+//! server is unread, so anything the transport takes counts, its acks and
+//! keepalives among them, which an idle healthy link still gets.
+//!
 //! Nothing it logs or tells names the server's address, the key or the
 //! mailbox (reviewer C2).
 
@@ -100,6 +106,13 @@ impl Inbound {
 /// own bound, inferred (the program's own is asked as R49-12 d).
 pub(super) const LOGIN_WAIT: Duration = Duration::from_secs(30);
 
+/// How often a logged-in link checks the server's silence (read R49-12 a:
+/// every 5000 ms).
+pub(super) const SILENCE_CHECK: Duration = Duration::from_secs(5);
+/// The whole seconds of silence past which a logged-in link ends (read
+/// R49-12 a: a value over 30000 ms).
+pub(super) const SILENCE_LIMIT_SECS: u64 = 30;
+
 /// A link while its thread runs.
 struct Running {
     outbound: SyncSender<Vec<u8>>,
@@ -131,6 +144,8 @@ pub(in crate::client) struct ChatLink {
     connect: Arc<Connect>,
     /// How long a login may go unanswered.
     login_wait: Duration,
+    /// How often a logged-in link checks the server's silence.
+    silence_check: Duration,
     running: Mutex<Option<Running>>,
     /// What a closed link left untold, kept for the next drain.
     left: Mutex<Vec<News>>,
@@ -148,6 +163,7 @@ impl ChatLink {
         Self {
             connect,
             login_wait: LOGIN_WAIT,
+            silence_check: SILENCE_CHECK,
             running: Mutex::new(None),
             left: Mutex::new(Vec::new()),
         }
@@ -157,6 +173,13 @@ impl ChatLink {
     #[cfg(test)]
     pub(super) fn waiting(mut self, login_wait: Duration) -> Self {
         self.login_wait = login_wait;
+        self
+    }
+
+    /// The same link checking the server's silence this often.
+    #[cfg(test)]
+    pub(super) fn checking(mut self, silence_check: Duration) -> Self {
+        self.silence_check = silence_check;
         self
     }
 
@@ -176,6 +199,7 @@ impl ChatLink {
                 login,
                 local_only,
                 login_wait: self.login_wait,
+                silence_check: self.silence_check,
                 commands,
                 inbound: Arc::clone(&inbound),
                 stop: Arc::clone(&stop),
@@ -310,10 +334,21 @@ struct Thread {
     login: Login,
     local_only: bool,
     login_wait: Duration,
+    silence_check: Duration,
     commands: Receiver<Vec<u8>>,
     inbound: Arc<Mutex<Inbound>>,
     stop: Arc<AtomicBool>,
     connecting: Arc<AtomicBool>,
+}
+
+/// The program's keep-alive check (read R49-12 a): once every `every`,
+/// whether the server has been silent past [`SILENCE_LIMIT_SECS`].
+fn silent(transport: &dyn Transport, checked: &mut Instant, every: Duration) -> bool {
+    if checked.elapsed() < every {
+        return false;
+    }
+    *checked = Instant::now();
+    transport.last_received_seconds() > SILENCE_LIMIT_SECS
 }
 
 /// The link's thread: connects, logs in, then carries commands out and what
@@ -325,6 +360,7 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
         login,
         local_only,
         login_wait,
+        silence_check,
         commands,
         inbound,
         stop,
@@ -351,6 +387,7 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
     }
     let asked = Instant::now();
     let mut up = false;
+    let mut checked = Instant::now();
     let lost = |up: bool| {
         if up {
             LinkLoss::Dropped
@@ -368,6 +405,11 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
             // ends the link once (reviewer F1).
             let _ = transport.close();
             return Some(LinkLoss::Login);
+        }
+        if up && silent(&*transport, &mut checked, *silence_check) {
+            // Whether the program says anything then is unread.
+            let _ = transport.close();
+            return Some(LinkLoss::Dropped);
         }
         loop {
             match commands.try_recv() {
@@ -573,6 +615,10 @@ mod tests {
         Floods,
         /// Takes the login, then waits long in each receive.
         Slow,
+        /// Takes the login, then says nothing for 31 whole seconds.
+        Silent,
+        /// Takes the login, then says nothing for 30 whole seconds.
+        Quiet,
     }
 
     /// A stub transport, recording what the link sent.
@@ -596,7 +642,12 @@ mod tests {
             if opcode == chat_server::LOGIN_OPCODE && !self.logged_in {
                 self.logged_in = true;
                 match self.stub {
-                    Stub::Takes | Stub::Drops | Stub::Floods | Stub::Slow => {
+                    Stub::Takes
+                    | Stub::Drops
+                    | Stub::Floods
+                    | Stub::Slow
+                    | Stub::Silent
+                    | Stub::Quiet => {
                         self.script.push_back(Application {
                             opcode: chat_server::LOGIN_OPCODE,
                             body: vec![1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -625,7 +676,12 @@ mod tests {
                             body: vec![9; 5],
                         });
                     }
-                    Stub::Stalls | Stub::Rubbish | Stub::Drops | Stub::Slow => {}
+                    Stub::Stalls
+                    | Stub::Rubbish
+                    | Stub::Drops
+                    | Stub::Slow
+                    | Stub::Silent
+                    | Stub::Quiet => {}
                 }
             }
             Ok(())
@@ -651,7 +707,11 @@ mod tests {
         }
 
         fn last_received_seconds(&self) -> u64 {
-            0
+            match self.stub {
+                Stub::Silent if self.logged_in => 31,
+                Stub::Quiet if self.logged_in => 30,
+                _ => 0,
+            }
         }
     }
 
@@ -837,6 +897,53 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(opcode, _)| *opcode == CLOSED));
+    }
+
+    #[test]
+    fn a_link_ends_once_after_more_than_30_seconds_of_silence_and_not_at_30() {
+        let checking = |stub, every| {
+            let (made, sent, connects) = link(Some(stub));
+            let made = Arc::new(Arc::into_inner(made).unwrap().checking(every));
+            (made, sent, connects)
+        };
+        // Past 30 whole seconds without a word, the check ends the link
+        // once, closing it and sending nothing more (read R49-12 a).
+        let (silent, sent, connects) = checking(Stub::Silent, Duration::from_millis(10));
+        silent.open(login(), false);
+        let news = until(&silent, |news| {
+            news.iter()
+                .any(|n| matches!(n, News::Link(ChannelLink::Lost { .. })))
+        });
+        assert_eq!(
+            news,
+            [
+                News::Link(ChannelLink::Up),
+                News::Link(ChannelLink::Lost {
+                    reason: LinkLoss::Dropped
+                })
+            ]
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!silent.running());
+        let sent = sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2, "the login and the close only");
+        assert_eq!(sent[1].0, CLOSED);
+        assert_eq!(*connects.lock().unwrap(), 1);
+        // At 30 seconds it stays up, however often it checks.
+        let (quiet, _, _) = checking(Stub::Quiet, Duration::from_millis(5));
+        quiet.open(login(), false);
+        until(&quiet, |news| news.contains(&News::Link(ChannelLink::Up)));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(quiet.running());
+        assert_eq!(quiet.drain(), []);
+        quiet.send("list").unwrap();
+        quiet.close();
+    }
+
+    #[test]
+    fn the_silence_check_runs_every_5_seconds_past_30() {
+        assert_eq!(SILENCE_CHECK, Duration::from_secs(5));
+        assert_eq!(SILENCE_LIMIT_SECS, 30);
     }
 
     #[test]
