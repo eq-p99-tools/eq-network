@@ -25,6 +25,8 @@ struct Script {
     filters: Vec<Vec<u8>>,
     closed: bool,
     refuse_list_reply: bool,
+    /// Once drained, the script stays idle until then before it stops.
+    idle_until: Option<Instant>,
 }
 
 impl Script {
@@ -45,6 +47,7 @@ impl Script {
             filters: Vec::new(),
             closed: false,
             refuse_list_reply: false,
+            idle_until: None,
         };
         for (opcode, body) in [
             (0x75df, profile),
@@ -93,6 +96,10 @@ impl Transport for Script {
     fn receive(&mut self) -> Result<Option<Application>> {
         if let Some(packet) = self.incoming.pop_front() {
             return Ok(Some(packet));
+        }
+        if self.idle_until.is_some_and(|until| Instant::now() < until) {
+            std::thread::sleep(Duration::from_millis(5));
+            return Ok(None);
         }
         // The scripted idle poll cancels once. The loop checks cancellation
         // before calling receive again, so another poll is unexpected.
@@ -760,20 +767,32 @@ fn every_server_type_sends_the_characters_kept_filters_at_zone_in() {
 }
 
 impl Script {
-    /// Stock `EQEmu`'s zone entry for a `RoF2` client: its description,
-    /// unasked, then its objects (the spawn request's answer), then a
-    /// message numbered as a Titanium spawn, which `RoF2` must not read.
-    fn rof2() -> Self {
+    /// Stock `EQEmu`'s zone entry for a `RoF2` client: with `player`, the
+    /// profile and own spawn; its description, unasked, then its objects
+    /// (the spawn request's answer), then a message numbered as a Titanium
+    /// spawn, which `RoF2` must not read. It stays idle for `idle` before
+    /// it stops.
+    fn rof2(player: bool, stop: &CancellationToken, idle: Duration) -> Self {
+        use eq_network_game::rof2_player::{
+            samples::{profile_body, spawn_body, Sample},
+            OWN_SPAWN_OPCODE, PROFILE_OPCODE,
+        };
         let mut description = vec![0; 948];
         description[64..71].copy_from_slice(b"example");
         let mut script = Self {
             incoming: VecDeque::new(),
-            stop_when_drained: None,
+            stop_when_drained: Some(stop.clone()),
             sent: Vec::new(),
             filters: Vec::new(),
             closed: false,
             refuse_list_reply: false,
+            idle_until: Some(Instant::now() + idle),
         };
+        if player {
+            let sample = Sample::default();
+            script.packet(PROFILE_OPCODE, profile_body(&sample).bytes);
+            script.packet(OWN_SPAWN_OPCODE, spawn_body(&sample));
+        }
         script.packet(0x1795, description);
         script.packet(0x5ae2, Vec::new());
         script.packet(0x7213, vec![0; 385]);
@@ -781,22 +800,56 @@ impl Script {
     }
 }
 
-#[test]
-fn a_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_generations_layout() {
+/// The session's idle time after the entry: longer than any position
+/// update or timer a feature would wake for in the first seconds.
+const IDLE: Duration = Duration::from_millis(1500);
+
+/// Runs a `RoF2` session through its entry and idle time: what it sent, the
+/// diagnostics, the events, and whether it was admitted.
+fn rof2_session(
+    player: bool,
+    commands: Option<(&mpsc::Sender<ClientCommand>, &Receiver<ClientCommand>)>,
+) -> (Vec<u16>, Vec<String>, Vec<WorldEvent>) {
     let mut config = config();
     config.protocol = ServerProtocol::EqEmuRof2;
     let identity = ClientIdentity::new("example-host", "example-user");
     let credentials = credentials();
     let stop = CancellationToken::default();
-    let context = context(&config, &identity, &credentials, &stop, None);
-    let mut script = Script::rof2();
-    script.stop_when_drained = Some(stop.clone());
+    let context = context(
+        &config,
+        &identity,
+        &credentials,
+        &stop,
+        commands.map(|(_, receiver)| receiver),
+    );
+    let mut script = Script::rof2(player, &stop, IDLE);
     let mut diagnostics = Vec::new();
-    let mut entered = false;
+    let mut events = Vec::new();
     let mut handler = |event| {
         match event {
             ClientEvent::Diagnostic(line) => diagnostics.push(line),
-            ClientEvent::World(WorldEvent::Entered { .. }) => entered = true,
+            ClientEvent::World(event) => {
+                if let (WorldEvent::Entered { session_id, .. }, Some((sender, _))) =
+                    (&event, commands)
+                {
+                    // Commands that need an admission, given once there is one.
+                    for command in [
+                        ClientCommand::Camp {
+                            session_id: *session_id,
+                            created: Instant::now(),
+                        },
+                        ClientCommand::SetPosture {
+                            session_id: *session_id,
+                            spawn_id: 4321,
+                            posture: eq_network_game::command::Posture::Sitting,
+                            created: Instant::now(),
+                        },
+                    ] {
+                        sender.send(command).unwrap();
+                    }
+                }
+                events.push(event);
+            }
             _ => (),
         }
         Ok(())
@@ -805,18 +858,27 @@ fn a_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_generations_la
     let exit = run_script(&context, &mut script, &mut log).unwrap();
     drop(log);
     assert!(matches!(exit, ZoneExit::Stopped));
-    // The entry, the spawn request and the ready, and nothing in the zone.
-    assert_eq!(script.sent, [0x5089, 0x35fa, 0x345d]);
     assert_eq!(script.filters.len(), 0);
-    // With no player snapshot the session only records, and says why.
-    assert!(!entered);
-    assert!(
-        diagnostics.iter().any(|line| {
-            line
-            == "Player presentation unavailable: the RoF2 player profile and spawn are not read yet"
-        }),
-        "{diagnostics:?}"
-    );
+    (script.sent, diagnostics, events)
+}
+
+#[test]
+fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_generations_layout() {
+    let (sent, diagnostics, events) = rof2_session(true, None);
+    // The entry, the spawn request and the ready, and nothing in the zone
+    // through the idle time.
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    // The player is admitted, and offered nothing.
+    let entered = events.iter().find_map(|event| match event {
+        WorldEvent::Entered {
+            capabilities,
+            choices,
+            zone,
+            ..
+        } => Some((capabilities.clone(), choices.clone(), zone.clone())),
+        _ => None,
+    });
+    assert_eq!(entered, Some((Vec::new(), Vec::new(), "example".into())));
     // A message numbered as Titanium's spawn is told by number and length,
     // not read as one.
     assert!(
@@ -828,27 +890,38 @@ fn a_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_generations_la
 }
 
 #[test]
+fn a_rof2_session_without_its_profile_only_records() {
+    let (sent, diagnostics, events) = rof2_session(false, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, WorldEvent::Entered { .. })));
+    assert!(
+        diagnostics.iter().any(|line| {
+            line == "Player presentation unavailable: the RoF2 profile or own spawn did not come"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn a_rof2_session_with_a_player_at_the_controls_refuses_rather_than_sends() {
-    let mut config = config();
-    config.protocol = ServerProtocol::EqEmuRof2;
-    let identity = ClientIdentity::new("example-host", "example-user");
-    let credentials = credentials();
-    let stop = CancellationToken::default();
-    let (sender, commands) = mpsc::channel();
+    let (sender, receiver) = mpsc::channel();
     sender
         .send(ClientCommand::SendChat(OutboundChat::Say("Hail".into())))
         .unwrap();
-    let context = context(&config, &identity, &credentials, &stop, Some(&commands));
-    let mut script = Script::rof2();
-    let mut handler = |_| Ok(());
-    let mut log = Events::new(&config, &mut handler);
-    let refused = run_script(&context, &mut script, &mut log).err().unwrap();
-    drop(log);
-    assert!(
-        refused.is::<crate::client::PlayerAdmissionError>(),
-        "{refused}"
-    );
-    // The command was never sent: only the entry went out.
-    assert_eq!(script.sent, [0x5089, 0x35fa, 0x345d]);
-    assert!(script.closed);
+    let (sent, diagnostics, events) = rof2_session(true, Some((&sender, &receiver)));
+    // No command was sent: only the entry went out, through the idle time.
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    for command in ["SendChat", "Camp", "SetPosture"] {
+        assert!(
+            diagnostics.contains(&format!(
+                "Rejected {command} command: Not available on this server"
+            )),
+            "{diagnostics:?}"
+        );
+    }
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, WorldEvent::Entered { .. })));
 }

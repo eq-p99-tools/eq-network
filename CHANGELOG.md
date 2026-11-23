@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's player profile and own spawn as stock `EQEmu` writes them,
+  labelled inferred for RoF2 (6.502): `eq_network_game::rof2_player`
+  walks each serialised stream whole, refusing any count but the
+  encoder's, a string that doesn't end in its field, a cut and a trailing
+  byte, and `Rof2Admission` completes with the player read from the first
+  profile and own spawn before the zone's description. Gems 9 to 12,
+  appearance and the `/who` listing are not read. An admitted RoF2 session
+  still sends nothing in the zone, and the RoF2 server type no longer
+  offers server filters or gameplay departures, which it cannot honour.
+  Still unreachable: a RoF2 configuration is refused before a socket opens.
 - Build RoF2's zone connection and entry against stock `EQEmu` from its
   public source, labelled inferred for RoF2 (6.501). `Rof2::connect_zone`
   speaks the modern transport, and `Rof2Admission` sends the 76-byte entry,

@@ -269,6 +269,7 @@ fn only_the_matching_latched_send_refusal_is_deferred() {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
             server_filters_at_once: false,
             gameplay_departures: false,
         };

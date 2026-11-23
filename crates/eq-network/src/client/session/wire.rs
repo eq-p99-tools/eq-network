@@ -488,10 +488,12 @@ impl Wire for Rof2 {
     fn admit(
         &self,
         character: &str,
-        _revolution: f32,
+        revolution: f32,
         handshake: &mut Handshake<'_, '_>,
     ) -> Result<Box<dyn Admission>> {
-        Ok(Box::new(Rof2Admission::start(character, handshake)?))
+        Ok(Box::new(Rof2Admission::start(
+            character, revolution, handshake,
+        )?))
     }
 
     fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
