@@ -5,10 +5,10 @@
 //! Layout reference: `EQEmu`'s `ucs/clientlist.cpp` (`Clientlist::Process`,
 //! `ProcessOPMailCommand`, `Client::JoinChannels`, `SendChannelMessage`,
 //! `GeneralChannelMessage`, `AnnounceJoin`) and `utils/patches/
-//! mail_opcodes.conf`, which every client generation shares. What the
-//! Titanium program itself sends in the bytes the server skips, and the
-//! mailbox it names, are inferred (recording checklist 6.509, pending read
-//! R49-12 a).
+//! mail_opcodes.conf`, which every client generation shares. The login
+//! follows the Titanium program's (read R49-12 a, checklist 6.616): the
+//! mailbox, the key, then the language tag and a last 0. Its lead byte is
+//! inferred: the read counts a 0x01 before it, taken as the opcode.
 //!
 //! The key is kept in [`Login`] and its login body, zeroed when they are
 //! dropped, and no `Debug`, event or error carries it. Once sent, the
@@ -56,8 +56,17 @@ const KEY_DIGITS: usize = 8;
 /// with; the server keeps only the part after the last dot [I, R49-12 a].
 const MAILBOX_PREFIX: &str = "SOE.EQ.";
 /// The first byte of the client's login and commands, which the server
-/// skips [I, R49-12 a].
+/// skips. [I] The read (R49-12 a) gives the login's bytes as 0x01 then 0;
+/// the 0x01 is taken as the opcode ([`LOGIN_OPCODE`]) counted into the body,
+/// so the body leads with the 0 alone.
 const LEAD: u8 = 0;
+/// The language tag the program sends after the key: its table at 0x799830
+/// indexed by the client's language, `us` for 0 (read R49-12 a). This client
+/// never sets another language [I].
+const LANGUAGE: &[u8] = b"us";
+/// The login's last byte, the connection's +0x17, 0 from the program's one
+/// caller (read R49-12 a).
+const LAST: u8 = 0;
 
 /// What the client logs in to a Titanium chat server with: the server, and
 /// the key, which only [`Login::body`] reads.
@@ -110,8 +119,10 @@ impl Login {
         &self.server
     }
 
-    /// The login's bytes: the lead byte, the mailbox and its NUL, then the
-    /// channels letter, the key and a NUL. Zeroed when dropped.
+    /// The login's bytes, as the Titanium program sends them (read R49-12 a):
+    /// the lead byte, the mailbox and its NUL, the channels letter, the key
+    /// and a NUL, the language tag and a NUL, and a last 0. Zeroed when
+    /// dropped.
     #[must_use]
     pub fn body(&self) -> Zeroizing<Vec<u8>> {
         let mut body = Zeroizing::new(Vec::with_capacity(
@@ -121,7 +132,9 @@ impl Login {
                 + self.server.character.len()
                 + 2
                 + KEY_DIGITS
-                + 1,
+                + 1
+                + LANGUAGE.len()
+                + 2,
         ));
         body.push(LEAD);
         body.extend_from_slice(MAILBOX_PREFIX.as_bytes());
@@ -132,6 +145,9 @@ impl Login {
         body.push(TITANIUM_CHANNELS_LETTER);
         body.extend_from_slice(&*self.key);
         body.push(0);
+        body.extend_from_slice(LANGUAGE);
+        body.push(0);
+        body.push(LAST);
         body
     }
 }
@@ -332,11 +348,19 @@ mod tests {
         expected.extend_from_slice(b"SOE.EQ.testworld.Tester\0B");
         expected.extend_from_slice(KEY.as_bytes());
         expected.push(0);
+        // The program's language tag and last byte (read R49-12 a).
+        expected.extend_from_slice(b"us\0\0");
         assert_eq!(*login.body(), expected);
-        // The server's check: nine bytes between the mailbox's NUL and the
-        // last NUL.
+        // The key the server reads after the mailbox: the letter and eight
+        // digits up to their NUL.
         let mailbox_end = 1 + expected[1..].iter().position(|&b| b == 0).unwrap();
-        assert_eq!(expected.len() - mailbox_end - 2, 9);
+        let key_end = mailbox_end
+            + 1
+            + expected[mailbox_end + 1..]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap();
+        assert_eq!(key_end - mailbox_end - 1, 9);
         assert!(!format!("{login:?}").contains(KEY));
     }
 

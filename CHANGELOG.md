@@ -5,6 +5,49 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
+  read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
+  192-byte body with the event's reason at +4, carrying where the player
+  is at that moment (heading cut to a whole number). Sent after `/roleplay`
+  (0x0a) and `/anonymous` (0x0b), the player's close of a merchant's window
+  (0x14; which window the program's site is, is inferred) and the server's
+  end of an open loot (0x15). None while the player is dead or has no
+  spawn, or while a merchant's window or a trade is open; the program's
+  other gates are unread. P99, the Mac-era types and RoF2 send none: P99
+  waits on an official capture showing 0x736b.
+  - **Breaking:** `Request::EventSave { save, reason }`, with
+    `zoning::titanium_event_save`, `zoning::EVENT_SAVE_OPCODE` and
+    `zoning::save_reason`. `Request::EventSave` is refused on `EQMac`.
+
+- The chat server login and link follow the Titanium program (read R49-12 a,
+  checklist 6.616).
+  - **The login's bytes change on the wire:** after the key and its NUL
+    come the program's language tag `us`, its NUL, and a last 0. The lead
+    byte stays one 0: the read's 0x01 before it is taken as the opcode
+    (inferred).
+  - A logged-in link checks every 5 seconds and ends after more than 30
+    seconds in which the server sent nothing, told once as
+    `ChannelLink::Lost { reason: Dropped }`. What counts as a word from the
+    server is unread, so anything the transport takes counts (inferred).
+    No new `LinkLoss` variant; not breaking.
+
+- Each Bard song stop says the Titanium program's line (0x40f06d, read
+  R49-21): `WorldEvent::SongStopped { session_id, spell_id, string_id }`,
+  with 0x318f, at the player's stop, a gem click while singing, a forget's
+  answer and the server's cast update ending the song. A stop down the
+  program's non-song path (another class's song, or a timed item cast's
+  end) says nothing. The Mac-era server types send none.
+  - **Breaking:** the new `WorldEvent` variant. A gem click that stops the
+    song no longer sends `CastRejected`; the stop's `SongStopped` says it.
+- A rider's restore aboard keeps the z of the last save sent, whatever kind
+  (read R49-22f, checklist 6.613). Every save writes the program's record's
+  third field, which its profile loader never writes, so an ordinary
+  transfer's save now sets it too (the destination's z, from that save's
+  place), and leaving the boat no longer forgets it.
+  Labelled departures: no leave-game or periodic save is sent yet (6.614,
+  6.615), resurrection's write is not copied, and the value is kept per
+  session. Unreachable on stock `EQEmu`, whose profile names no vehicle.
+
 - Reports to the staff, as read R49-23 reads the Titanium program (6.511).
   - **Titanium feedback is sent** (`OP_Feedback` 0x5306, 1148 bytes): the
     name, an empty field, the place and rounded heading, and the text at

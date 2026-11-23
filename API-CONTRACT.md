@@ -66,10 +66,9 @@ a Bard sings, that is, while the session keeps a song of the class's spell
   The rest that wait on a cast still wait. Any other cast, including an
   item cast started alongside the song, holds as before.
 - **A gem cast (`CastSpell`) while singing stops the song** (the empty
-  `0x4839`, as `StopSong` sends) **and casts nothing.** The host gets
-  `WorldEvent::CastRejected` for the gem, reason "The song stopped; the gem
-  did not cast", with no string id. The gem timers the program resets on a
-  stop are the host's to reset (6.542).
+  `0x4839`, as `StopSong` sends) **and casts nothing.** The host gets the
+  stop's `WorldEvent::SongStopped` (below) and no `CastRejected`. The gem
+  timers the program resets on a stop are the host's to reset (6.542).
 - **A forget's answer** (the server's gem clear, mode 2) **stops the song**
   the same way. A memorize's answer leaves it.
 - **An item cast goes alongside the song**, which stays kept. When the
@@ -77,8 +76,24 @@ a Bard sings, that is, while the session keeps a song of the class's spell
   song ends too, with nothing sent; an instant item's end leaves it (read
   R49-21e).
 
+- **Each song stop says the program's line** (0x40f06d, read R49-21):
+  `WorldEvent::SongStopped` carries the song's spell and `string_id`
+  0x318f. That covers the player's stop (`StopSong`, a Bard's
+  `StopCasting`, a gem click while singing, a forget's answer) and the
+  server's cast update ending the song for the song's own spell, the
+  current one, or a memorized spell (taken as a song). A stop the
+  program's non-song path makes says nothing: another class's song stopped
+  here, or a Bard's other spell, such as a timed item cast, ending the
+  song (read R49-21e). Of these the host hears only `Singing` none. The read has the program print it
+  unless its Bard songs filter holds 1 (mine only, in read R49-2's values);
+  the host decides by its own filter. The
+  program's mode-1 stops (its own interrupt roll on a hit, and two
+  others) print 0x318e; the session makes none of those, so it never
+  sends that line.
+
 The Mac-era server types keep the earlier rules: the song holds what any
-cast holds, a gem click casts, and the book's answers leave the song alone.
+cast holds, a gem click casts, the book's answers leave the song alone, and
+no `SongStopped` is sent.
 The Mac-era program is unread. First use on P99 is attended.
 
 `Capability::Melody` says where the server type takes a Bard's `/melody`
@@ -249,7 +264,10 @@ session's end; a later offer replaces it, and nothing retries.
 when its world opened a link; it is never added or removed mid-zone.
 Whether the link is up is told by `WorldEvent::ChannelLink`: `Up` once the
 chat server takes the login, `Lost { reason }` once when it ends (the
-reason names no address; a login unanswered for 30 seconds ends it). Each
+reason names no address; a login unanswered for 30 seconds ends it, and
+so does a logged-in link the server has sent nothing on for more than 30
+seconds, checked every 5, as `Lost { reason: Dropped }`; anything the
+transport takes counts, its acks and keepalives among them). Each
 is told once, in the zone that hears it, and not again at the next zone's
 `Entered`: the host keeps the link's state across zones until `Lost` or the
 character list. `GameCommand::ChatChannel { session_id, text,
@@ -936,6 +954,24 @@ listener continues on its current connection while the transport remains
 active. The progress enum is non-exhaustive, and its new serialized value is
 `recording`. Errors in the handshake itself continue to follow the existing
 session error policy.
+
+## Titanium event saves
+
+On stock `EQEmu` Titanium, four existing actions now put one more packet on
+the wire, after their own: `ClientCommand::ToggleRoleplay` and
+`ClientCommand::ToggleAnonymous` (after the appearance update), the player's
+`ClientCommand::Shop` close of an open merchant's window (after the close),
+and the server's end of an open loot (`LootUpdate::Closed`). Each sends
+`OP_Save` (0x736b, 192 bytes): the zone save's body with the event's reason
+at +4 (`zoning::save_reason`: 0x0a, 0x0b, 0x14, 0x15), carrying the own
+spawn's place at that moment, the heading cut to a whole number. Only stock
+`EQEmu` sends it. P99 is built and held off until an official-client capture
+there shows it; Quarm, TAKP and RoF2 send none, and `Request::EventSave` is
+refused on `EQMac`. It is withheld, with a diagnostic and nothing sent, when
+the player has no own spawn or place yet, is dead, or has a merchant's window
+or a trade open. A refused or paced toggle, and a loot close with no loot
+open, send no save. Stock `EQEmu` saves the character on any `OP_Save` and
+reads nothing in the body. Reads R49-22g and R49-22h, checklist 6.615.
 
 ## Modern session termination
 

@@ -63,15 +63,15 @@ const SAME_HEADING: f32 = 0.5;
 /// profile (0x4ba21e-0x4ba25d; read R36c). Its loader stores the profile's
 /// three coordinates into the record's first, second and first fields
 /// again, and the heading into the fourth, so the first field keeps the
-/// profile's third coordinate and the third field keeps the departure's z
-/// (zero when this client saved none). Which of this client's axes the
+/// profile's third coordinate and the third field keeps the z of the last
+/// save (zero when this session sent none; read R49-22f, 6.613). Which of this client's axes the
 /// record's first two fields are follows the zone request's order
 /// (inferred, 6.478).
-fn restored(profile: Position, departure_z: Option<f32>) -> Position {
+fn restored(profile: Position, saved_z: Option<f32>) -> Position {
     Position {
         x: profile.y,
         y: profile.z,
-        z: departure_z.unwrap_or(0.0),
+        z: saved_z.unwrap_or(0.0),
         heading: profile.heading,
     }
 }
@@ -114,26 +114,31 @@ pub(super) enum CarriedFrom {
 pub(in crate::client) struct Riding {
     /// Whether the last boat word sent was `OP_BoardBoat`.
     aboard: AtomicBool,
-    /// The boat-frame z the last boat save carried. The program's profile
-    /// loader never writes the record's third coordinate (0x4ba21e; read
-    /// R36c), so its restore keeps the one the departure wrote.
-    departure_z: Mutex<Option<f32>>,
+    /// The z the last save this session sent carried: the record's third
+    /// field. The program's profile loader never writes it (0x4ba21e; read
+    /// R36c), and every save writes it with the z it sends, the boat-frame
+    /// z aboard and the world z otherwise (0x4976bf, 0x4a1350; read
+    /// R49-22f). Leaving the boat doesn't clear it, nor does a profile.
+    ///
+    /// Departures, labelled (6.613): this session sends no leave-game save
+    /// before a camp or `/q` (6.614) and no periodic save (6.615), so the
+    /// field follows the zone request's saves alone; resurrection's write
+    /// of the first coordinate into it (0x4564ba) is not copied; and the
+    /// field is kept per session, not across a new login in one process.
+    saved_z: Mutex<Option<f32>>,
 }
 
 impl Riding {
-    /// Notes the boat-frame z a boat save carried, or forgets it.
-    pub(super) fn depart_at(&self, z: Option<f32>) {
-        if let Ok(mut departure) = self.departure_z.lock() {
-            *departure = z;
+    /// Notes the z a save carried.
+    pub(super) fn saved(&self, z: f32) {
+        if let Ok(mut saved) = self.saved_z.lock() {
+            *saved = Some(z);
         }
     }
 
-    /// The boat-frame z the last boat save carried, if it is kept.
-    pub(super) fn departure_z(&self) -> Option<f32> {
-        self.departure_z
-            .lock()
-            .ok()
-            .and_then(|departure| *departure)
+    /// The z the last save this session sent carried, if it sent one.
+    pub(super) fn saved_z(&self) -> Option<f32> {
+        self.saved_z.lock().ok().and_then(|saved| *saved)
     }
 }
 
@@ -244,7 +249,7 @@ impl Riders {
             .body
             .position()
             .context("arrival aboard without a profile position")?;
-        let local = restored(profile, world.riding.departure_z());
+        let local = restored(profile, world.riding.saved_z());
         let found = self
             .found
             .take()

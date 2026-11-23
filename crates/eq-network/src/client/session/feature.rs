@@ -256,6 +256,9 @@ pub(in crate::client) struct World {
     pub(super) belt: Option<
         Box<[Option<eq_network_game::bandolier::BeltItem>; eq_network_game::bandolier::BELT_SLOTS]>,
     >,
+    /// What the Titanium program's event saves read (`OP_Save`; read
+    /// R49-22g, checklist 6.615); see [`super::saves`].
+    pub(super) saves: super::saves::Gates,
     /// What the session itself made happen, for every feature and the host
     /// to hear next; see [`World::happened`].
     news: Vec<Message>,
@@ -299,6 +302,7 @@ impl World {
             riding: std::sync::Arc::default(),
             carried_from: super::riders::CarriedFrom::Elsewhere,
             belt: None,
+            saves: super::saves::Gates::default(),
             news: Vec::new(),
         }
     }
@@ -328,6 +332,20 @@ impl World {
                 | ServerProtocol::Quarm
                 | ServerProtocol::Takp
                 | ServerProtocol::EqEmuRof2 => None,
+            },
+            saves: super::saves::Gates {
+                // Stock EQEmu saves on any `OP_Save` (`Handle_OP_Save`).
+                // P99's is built, but off until an official-client capture
+                // there shows one of these events' saves (6.615 V2). The
+                // Mac and RoF2 programs' event saves are unread.
+                taken: match config.protocol {
+                    ServerProtocol::EqEmu => true,
+                    ServerProtocol::Project1999
+                    | ServerProtocol::Quarm
+                    | ServerProtocol::Takp
+                    | ServerProtocol::EqEmuRof2 => false,
+                },
+                merchant_open: false,
             },
             ..Self::new(session_id)
         }
@@ -476,10 +494,10 @@ impl World {
         self.body.suspend();
     }
 
-    /// Forgets the vehicle and the boat-frame z its departure saved.
+    /// Forgets the vehicle. The z the last save carried stays: only the
+    /// next save writes it (read R49-22f).
     pub(super) fn forget_vehicle(&mut self) {
         self.vehicle = None;
-        self.riding.depart_at(None);
     }
 
     /// Puts the admitted player where the server says they are.
