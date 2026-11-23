@@ -53,8 +53,20 @@ pub(super) const INBOUND: usize = 256;
 pub(super) type Connect =
     dyn Fn(&Login, bool, &AtomicBool) -> Result<Box<dyn Transport + Send>, LinkLoss> + Send + Sync;
 
+// Every opcode the link sends fits the chat stream's one byte, which the
+// transport would otherwise refuse with an error rather than cut short.
+const _: () = assert!(
+    chat_server::LOGIN_OPCODE <= 0xff
+        && chat_server::LOGIN_OPCODE != 0
+        && chat_server::COMMAND_OPCODE <= 0xff
+        && chat_server::COMMAND_OPCODE != 0
+);
+
 /// The production connection: the offered address through the same checks
-/// as a zone's ([`crate::client::endpoint`]), then the modern transport.
+/// as a zone's ([`crate::client::endpoint`]), then the modern transport with
+/// one-byte opcodes, as a chat server's stream carries them (`EQEmu`'s
+/// `ucs/clientlist.cpp`, `opcode_size = 1`). The Titanium program's login
+/// (read R49-12 a) is the opcode 0x01 then a 0, which this reproduces.
 fn connect(
     login: &Login,
     local_only: bool,
@@ -64,7 +76,7 @@ fn connect(
     let address = crate::client::endpoint(&server.host, server.port, local_only)
         .map_err(|_| LinkLoss::Address)?;
     crate::transport::Session::connect_cancellable(address, false, stop)
-        .map(|session| Box::new(session) as Box<dyn Transport + Send>)
+        .map(|session| Box::new(session.with_one_byte_opcodes()) as Box<dyn Transport + Send>)
         .map_err(|_| LinkLoss::Connect)
 }
 
