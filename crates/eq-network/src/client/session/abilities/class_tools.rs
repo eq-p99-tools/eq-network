@@ -39,6 +39,8 @@ mod lines {
     pub(super) const BEG_UNSEEN: u32 = 0x3074;
     /// Pick Pockets (section 3).
     pub(super) const PICK_NO_TARGET: u32 = 0x3075;
+    /// A target that is neither a player nor an NPC (read R49-31 e).
+    pub(super) const PICK_NOT_A_BODY: u32 = 0x3076;
     pub(super) const PICK_STUNNED: u32 = 0x3077;
     pub(super) const PICK_ATTACKING: u32 = 0x3078;
     pub(super) const PICK_YOURSELF: u32 = 0x3079;
@@ -170,14 +172,14 @@ impl Abilities {
                 })
             }
             Ability::PickPockets | Ability::Begging => {
-                let reach = out.wire.reaches().bandage;
+                let reach = out.wire.reaches().beg_pick;
                 let target = if ability == Ability::PickPockets {
                     pick_pockets(target, own_id, world)?
                 } else {
                     begging(target, world)?
                 };
-                // The program measures its 15 units as the bandage's reach
-                // does (recording checklist 6.431, inferred).
+                // Origin to origin, flat, at most 15 on Titanium (read
+                // R49-31 b, checklist 6.631).
                 if !reach.admits(position, target.position) {
                     let line = if ability == Ability::PickPockets {
                         lines::PICK_TOO_FAR
@@ -324,9 +326,16 @@ fn pick_pockets<'w>(
             Vec::new(),
         ));
     };
-    // The program takes only a player or an NPC, silently.
+    // The program takes only a player (type 0) or an NPC (type 1); a
+    // corpse or any other type gets its line (read R49-31 e). A target
+    // with its +0x256 set is passed over silently there: that byte isn't
+    // mapped to a spawn field yet (checklist 6.631).
     if !matches!(spawn.kind, SpawnKind::Player | SpawnKind::Npc) {
-        return Err("You cannot use that on your target".into());
+        return Err(Refusal::official(
+            "Pick Pockets refused: not a player or an NPC",
+            lines::PICK_NOT_A_BODY,
+            Vec::new(),
+        ));
     }
     if world.control.stunned() {
         return Err(Refusal::official(
@@ -406,9 +415,10 @@ fn begging<'w>(
     Ok(spawn)
 }
 
-/// Whether the player cannot be seen, which the program reads from its own
-/// +0x250; the session reads the player's own spawn's invisibility
-/// (recording checklist 6.430, inferred).
+/// Whether the player cannot be seen: the program reads its own spawn's
+/// +0x250, its invisibility state from the spawn record's byte +0x54 and
+/// the player's buffs (read R49-31 a); the session reads the player's own
+/// spawn's invisibility.
 fn own_unseen(world: &World, own_id: u16) -> bool {
     world
         .spawns
@@ -680,6 +690,68 @@ mod tests {
         let begged = press(&mut abilities, &world, beg, now);
         assert_eq!(opcodes(&begged), [0x13e7]);
         assert_eq!(begged.sent[0].body[8], 12);
+    }
+
+    #[test]
+    fn begging_and_pick_pockets_reach_flat_from_origin_to_origin_and_refuse_a_corpse() {
+        // Read R49-31 b: the flat (x, y) distance, height ignored, at most 15.
+        let mut abilities = Abilities::new(&Ability::ALL);
+        let mut world = player(&[(48, 20), (67, 20)]);
+        let now = Instant::now();
+        let place = |world: &mut World, id, kind, (x, z): (f32, f32)| {
+            let mut spawn = testing::spawn(id, kind);
+            spawn.position = Position {
+                x,
+                z,
+                ..Position::default()
+            };
+            world.spawns.insert(spawn);
+        };
+        // 15 away flat and 40 up: in reach.
+        place(&mut world, 44, SpawnKind::Npc, (15.0, 40.0));
+        world.target = crate::client::session::targeting::Target::from(44);
+        assert_eq!(
+            opcodes(&press(
+                &mut abilities,
+                &world,
+                (Ability::Begging, false),
+                now
+            )),
+            [0x13e7]
+        );
+        assert_eq!(
+            opcodes(&press(
+                &mut abilities,
+                &world,
+                (Ability::PickPockets, false),
+                now
+            )),
+            [0x2ad8]
+        );
+        // Just past 15 flat: out of reach, whatever the height.
+        let mut fresh = Abilities::new(&Ability::ALL);
+        place(&mut world, 44, SpawnKind::Npc, (15.1, 0.0));
+        assert_eq!(
+            line(&press(&mut fresh, &world, (Ability::Begging, false), now)),
+            Some(0x3073)
+        );
+        assert_eq!(
+            line(&press(
+                &mut fresh,
+                &world,
+                (Ability::PickPockets, false),
+                now
+            )),
+            Some(0x307e)
+        );
+        // A corpse of either kind gets the program's line (read R49-31 e).
+        for kind in [SpawnKind::NpcCorpse, SpawnKind::PlayerCorpse] {
+            place(&mut world, 45, kind, (1.0, 0.0));
+            world.target = crate::client::session::targeting::Target::from(45);
+            let picked = press(&mut fresh, &world, (Ability::PickPockets, false), now);
+            assert_eq!(line(&picked), Some(0x3076), "{kind:?}");
+            assert_eq!(picked.sent, []);
+        }
     }
 
     #[test]
