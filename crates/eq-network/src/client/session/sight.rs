@@ -18,6 +18,12 @@ impl Sight {
         }
     }
 
+    /// The installed recast of a spell, where the host's catalog knows it
+    /// (Titanium only, as the catalog is).
+    pub(super) fn recast(&self, spell_id: u32) -> Option<std::time::Duration> {
+        self.catalog.as_ref()?.recast(spell_id)
+    }
+
     pub(super) fn clear(&mut self) {
         self.slots.clear();
         self.landings.clear();
