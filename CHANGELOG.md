@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Build the Mac-era program's boat boarding and leaving (TAKP 0x4c131d,
+  read 9a, checklist 6.618), not offered yet: Quarm and TAKP keep
+  `BoatRiding` off until the Mac-era arrival is read.
+  - New: `boats::riders::{EQMAC_BOARD_OPCODE, EQMAC_LEAVE_OPCODE,
+    eqmac_board, eqmac_leave}`. The Mac request encoder now carries
+    `Request::BoardBoat` (0x41bb: the name, its NUL and three zero bytes)
+    and `Request::LeaveBoat` (0x41bc, empty).
+  - On the Mac era, the riders feature boards, reliable, on the first
+    accepted sample that stands on a boat, and leaves, unreliable, after two
+    unlinked samples in a row. Titanium keeps its 1 s tick. Samples stand in
+    for the program's frames (inferred).
 - The chat server login and link follow the Titanium program (read R49-12 a,
   checklist 6.616).
   - **The login's bytes change on the wire:** after the key and its NUL

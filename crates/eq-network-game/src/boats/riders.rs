@@ -95,6 +95,36 @@ pub fn titanium_leave() -> EncodedCommand {
     }
 }
 
+/// The Mac-era `OP_BoardBoat` (TAKP eqgame.exe 0x4c131d, read 9a; 6.618).
+pub const EQMAC_BOARD_OPCODE: u16 = 0x41bb;
+/// The Mac-era `OP_LeaveBoat` (0x4c131d, read 9a; 6.618).
+pub const EQMAC_LEAVE_OPCODE: u16 = 0x41bc;
+
+/// The Mac-era `OP_BoardBoat`: the boat spawn's name, its NUL and three
+/// more bytes, `strlen` + 4 from the spawn record (0x4c131d, read 9a), the
+/// same shape as Titanium's. The three are sent as zero; their meaning is
+/// unread (inferred, 6.478, 6.618).
+///
+/// # Errors
+/// Rejects an empty name, one with a NUL, or one too long for the field.
+pub fn eqmac_board(name: &str) -> Result<EncodedCommand> {
+    let mut body = checked(name)?;
+    body.extend([0; 4]);
+    Ok(EncodedCommand {
+        opcode: EQMAC_BOARD_OPCODE,
+        body,
+    })
+}
+
+/// The Mac-era `OP_LeaveBoat`, with no body (0x4c131d, read 9a; 6.618).
+#[must_use]
+pub fn eqmac_leave() -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_LEAVE_OPCODE,
+        body: Vec::new(),
+    }
+}
+
 /// 0x3710: the raw saved vehicle name and its NUL (R36b §3).
 ///
 /// # Errors
@@ -231,6 +261,23 @@ mod tests {
         assert!(titanium_board("").is_err());
         assert!(titanium_board(&"x".repeat(64)).is_err());
         assert!(titanium_missing("a\0b").is_err());
+    }
+
+    #[test]
+    fn the_mac_era_board_and_leave_carry_the_name_at_its_read_length() {
+        // 0x41bb: the name, its NUL and 3 more bytes, sent as zero; 0x41bc
+        // empty (TAKP 0x4c131d, read 9a; 6.618).
+        let board = eqmac_board("Sabrina00").unwrap();
+        assert_eq!(board.opcode, EQMAC_BOARD_OPCODE);
+        assert_eq!(board.opcode, 0x41bb);
+        assert_eq!(board.body, b"Sabrina00\0\0\0\0");
+        assert_eq!(board.body.len(), "Sabrina00".len() + 4);
+        let leave = eqmac_leave();
+        assert_eq!(leave.opcode, 0x41bc);
+        assert_eq!(leave.body, Vec::<u8>::new());
+        assert!(eqmac_board("").is_err());
+        assert!(eqmac_board(&"x".repeat(64)).is_err());
+        assert!(eqmac_board("a\0b").is_err());
     }
 
     #[test]

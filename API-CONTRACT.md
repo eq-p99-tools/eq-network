@@ -1845,8 +1845,18 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   death each give control back.
 - **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
   types until the `EQMac` program's steering (a position update under the
-  boat's spawn moves it on both servers) and its board, leave and arrival
-  wire are read (open rows 9a and 9b).
+  boat's spawn moves it on both servers) and its arrival are read (open row
+  9b and the arrival placement).
+- **Board and leave (built, not offered; 6.618).** The `EQMac` program's
+  frame routine (TAKP `eqgame.exe` 0x4c131d, read 9a) sends `OP_BoardBoat`
+  (0x41bb) reliable on the first frame its vehicle pointer is set, with the
+  boat's name, its NUL and three record bytes, and an empty `OP_LeaveBoat`
+  (0x41bc) unreliable once two frames in a row have none.
+  `boats::riders::{eqmac_board, eqmac_leave}` encode them, sending the
+  three bytes as zero (inferred, as on Titanium). The riders feature
+  checks for them on each accepted motion sample on the Mac era, where
+  Titanium uses its 1 s tick. Samples standing in for the program's frames
+  is inferred.
 - **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
   `Message::VehicleName`, last among the profile's messages. Both servers
   keep it across zones and clear it on `OP_LeaveBoat` and in a zone without
