@@ -771,6 +771,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
+#[allow(clippy::too_many_lines, reason = "one arm per request")]
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
         Request::ReadBook(book) => books::eqmac_request(book),
@@ -867,6 +868,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerTrade { asker, busy: true } => exchange::eqmac::busy(sender.spawn(), *asker),
         Request::AcceptTrade { with } => exchange::eqmac::accept(*with),
         Request::CancelTrade { with } => exchange::eqmac::cancel(sender.spawn(), *with),
+        Request::AlternateAdvancement(action) => Ok(EncodedCommand {
+            opcode: crate::alternate_advancement::EQMAC_ACTION_OPCODE,
+            body: crate::alternate_advancement::eqmac_action(*action)?.to_vec(),
+        }),
         Request::Surname(surname) => Ok(EncodedCommand {
             opcode: crate::names::EQMAC_SURNAME_OPCODE,
             body: crate::names::surname_request(sender.name, surname)?,
@@ -1073,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn only_titanium_sends_an_aa_action() {
+    fn each_generation_sends_its_own_aa_action() {
         use crate::alternate_advancement::Action;
         let train = Request::AlternateAdvancement(Action::Train { rank_id: 9 });
         let sent = titanium(&train, PLAYER).unwrap();
@@ -1086,8 +1091,10 @@ mod tests {
             PLAYER
         )
         .is_err());
-        // TAKP's request is text, slice N4.
-        assert!(eqmac(&train, PLAYER).is_err());
+        // TAKP's is 256 bytes of text on its own opcode (N4).
+        let text = eqmac(&train, PLAYER).unwrap();
+        assert_eq!((text.opcode, text.body.len()), (0x1442, 256));
+        assert_eq!(&text.body[..6], b"buy 9\0");
     }
 
     #[test]
