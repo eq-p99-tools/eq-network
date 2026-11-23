@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519), and the chat rows from the chat parser
-//! (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522), and the chat rows from the chat
+//! parser (6.521).
 
 use super::{
     sent, Part,
@@ -71,6 +71,16 @@ const WEAR_CHANGE: &[Part] = &[Part(
     Planned(Rof2),
 )];
 
+/// What the zone decoder leaves unread of an illusion (6.522).
+const ILLUSION: &[Part] = &[Part(
+    "the Drakkin heritage, tattoo and details",
+    Planned(Rof2),
+)];
+/// What the zone decoder leaves unread of a face change (6.522).
+const FACE_CHANGE: &[Part] = &[Part(
+    "the Drakkin heritage, tattoo and details",
+    Planned(Rof2),
+)];
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
 /// client; nothing for one no stage reads yet.
 pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
@@ -142,6 +152,20 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x6f15 => sent("OP_Damage", ROF2, Partly(&[Zone], DAMAGE)),
         0x742b => sent("OP_Consider", ROF2, Read(&[Zone])),
         0x004c => sent("OP_SkillUpdate", ROF2, Read(&[Zone])),
+        // Casting, stuns and illusions (6.522). The action's zero words,
+        // gem byte, slot constants and item-cast type, and the stun's four
+        // constant bytes, are not parts: the encoder writes them, and they
+        // carry nothing from the server. The action's modifier reads the
+        // server's 0 to 9 all as 0, since the encoder's unsigned arithmetic
+        // wraps them alike. The illusion's name, its two bytes at 70 (which
+        // Titanium has no field for), its zero word at 240 and its constant
+        // at 316 are not read either.
+        0x318f => sent("OP_BeginCast", ROF2, Read(&[Zone])),
+        0x744c => sent("OP_Action", ROF2, Read(&[Zone])),
+        0x048c => sent("OP_InterruptCast", ROF2, Read(&[Zone])),
+        0x36a4 => sent("OP_Stun", ROF2, Read(&[Zone])),
+        0x312a => sent("OP_Illusion", ROF2, Partly(&[Zone], ILLUSION)),
+        0x1af3 => sent("OP_SetFace", ROF2, Partly(&[Zone], FACE_CHANGE)),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the

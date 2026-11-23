@@ -128,7 +128,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 21] = [
+pub const ROF2_READS: [u16; 27] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -150,12 +150,18 @@ pub const ROF2_READS: [u16; 21] = [
     crate::rof2_news::DAMAGE_OPCODE,
     crate::rof2_news::CONSIDER_OPCODE,
     crate::rof2_news::SKILL_OPCODE,
+    crate::rof2_casting::BEGIN_CAST_OPCODE,
+    crate::rof2_casting::ACTION_OPCODE,
+    crate::rof2_casting::INTERRUPT_OPCODE,
+    crate::rof2_casting::STUN_OPCODE,
+    crate::rof2_casting::ILLUSION_OPCODE,
+    crate::rof2_casting::FACE_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
 /// spawns' movement and removal (6.514), how they look and how hurt they
-/// are (6.518), and the player's own news and the combat records (6.519)
-/// are read yet; a body a reader refuses is unreadable, told by its opcode
+/// are (6.518), the player's own news and the combat records (6.519), and
+/// casting, stuns and illusions (6.522) are read yet; a body a reader refuses is unreadable, told by its opcode
 /// and length only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
@@ -172,10 +178,29 @@ pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
             Ok(Some(events)) => events.into_iter().map(Message::Event).collect(),
             Err(error) => vec![unreadable(Part::World, &error)],
             Ok(None) => match crate::rof2_looks::read(opcode, body) {
-                Ok(event) => event.map(Message::Event).into_iter().collect(),
+                Ok(Some(event)) => vec![Message::Event(event)],
+                Ok(None) => rof2_casting(opcode, body).into_iter().collect(),
                 Err(error) => vec![unreadable(Part::World, &error)],
             },
         },
+    }
+}
+
+/// What one of `RoF2`'s casting messages says, with Titanium's parts: a
+/// spell's beginning or interruption is the spells part's, the rest the
+/// world's. None for another opcode.
+fn rof2_casting(opcode: u16, body: &[u8]) -> Option<Message> {
+    let part = match opcode {
+        crate::rof2_casting::BEGIN_CAST_OPCODE | crate::rof2_casting::INTERRUPT_OPCODE => {
+            Part::Spells
+        }
+        _ => Part::World,
+    };
+    match crate::rof2_casting::read(opcode, body) {
+        Ok(None) => None,
+        Ok(Some(crate::rof2_casting::Casting::Event(event))) => Some(Message::Event(event)),
+        Ok(Some(crate::rof2_casting::Casting::Action(read))) => Some(action(Ok(read))),
+        Err(error) => Some(unreadable(part, &error)),
     }
 }
 
