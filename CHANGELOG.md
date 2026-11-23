@@ -5,6 +5,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read the Apply Poison wait from effect 234 as the program does (read
+  R49-1f, 6.493b): the host reports the total with the new
+  `GameCommand::PoisonWait { session_id, total_ms }`, and each tick waits
+  that many ms where it is not 0, else 10 s; a negative total never sends.
+  Untold or `None`, the wait stays 10 s. **Breaking:** a new variant on the
+  exhaustive command enum.
+
 - Apply Poison as the Titanium program does it (read R49-1, 6.493): the
   session sits a standing player, waits 10 s seated, then sends the request.
   Any posture change before then cancels it. The skill and posture refusals

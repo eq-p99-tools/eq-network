@@ -974,7 +974,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 146;
+    const KINDS: usize = 147;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1073,6 +1073,7 @@ mod tests {
             ClientCommand::DropCorpse { .. } => 39,
             ClientCommand::Pet { .. } => 40,
             ClientCommand::AutoEat { .. } => 41,
+            ClientCommand::PoisonWait { .. } => 146,
             ClientCommand::AnswerListPolls { .. } => 76,
             ClientCommand::SetMovementOptions { .. } => 77,
             ClientCommand::SetBookOptions { .. } => 78,
@@ -1570,6 +1571,10 @@ mod tests {
             ClientCommand::AutoEat {
                 session_id,
                 auto_eat: eq_network_game::food::AutoEat::Anything,
+            },
+            ClientCommand::PoisonWait {
+                session_id,
+                total_ms: Some(5000),
             },
             ClientCommand::WhoAll {
                 session_id,

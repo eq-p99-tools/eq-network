@@ -1248,9 +1248,9 @@ impl Feature for Belongings {
 
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
-            ClientCommand::MoveInventory(_) | ClientCommand::ApplyPoison { .. } => {
-                self.allows.items
-            }
+            ClientCommand::MoveInventory(_)
+            | ClientCommand::ApplyPoison { .. }
+            | ClientCommand::PoisonWait { .. } => self.allows.items,
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::DropItem(_) => self.allows.ground_drop,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
@@ -1297,6 +1297,10 @@ impl Feature for Belongings {
             ClientCommand::Shop { .. } => self.shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {
                 self.meals.choose(*auto_eat);
+                Ok(())
+            }
+            ClientCommand::PoisonWait { total_ms, .. } => {
+                self.poisons.told(*total_ms);
                 Ok(())
             }
             ClientCommand::Consume {
@@ -2186,6 +2190,108 @@ mod tests {
             "{:?}",
             ducked.events
         );
+    }
+
+    #[test]
+    fn the_poison_wait_follows_the_hosts_effect_total_on_each_tick() {
+        use std::time::Duration;
+        let wire = &super::super::wire::Titanium;
+        let apply = ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: InventorySlot(25),
+            created: Instant::now(),
+        };
+        let wait = |total_ms| ClientCommand::PoisonWait {
+            session_id: 5,
+            total_ms,
+        };
+        // Starts a poison with the host's total, then reports how many
+        // requests each tick sends after the wait has run this long.
+        let start = |total| {
+            let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+            let (mut world, _, _) = poisoned(&mut belongings, wire);
+            if let Some(total) = total {
+                testing::run_on(wire, |out| belongings.handle(&wait(total), &mut world, out))
+                    .result
+                    .unwrap();
+            }
+            testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out))
+                .result
+                .unwrap();
+            (belongings, world)
+        };
+        let after = |belongings: &mut Belongings, world: &mut World, by: Duration| {
+            belongings.poisons.backdate(by);
+            let tick = testing::run_on(wire, |out| belongings.tick(Instant::now(), world, out));
+            tick.result.unwrap();
+            tick.sent.len()
+        };
+        // A total that is not 0 replaces the 10 s; 0, untold or None waits 10 s.
+        for (total, delay) in [
+            (Some(Some(5000)), 5000),
+            (Some(Some(15_000)), 15_000),
+            (Some(Some(0)), 10_000),
+            (Some(None), 10_000),
+            (None, 10_000),
+        ] {
+            let (mut belongings, mut world) = start(total);
+            let ms = Duration::from_millis;
+            assert_eq!(
+                after(&mut belongings, &mut world, ms(delay - 50)),
+                0,
+                "{total:?}"
+            );
+            assert_eq!(after(&mut belongings, &mut world, ms(100)), 1, "{total:?}");
+            assert_eq!(after(&mut belongings, &mut world, ms(100)), 0, "{total:?}");
+        }
+        // A total told mid-wait is read on the next tick against the same
+        // start: 6 s in, a 5 s total sends at once.
+        let (mut belongings, mut world) = start(None);
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(6)),
+            0
+        );
+        testing::run_on(wire, |out| {
+            belongings.handle(&wait(Some(5000)), &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(after(&mut belongings, &mut world, Duration::ZERO), 1);
+        // A negative total never sends; turned positive again, the send goes
+        // once the elapsed time passes it.
+        let (mut belongings, mut world) = start(Some(Some(-1)));
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(60)),
+            0
+        );
+        testing::run_on(wire, |out| {
+            belongings.handle(&wait(Some(90_000)), &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(29)),
+            0
+        );
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(2)),
+            1
+        );
+        // A negative total's wait still ends with a stand.
+        let (mut belongings, mut world) = start(Some(Some(-1)));
+        testing::run_on(wire, |out| {
+            world
+                .posture
+                .set(7, eq_network_game::command::Posture::Standing, out)
+        })
+        .result
+        .unwrap();
+        let tick = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        tick.result.unwrap();
+        assert!(matches!(
+            world_events(&tick.events).as_slice(),
+            [WorldEvent::PoisonInterrupted { .. }]
+        ));
     }
 
     #[test]

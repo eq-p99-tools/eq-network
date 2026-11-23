@@ -9,12 +9,12 @@
 //!   without a word. Otherwise the wait starts, with 0x305e.
 //! - The request goes out when the wait ends (the character tick,
 //!   0x422617): effect 234's total in ms, the sum over every active buff and
-//!   every usable AA, in place of 10 s when it is not 0 (read R49-1f). This
-//!   session does not sum effect 234 yet and waits the 10 s always: the same
-//!   for a player with no such effect, slower where a total is below 10 s.
-//!   A total above 10 s, or a negative one (with which the program never
-//!   sends), would make this session the faster: a known departure until
-//!   the follow-up sums it.
+//!   every usable AA, in place of 10 s when it is not 0 (read R49-1f). The
+//!   host sums it, having the spell and AA data, and reports it with
+//!   `ClientCommand::PoisonWait` whenever it changes (6.493b); each tick
+//!   reads the latest. Untold, or told it cannot be summed, the session
+//!   waits 10 s: slower where a total is below 10 s, faster where one is
+//!   above it or negative, labelled so.
 //! - Any posture change before then cancels it, with 0x30d1. Leaving the
 //!   zone drops it without a line, as the program's zoning clears it: this
 //!   state ends with the zone session. The posture
@@ -46,8 +46,8 @@ use eq_network_game::{
 use std::time::{Duration, Instant};
 
 /// How long the program waits, seated, before it sends when effect 234's
-/// total is 0 (read R49-1 c, R49-1f). The total is not summed here yet, so
-/// this wait is always used: see the module notes for where that departs.
+/// total is 0 (read R49-1 c, R49-1f), and the session's wait while the host
+/// has not told it a total.
 pub(super) const WAIT: Duration = Duration::from_secs(10);
 /// The Apply Poison skill, the program's only class test (read R49-1 b).
 const APPLY_POISON_SKILL: usize = 6;
@@ -68,6 +68,9 @@ pub(super) struct Poisons {
     pending: Option<InventorySlot>,
     /// Whether an answer to no request in flight was reported already.
     stray_told: bool,
+    /// Effect 234's total as the host last told it, in ms: `None` untold or
+    /// not summable, which waits [`WAIT`].
+    effect_total: Option<i64>,
 }
 
 impl Poisons {
@@ -163,13 +166,37 @@ impl Poisons {
         let Some((slot, since, _)) = self.starting else {
             return Ok(());
         };
-        if now.saturating_duration_since(since) <= WAIT {
+        if !self.wait_over(now.saturating_duration_since(since)) {
             return Ok(());
         }
         self.starting = None;
         out.request(&Request::ApplyPoison { slot })?;
         self.pending = Some(slot);
         Ok(())
+    }
+
+    /// Notes effect 234's total as the host summed it, or that it cannot.
+    pub(super) fn told(&mut self, total_ms: Option<i64>) {
+        self.effect_total = total_ms;
+    }
+
+    /// Whether a wait this long is over, read each tick against the latest
+    /// total as the program's tick reads it (0x422639-0x42266c): a total
+    /// that is not 0 replaces the 10 s, and the send goes once the elapsed
+    /// time passes it. The program's compare is unsigned, so a negative
+    /// total is never passed: the poison waits until a posture or zone
+    /// change ends it. Untold or not summable, the 10 s is used, which
+    /// departs where a total is not 0 (slower below 10 s, faster above it
+    /// or when negative).
+    fn wait_over(&self, elapsed: Duration) -> bool {
+        let delay = match self.effect_total {
+            None | Some(0) => WAIT,
+            Some(total) => match u64::try_from(total) {
+                Ok(ms) => Duration::from_millis(ms),
+                Err(_) => return false,
+            },
+        };
+        elapsed > delay
     }
 
     /// Ends a wait whose player changed stance since it began, with the
