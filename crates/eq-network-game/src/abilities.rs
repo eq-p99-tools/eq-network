@@ -346,11 +346,17 @@ impl Ability {
     /// value (read R16c, [0x851200 + id x 4] +4, in ms), which also gives
     /// the waits above for the strikes, Feign Death, Hide and Mend.
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub const fn reuse(self, dialect: GameDialect) -> Duration {
         Duration::from_millis(match self {
             Self::SenseHeading => 2_000,
             Self::TigerClaw => match dialect {
                 GameDialect::Titanium => 5_500,
+                // Titanium's, inferred for RoF2 (6.489).
+                GameDialect::Rof2 => 5_500,
                 // The EQMac server's unhasted floor is 7 - 1 seconds.
                 GameDialect::EqMac => 6_000,
             },
@@ -360,6 +366,8 @@ impl Ability {
             Self::FlyingKick | Self::RoundKick => 8_500,
             Self::Frenzy => match dialect {
                 GameDialect::Titanium => 15_000,
+                // Titanium's, inferred for RoF2 (6.489).
+                GameDialect::Rof2 => 15_000,
                 GameDialect::EqMac => 9_000,
             },
             Self::Backstab
@@ -374,6 +382,8 @@ impl Ability {
             | Self::Tracking => 10_000,
             Self::BindWound => match dialect {
                 GameDialect::Titanium => 11_000,
+                // Titanium's, inferred for RoF2 (6.489).
+                GameDialect::Rof2 => 11_000,
                 GameDialect::EqMac => 10_000,
             },
             Self::Fishing => 12_000,

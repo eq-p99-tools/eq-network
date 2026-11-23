@@ -170,6 +170,11 @@ pub enum GameDialect {
     Titanium,
     /// The Windows TAKP/`EQMac` client used by Project Quarm.
     EqMac,
+    /// The Rain of Fear 2 client, as stock `EQEmu` serves it. A placeholder:
+    /// its wire refuses every stage, and each of its rules that has no read
+    /// of its program is absent or copied from Titanium, inferred (recording
+    /// checklist 6.489).
+    Rof2,
 }
 
 impl GameDialect {
@@ -179,6 +184,8 @@ impl GameDialect {
     pub const fn supports_heading_snapshots(self) -> bool {
         match self {
             Self::Titanium => true,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.supports_heading_snapshots(),
             Self::EqMac => false,
         }
     }
@@ -189,6 +196,8 @@ impl GameDialect {
         match self {
             Self::EqMac => true,
             Self::Titanium => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.uses_fatigue_for_carry_capacity(),
         }
     }
 
@@ -199,6 +208,8 @@ impl GameDialect {
         match self {
             Self::EqMac => true,
             Self::Titanium => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.requires_clear_cursor_for_doors(),
         }
     }
 
@@ -208,18 +219,20 @@ impl GameDialect {
     pub const fn lying(self) -> feign::LyingRules {
         match self {
             Self::Titanium => feign::TITANIUM,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.lying(),
             Self::EqMac => feign::EQMAC,
         }
     }
 
     /// How this generation's program moves a body in water and where its
     /// air can't be breathed ([`movement::water::WaterRules`]); None where
-    /// its program is unread, as for `EQMac`.
+    /// its program is unread, as for `EQMac` and `RoF2`.
     #[must_use]
     pub const fn water(self) -> Option<movement::water::WaterRules> {
         match self {
             Self::Titanium => Some(movement::water::TITANIUM_WATER),
-            Self::EqMac => None,
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -229,6 +242,8 @@ impl GameDialect {
     pub const fn root(self) -> movement::RootRules {
         match self {
             Self::Titanium => movement::TITANIUM_ROOT,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.root(),
             Self::EqMac => movement::EQMAC_ROOT,
         }
     }
@@ -246,18 +261,20 @@ impl GameDialect {
         match self {
             Self::EqMac => true,
             Self::Titanium => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.posture_ends_attack(),
         }
     }
 
     /// The slot finder this generation's program runs for a buff landing on
     /// the player ([`buffs::placement`]): Titanium's (program reads R3 and
-    /// R20); none for the Mac-era generation, whose program is unread, so
-    /// its landings stay unslotted as before.
+    /// R20); none for the Mac-era generation and `RoF2`, whose programs are
+    /// unread, so their landings stay unslotted.
     #[must_use]
     pub fn buff_placement(self) -> Option<buffs::placement::Finder> {
         match self {
             Self::Titanium => Some(buffs::placement::titanium_player),
-            Self::EqMac => None,
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -267,6 +284,8 @@ impl GameDialect {
     pub const fn entry_stand(self) -> feign::EntryStand {
         match self {
             Self::Titanium => feign::TITANIUM_ENTRY,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.entry_stand(),
             Self::EqMac => feign::EQMAC_ENTRY,
         }
     }
@@ -277,6 +296,8 @@ impl GameDialect {
     pub const fn ducking(self) -> feign::DuckRules {
         match self {
             Self::Titanium => feign::TITANIUM_DUCK,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.ducking(),
             Self::EqMac => feign::EQMAC_DUCK,
         }
     }
@@ -287,6 +308,8 @@ impl GameDialect {
     pub const fn sit_toggle(self) -> feign::SitToggle {
         match self {
             Self::Titanium => feign::TITANIUM_SIT_TOGGLE,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.sit_toggle(),
             Self::EqMac => feign::EQMAC_SIT_TOGGLE,
         }
     }
@@ -300,6 +323,8 @@ impl GameDialect {
     pub const fn skips_unchanged_posture(self) -> bool {
         match self {
             Self::Titanium => true,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.skips_unchanged_posture(),
             Self::EqMac => false,
         }
     }
@@ -315,19 +340,21 @@ impl GameDialect {
     pub const fn spell_feign_lies(self) -> bool {
         match self {
             Self::Titanium => true,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spell_feign_lies(),
             Self::EqMac => false,
         }
     }
 
     /// What this generation's program refuses or hides by a spawn's body
     /// type ([`targets::TargetRules`]): Titanium's (program read R44); none
-    /// for the Mac-era generation, whose program is unread, so its spawns
-    /// are targeted, used and drawn as before.
+    /// for the Mac-era generation and `RoF2`, whose programs are unread, so
+    /// their spawns are targeted, used and drawn as before.
     #[must_use]
     pub const fn targeting(self) -> Option<targets::TargetRules> {
         match self {
             Self::Titanium => Some(targets::TITANIUM_TARGETING),
-            Self::EqMac => None,
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 }
@@ -343,6 +370,62 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&GameDialect::Titanium).unwrap(),
             "\"titanium\""
+        );
+    }
+
+    #[test]
+    fn the_rof2_placeholder_refuses_every_packet_layout() {
+        use crate::chat::{self, OutboundChat};
+        use crate::command::{self, GameCommand};
+        let rof2 = GameDialect::Rof2;
+        let refused = |result: anyhow::Result<()>| {
+            assert_eq!(result.unwrap_err().to_string(), "not built for RoF2 yet");
+        };
+        let say = OutboundChat::Say("Hail".into());
+        refused(chat::encode_outbound_for(rof2, &say, "Tester").map(drop));
+        let mut channel_message = vec![0; 148];
+        channel_message.extend(b"Hail\0");
+        for opcode in [0x1004, 0x0741, 0x5a48, 0x024d] {
+            refused(chat::parse_for(rof2, opcode, &channel_message, false).map(drop));
+        }
+        refused(crate::characters::decode(rof2, &[0; 4096]).map(drop));
+        let now = std::time::Instant::now();
+        for request in [
+            GameCommand::SendChat(say),
+            GameCommand::SelectTarget {
+                session_id: 1,
+                request_id: 1,
+                spawn_id: Some(7),
+                expected_pet: None,
+            },
+            GameCommand::AutoAttack {
+                session_id: 1,
+                enabled: true,
+                created: now,
+            },
+            GameCommand::Consider {
+                session_id: 1,
+                own_id: 7,
+                target_id: 8,
+                created: now,
+            },
+        ] {
+            refused(command::encode(rof2, &request, "Tester").map(drop));
+        }
+    }
+
+    #[test]
+    fn rof2_copies_titanium_only_where_labelled_and_reads_nothing_unread() {
+        let rof2 = GameDialect::Rof2;
+        assert!(rof2.water().is_none());
+        assert!(rof2.buff_placement().is_none());
+        assert!(rof2.targeting().is_none());
+        assert_eq!(rof2.lying(), GameDialect::Titanium.lying());
+        assert_eq!(rof2.root(), GameDialect::Titanium.root());
+        assert_eq!(serde_json::to_string(&rof2).unwrap(), "\"rof2\"");
+        assert_eq!(
+            serde_json::from_str::<GameDialect>("\"rof2\"").unwrap(),
+            rof2
         );
     }
 

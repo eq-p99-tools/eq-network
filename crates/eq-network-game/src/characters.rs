@@ -53,7 +53,8 @@ impl CharacterChoice {
     pub fn without_look(self, dialect: GameDialect) -> Self {
         let verified = match dialect {
             GameDialect::Titanium => true,
-            GameDialect::EqMac => false,
+            // RoF2's character list is not read yet.
+            GameDialect::EqMac | GameDialect::Rof2 => false,
         };
         Self {
             level: self.level.filter(|_| verified),
@@ -78,6 +79,7 @@ pub fn decode(dialect: GameDialect, body: &[u8]) -> Result<Vec<CharacterChoice>>
             ensure!(body.len() >= 1620, "truncated EQMac character list");
             &EQMAC
         }
+        GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     };
     let mut choices: Vec<CharacterChoice> = Vec::new();
     for (index, field) in body[layout.name..layout.name + 640]

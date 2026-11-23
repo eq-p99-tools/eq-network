@@ -205,7 +205,7 @@ impl SpawnKind {
 /// `'s corpse` for a player's or `` `s_corpse `` for anything else's, then the
 /// spawn ID, within 63 characters. That the official client shows the same
 /// name is inferred. None where a generation's rule is not checked: `EqMac`
-/// until it is seen on TAKP.
+/// until it is seen on TAKP, and `RoF2`.
 #[must_use]
 pub fn corpse_name(
     dialect: crate::GameDialect,
@@ -227,7 +227,7 @@ pub fn corpse_name(
                 .collect();
             Some(base + &suffix)
         }
-        crate::GameDialect::EqMac => None,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => None,
     }
 }
 

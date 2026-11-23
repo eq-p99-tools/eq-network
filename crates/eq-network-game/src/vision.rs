@@ -15,10 +15,13 @@ pub enum Invisibility {
 }
 
 impl Invisibility {
-    pub(crate) const fn from_wire(dialect: GameDialect, value: u32) -> Self {
+    /// The parameter as `dialect` reads it, or `None` for a generation whose
+    /// parameter is not built yet.
+    pub(crate) const fn from_wire(dialect: GameDialect, value: u32) -> Option<Self> {
         match dialect {
-            GameDialect::Titanium => Self::Titanium(value),
-            GameDialect::EqMac => Self::EqMac(value),
+            GameDialect::Titanium => Some(Self::Titanium(value)),
+            GameDialect::EqMac => Some(Self::EqMac(value)),
+            GameDialect::Rof2 => None,
         }
     }
 

@@ -61,7 +61,7 @@ use super::{
     training::Training,
     transfers::{Home, Transfers},
     who::{FriendsWho, Who},
-    wire::{EqMac, Titanium, Wire},
+    wire::{EqMac, Rof2, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
@@ -1822,6 +1822,17 @@ impl ServerType for Takp {
     }
 }
 
+/// A stock `EQEmu` server played with the `RoF2` client: a placeholder that
+/// offers no features. It shares stock `EQEmu`'s server rules through
+/// [`shared`] as each feature is checked on a live server of this type.
+struct EqEmuRof2;
+
+impl ServerType for EqEmuRof2 {
+    fn wire(&self) -> &'static dyn Wire {
+        &Rof2
+    }
+}
+
 /// The server type of a server protocol.
 pub(super) fn server_type(protocol: ServerProtocol) -> &'static dyn ServerType {
     match protocol {
@@ -1829,6 +1840,7 @@ pub(super) fn server_type(protocol: ServerProtocol) -> &'static dyn ServerType {
         ServerProtocol::EqEmu => &EqEmu,
         ServerProtocol::Quarm => &Quarm,
         ServerProtocol::Takp => &Takp,
+        ServerProtocol::EqEmuRof2 => &EqEmuRof2,
     }
 }
 
@@ -1969,6 +1981,24 @@ mod tests {
         assert!(empty.creation().is_none());
         assert!(empty.deletion().is_none());
         assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn the_rof2_placeholder_offers_nothing_on_the_refusing_wire() {
+        let rof2 = server_type(ServerProtocol::EqEmuRof2);
+        assert_eq!(rof2.wire().dialect(), eq_network_game::GameDialect::Rof2);
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        assert!(rof2.features(&setup).is_empty());
+        setup.local_only = true;
+        assert!(rof2.features(&setup).is_empty());
+        assert_eq!(rof2.inventory_move_rules(), None);
+        assert_eq!(rof2.titanium_chat_link_expansion(), None);
+        assert!(!rof2.consider_npcs_by_level());
+        assert!(rof2.protect(&[0; 464]).unwrap().is_none());
+        assert!(!rof2.start_choice());
+        assert!(rof2.creation().is_none());
+        assert!(rof2.deletion().is_none());
+        assert_eq!(rof2.spell_landing_flag(), None);
     }
 
     #[test]

@@ -50,10 +50,19 @@ impl Doors {
         }
     }
 
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn apply(&mut self, update: &DoorUpdate, now: Instant, world: &mut World) {
         self.table.apply(update);
         match self.dialect {
             GameDialect::Titanium => {
+                self.follow(update, now, world);
+                return;
+            }
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => {
                 self.follow(update, now, world);
                 return;
             }
@@ -117,6 +126,10 @@ impl Doors {
 
     /// The request for a door in reach, clicked since the door table last
     /// changed.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn click(
         &self,
         command: &ClientCommand,
@@ -138,6 +151,8 @@ impl Doors {
             .check_click_raised(*door_id, spawn_id, position, reach, raised)?;
         match self.dialect {
             GameDialect::Titanium => {}
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => {}
             GameDialect::EqMac => {
                 let door = self
                     .table
@@ -162,6 +177,8 @@ impl Doors {
         }
         match self.dialect {
             GameDialect::Titanium => {}
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => {}
             GameDialect::EqMac => {
                 let mut hinge = self
                     .hinges

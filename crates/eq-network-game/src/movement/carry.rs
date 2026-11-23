@@ -115,6 +115,8 @@ const fn step(dialect: GameDialect) -> &'static Step {
     match dialect {
         GameDialect::EqMac => &EQMAC,
         GameDialect::Titanium => &TITANIUM,
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => step(GameDialect::Titanium),
     }
 }
 

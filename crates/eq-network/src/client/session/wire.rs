@@ -87,15 +87,11 @@ pub(super) trait Wire: Sync {
     }
 
     /// How the generation's client closes an open give or trade window.
-    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
-        eq_network_game::exchange::TITANIUM_CLOSES
-    }
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses;
 
     /// How far the generation's client lets the player reach doors,
     /// objects, merchants and the one they bandage.
-    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
-        &eq_network_game::reach::TITANIUM
-    }
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches;
 
     /// How the generation's client gates the player's own position
     /// updates; none where it is unread.
@@ -106,9 +102,7 @@ pub(super) trait Wire: Sync {
     /// How the generation's client numbers the player's own updates. A
     /// per-generation constant today; a client-supplied frame count
     /// replaces Titanium's fixed rate when a history sender comes.
-    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
-        eq_network_game::movement::UpdateCounter::PerUpdate
-    }
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter;
 
     /// How long the generation's client waits after its logout before it
     /// closes the zone connection itself, reply or not; none where unread.
@@ -234,6 +228,14 @@ impl Wire for Titanium {
 
     fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
         coverage::titanium(opcode)
+    }
+
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        eq_network_game::exchange::TITANIUM_CLOSES
+    }
+
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        &eq_network_game::reach::TITANIUM
     }
 
     /// The Titanium program closes the zone connection 3 seconds after its
@@ -376,6 +378,10 @@ impl Wire for EqMac {
         })
     }
 
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        eq_network_game::movement::UpdateCounter::PerUpdate
+    }
+
     fn speeds(&self) -> Option<SpeedRule> {
         Some(eq_network_game::movement::eqmac_speeds)
     }
@@ -434,6 +440,31 @@ impl Wire for EqMac {
         handshake: &mut Handshake<'_, '_>,
     ) -> Result<Box<dyn Admission>> {
         Ok(Box::new(EqMacAdmission::start(character, handshake)?))
+    }
+}
+
+/// The `RoF2` client's packets: a placeholder. Every stage keeps the trait's
+/// refusal, so it logs in, enters, reads and sends nothing.
+pub(super) struct Rof2;
+
+impl Wire for Rof2 {
+    fn dialect(&self) -> GameDialect {
+        GameDialect::Rof2
+    }
+
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_network_game::exchange::TITANIUM_CLOSES
+    }
+
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        // Titanium's, inferred for RoF2 (6.489).
+        &eq_network_game::reach::TITANIUM
+    }
+
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_network_game::movement::TITANIUM_UPDATE_COUNTER
     }
 }
 
@@ -531,7 +562,11 @@ mod tests {
     #[test]
     fn each_generation_lists_as_read_exactly_what_its_decoders_read() {
         let bodies = probes();
-        for (generation, wire) in [("Titanium", &Titanium as &dyn Wire), ("EQMac", &EqMac)] {
+        for (generation, wire) in [
+            ("Titanium", &Titanium as &dyn Wire),
+            ("EQMac", &EqMac),
+            ("RoF2", &Rof2),
+        ] {
             for opcode in 0..=u16::MAX {
                 let listed = wire
                     .coverage(opcode)
@@ -548,6 +583,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_rof2_placeholder_logs_in_sends_and_reads_nothing() {
+        use crate::client::{ClientConfig, ServerProtocol};
+        use eq_network_game::chat::OutboundChat;
+        let config = ClientConfig::for_protocol(
+            ServerProtocol::EqEmuRof2,
+            "ACCOUNT",
+            "PASSWORD",
+            "Server",
+            "",
+        );
+        let mut handler = |_| Ok(());
+        let mut log = Events::new(&config, &mut handler);
+        let refused = Rof2
+            .login(&config, &CancellationToken::default(), None, &mut log)
+            .err()
+            .unwrap();
+        assert_eq!(
+            refused.to_string(),
+            "this client generation cannot log in yet"
+        );
+        let stop = AtomicBool::new(false);
+        let zone = Rof2
+            .connect_zone(SocketAddr::from(([127, 0, 0, 1], 9)), &stop)
+            .err()
+            .unwrap();
+        assert_eq!(
+            zone.to_string(),
+            "this client generation cannot connect to a zone yet"
+        );
+        let say = Request::Command(eq_network_game::command::GameCommand::SendChat(
+            OutboundChat::Say("Hail".into()),
+        ));
+        for request in [Request::Camp, Request::Jump, say] {
+            let refused = Rof2.encode(&request, PLAYER).unwrap_err();
+            assert!(
+                refused
+                    .to_string()
+                    .starts_with("this client generation cannot send"),
+                "{refused}"
+            );
+        }
+        assert!(Rof2.messages(0x3cdc, &[], ItemRules::Takp).is_empty());
+        assert!(Rof2.chat(0x1004, &[0; 200], false).unwrap().is_none());
+        assert!(Rof2.coverage(0x1004).is_none());
+        assert!(Rof2.speeds().is_none());
+        assert!(Rof2.fall_speed(None).is_none());
+        assert!(Rof2.jump_speed().is_none());
+        assert!(Rof2.logout_close().is_none());
+        assert_eq!(Rof2.dialect(), GameDialect::Rof2);
     }
 
     #[test]

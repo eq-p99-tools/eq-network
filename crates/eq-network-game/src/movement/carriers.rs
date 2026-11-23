@@ -165,6 +165,10 @@ impl Carriers {
 
     /// Records the ordinary server event at its session receipt time and
     /// returns the canonical observations to forward to the frontend.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub fn observe(
         &mut self,
         event: &WorldEvent,
@@ -187,6 +191,8 @@ impl Carriers {
                     }
                     let reports = match dialect {
                         GameDialect::Titanium => true,
+                        // Titanium's, inferred for RoF2 (6.489).
+                        GameDialect::Rof2 => true,
                         GameDialect::EqMac => false,
                     };
                     if reports

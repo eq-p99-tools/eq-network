@@ -202,6 +202,7 @@ pub fn chat_link(dialect: crate::GameDialect, link: &crate::chat::ItemLink) -> R
             let inspected = eqmac_request(&link.body)?;
             u32::from(u16::from_le_bytes(inspected[..2].try_into()?))
         }
+        crate::GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     };
     ensure!(link.item_id == item_id, "item link ID mismatch");
     ensure!(

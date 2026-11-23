@@ -658,12 +658,14 @@ fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<World
     let gm_flag = match dialect {
         crate::GameDialect::Titanium => true,
         crate::GameDialect::EqMac => false,
+        crate::GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     };
     Ok(Some(match (kind, listing) {
         (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
         (INVISIBILITY, None) => WorldEvent::Visibility {
             spawn_id,
-            state: crate::vision::Invisibility::from_wire(dialect, value),
+            state: crate::vision::Invisibility::from_wire(dialect, value)
+                .context("not built for RoF2 yet")?,
         },
         (POSTURE, None) => WorldEvent::Posture {
             spawn_id,
