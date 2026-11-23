@@ -1399,7 +1399,8 @@ impl ServerType for EqEmu {
         // `/stopcast` is offered here only (held off P99 until checked there).
         offer(Box::new(
             Casting::with_titanium_combat(true, std::time::Duration::from_secs(4300))
-                .with_cast_stop(),
+                .with_cast_stop()
+                .with_melody(),
         ))
     }
 
@@ -2802,6 +2803,22 @@ mod tests {
                     ));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn only_stock_eqemu_offers_melody_until_p99_is_decided() {
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert_eq!(
+                offers(server_type(protocol)).contains(&Capability::Melody),
+                protocol == ServerProtocol::EqEmu,
+                "{protocol:?}"
+            );
         }
     }
 

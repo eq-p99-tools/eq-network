@@ -367,6 +367,7 @@ pub(super) struct Casting {
     told_singing: Option<u32>,
     song_stop: bool,
     cast_stop: bool,
+    melody: MelodyUse,
     knights: Option<knights::Reuse>,
     disciplines: disciplines::DisciplineState,
     use_disciplines: DisciplineUse,
@@ -397,6 +398,14 @@ enum SongRules {
     /// doesn't, a gem click stops it and casts nothing, a forget's answer
     /// stops it, and an item cast goes alongside it.
     Titanium,
+}
+
+/// Whether the server type takes a Bard's `/melody` (read R49-33 c).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum MelodyUse {
+    #[default]
+    Unoffered,
+    Offered,
 }
 
 /// Whether the server type takes items used from the potion belt (6.568).
@@ -441,6 +450,14 @@ impl Casting {
     /// without moving, and P99's own handling of it is unchecked.
     pub(super) fn with_cast_stop(mut self) -> Self {
         self.cast_stop = true;
+        self
+    }
+
+    /// Offers a Bard's `/melody` (read R49-33 c), which the host runs with
+    /// `StopSong` and gem casts. Stock `EQEmu` only for now: whether P99
+    /// takes it is Adam's call.
+    pub(super) fn with_melody(mut self) -> Self {
+        self.melody = MelodyUse::Offered;
         self
     }
 
@@ -842,6 +859,9 @@ impl Feature for Casting {
         }
         if self.cast_stop {
             offered.push(Capability::StoppingCasts);
+        }
+        if self.melody == MelodyUse::Offered {
+            offered.push(Capability::Melody);
         }
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);

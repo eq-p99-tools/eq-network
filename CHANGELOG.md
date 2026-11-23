@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Capability::Melody`: where the server type takes a Bard's `/melody`
+  (read R49-33 c), stock Titanium `EQEmu` only for now; P99 waits on the
+  owner's word. The host runs the melody with `StopSong` and gem casts, and a
+  test shows the stop followed at once by a gem press casts. **Breaking:** a
+  new `Capability` variant.
+
 - Slower water's own set in the swim grant, as read R49-26 reads the Titanium
   region classifier (0x435ec9; checklist 6.483).
   - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for
