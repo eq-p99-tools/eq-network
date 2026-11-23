@@ -176,6 +176,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::FeignLanded { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::SendChatInAdmission { .. }
+        // The chat server's link is its own connection.
+        | ClientCommand::ChatChannel { .. }
         | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
@@ -400,6 +402,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::DestroyCoins { session_id, .. }
         | ClientCommand::Consume { session_id, .. }
         | ClientCommand::ApplyPoison { session_id, .. }
+        | ClientCommand::ChatChannel { session_id, .. }
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
@@ -585,6 +588,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             reason,
             string_id: None,
         },
+        ClientCommand::ChatChannel { .. } => WorldEvent::ChatChannelRefused { session_id, reason },
         ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused {
             session_id,
             reason,

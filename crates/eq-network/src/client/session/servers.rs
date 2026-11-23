@@ -83,6 +83,8 @@ pub(super) struct Setup<'a> {
     pub(super) auto_eat: eq_network_game::food::AutoEat,
     /// The connection is constrained to local endpoints.
     pub(super) local_only: bool,
+    /// The character's chat server link, where the zone session has one.
+    pub(super) chat: Option<std::sync::Arc<super::chat_link::ChatLink>>,
 }
 
 impl<'a> Setup<'a> {
@@ -92,6 +94,7 @@ impl<'a> Setup<'a> {
             character,
             auto_eat,
             local_only: false,
+            chat: None,
         }
     }
 }
@@ -530,6 +533,21 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Whether the server type opens a chat server link from the world's
+    /// Titanium chat-channel offer (recording checklist 6.509).
+    fn chat_channels(&self) -> bool {
+        false
+    }
+
+    /// The chat server's channels, where the server type opens a link.
+    fn channels(&self, setup: &Setup<'_>) -> Provided {
+        setup
+            .chat
+            .clone()
+            .filter(|_| self.chat_channels())
+            .and_then(|link| offer(Box::new(super::chat_link::Channels::new(link))))
+    }
+
     /// Asking which of the player's friends are online.
     fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -600,6 +618,7 @@ pub(super) trait ServerType: Sync {
             self.helm(setup),
             self.reports(setup),
             self.dialogs(),
+            self.channels(setup),
         ]
         .into_iter()
         .flatten()
@@ -1211,6 +1230,13 @@ impl ServerType for EqEmu {
     /// Stock `EQEmu` reads the filters while connected as well as while
     /// connecting (`Client::Handle_OP_SetServerFilter`), with no reply.
     fn server_filters_at_once(&self) -> bool {
+        true
+    }
+
+    /// `EQEmu`'s world offers its chat server (`ucs`) when one runs. Project
+    /// 1999 keeps the default, no link: withheld until Adam has attended a
+    /// session there (his choice, 11-23), and it is not known to offer one.
+    fn chat_channels(&self) -> bool {
         true
     }
 

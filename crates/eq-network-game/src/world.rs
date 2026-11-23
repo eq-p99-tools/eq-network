@@ -669,6 +669,10 @@ pub enum Capability {
     ReportingBugs,
     /// Sending feedback, where a server reads it ([`crate::reports`]).
     SendingFeedback,
+    /// The chat server's channels ([`crate::chat_server`]): offered where
+    /// the server type opens a chat link; whether one is up is told by
+    /// [`WorldEvent::ChannelLink`].
+    ChatChannels,
     /// Destroying coins from the cursor
     /// ([`crate::command::GameCommand::DestroyCoins`]).
     DestroyingCoins,
@@ -677,7 +681,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 76] = [
+    pub const ALL: [Self; 77] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -753,6 +757,7 @@ impl Capability {
         Self::Petitioning,
         Self::ReportingBugs,
         Self::SendingFeedback,
+        Self::ChatChannels,
         Self::DestroyingCoins,
     ];
 }
@@ -1562,6 +1567,18 @@ pub enum WorldEvent {
     /// sat and whether it took. The server's own inventory record removes
     /// it.
     PoisonAnswered(crate::poisons::PoisonAnswer),
+    /// What the chat server told about its channels
+    /// ([`crate::chat_server`]).
+    Channel(crate::chat_server::ChannelEvent),
+    /// The chat server link came up or ended.
+    ChannelLink(crate::chat_server::ChannelLink),
+    /// A chat channel command was not sent, and is not kept for later.
+    ChatChannelRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not, in this library's words.
+        reason: String,
+    },
     /// A poison was not put on: nothing was sent.
     ApplyPoisonRefused {
         /// Admission from the request.
@@ -2584,7 +2601,8 @@ mod tests {
             Capability::Petitioning => 72,
             Capability::ReportingBugs => 73,
             Capability::SendingFeedback => 74,
-            Capability::DestroyingCoins => 75,
+            Capability::ChatChannels => 75,
+            Capability::DestroyingCoins => 76,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

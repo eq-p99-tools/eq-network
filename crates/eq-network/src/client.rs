@@ -1016,6 +1016,30 @@ impl<'a> Events<'a> {
         body: &[u8],
         kind: GapKind,
     ) -> Result<()> {
+        self.record_gap(opcode, name, body.len(), Some(body), kind)
+    }
+
+    /// Counts a message left unread by its opcode and length only: the
+    /// record keeps no sample of its body, as for the chat server's mail and
+    /// lists, whose bodies are the player's own.
+    fn gap_unsampled(
+        &mut self,
+        opcode: u16,
+        name: Option<&'static str>,
+        length: usize,
+        kind: GapKind,
+    ) -> Result<()> {
+        self.record_gap(opcode, name, length, None, kind)
+    }
+
+    fn record_gap(
+        &mut self,
+        opcode: u16,
+        name: Option<&'static str>,
+        length: usize,
+        body: Option<&[u8]>,
+        kind: GapKind,
+    ) -> Result<()> {
         let at = Instant::now();
         let gap = Gap {
             stage: self.gaps.stage,
@@ -1028,12 +1052,15 @@ impl<'a> Events<'a> {
             opcode,
             name,
             count: 1,
-            min_length: body.len(),
-            max_length: body.len(),
+            min_length: length,
+            max_length: length,
             kind,
             sample: None,
         };
-        if let Some(gap) = self.gaps.count(gap, body, at) {
+        if let Some(mut gap) = self.gaps.count(gap, body.unwrap_or_default(), at) {
+            if body.is_none() {
+                gap.sample = None;
+            }
             self.send(ClientEvent::Gap(Box::new(gap)))?;
         }
         Ok(())
