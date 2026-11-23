@@ -170,6 +170,10 @@ impl ProgramDuel {
         let kind = world.spawns.get(target).map(|spawn| spawn.kind);
         if self.eqmac {
             // `EQMac` (read 11g): no target or a corpse, then the player.
+            // An NPC is challenged as the program does. Neither server acts
+            // on it: TAKP's `Handle_OP_RequestDuel` returns when the one
+            // named isn't a client (44afcbf), and Quarm's passes nothing on
+            // and says nothing for one (fc75fcf); neither kicks.
             let corpse = matches!(kind, Some(SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse));
             if target == 0 || kind.is_none() || corpse {
                 return Self::news(out, DuelNews::NoPlayerTarget);
@@ -1017,6 +1021,27 @@ mod tests {
             assert_eq!(zoned.sent, []);
             assert_eq!(news(&zoned), []);
             assert!(feature.outgoing.is_none());
+        }
+
+        #[test]
+        fn the_won_word_goes_once_per_kill() {
+            let (mut feature, mut world) = (ProgramDuel::eqmac(), world());
+            testing::run_on(&EqMac, |out| {
+                feature.observe(&challenge(12), &mut world, out)
+            });
+            testing::run_on(&EqMac, |out| feature.handle(&duel(12), &mut world, out));
+            let won = testing::run_on(&EqMac, |out| {
+                feature.observe(&died(12, u32::from(OWN)), &mut world, out)
+            });
+            assert_eq!(wire(&won), [(0x5e41, vec![12, 0, 7, 0])]);
+            // The same death again, or a later death of the same spawn:
+            // the duel is over, so nothing goes and nothing is said.
+            for _ in 0..2 {
+                let again = testing::run_on(&EqMac, |out| {
+                    feature.observe(&died(12, u32::from(OWN)), &mut world, out)
+                });
+                assert!(again.sent.is_empty() && again.events.is_empty());
+            }
         }
 
         #[test]
