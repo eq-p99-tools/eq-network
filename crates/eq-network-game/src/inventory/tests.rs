@@ -1431,3 +1431,151 @@ fn titanium_items_carry_the_potion_belt_flag() {
         assert_eq!(items[0].rules.potion_belt, held);
     }
 }
+
+/// A snapshot of these records, decoded.
+fn augment_snapshot(records: &[String]) -> anyhow::Result<Vec<InventoryItem>> {
+    let text: String = records.concat();
+    match decode(0x5394, text.as_bytes())? {
+        Some(InventoryUpdate::Snapshot(items)) => Ok(items),
+        other => panic!("snapshot expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_common_items_children_are_its_augments_and_are_not_placed() {
+    // `EQEmu`'s Titanium `SerializeItem` writes a common item's augment
+    // sockets as its children (6.570); a bagged item's sit two deep.
+    let worn = wire(
+        13,
+        500,
+        0,
+        false,
+        0,
+        &[
+            (0, wire(0, 600, 0, false, 1, &[])),
+            (2, wire(0, 601, 0, false, 1, &[])),
+        ],
+    );
+    let pack = wire(22, 501, 0, false, 0, &[(4, wire(0, 602, 0, false, 1, &[]))]);
+    let bagged = wire(0, 700, 0, false, 1, &[(1, wire(0, 701, 0, false, 2, &[]))]);
+    let bag = wire(23, 100, 8, false, 0, &[(3, bagged)]);
+    let items = augment_snapshot(&[worn, pack, bag]).unwrap();
+    let by_slot: BTreeMap<_, _> = items.iter().map(|item| (item.slot.0, item)).collect();
+    assert_eq!(
+        by_slot.keys().copied().collect::<Vec<_>>(),
+        [13, 22, 23, 264]
+    );
+    assert_eq!(
+        by_slot[&13].augments,
+        [Some(600), None, Some(601), None, None]
+    );
+    assert_eq!(by_slot[&22].augments, [None, None, None, None, Some(602)]);
+    assert_eq!(by_slot[&264].augments, [None, Some(701), None, None, None]);
+    assert!(!by_slot[&23].augmented());
+    assert!(by_slot[&13].augmented());
+    // An augmented record, like one with contents, carries no link hash.
+    assert!(by_slot[&13].rules.titanium_link_hash.is_none());
+    let plain = augment_snapshot(&[wire(13, 500, 0, false, 0, &[])]).unwrap();
+    assert!(plain[0].rules.titanium_link_hash.is_some());
+}
+
+#[test]
+fn an_augment_out_of_its_sockets_or_with_children_is_unreadable() {
+    for (record, error) in [
+        (
+            wire(13, 500, 0, false, 0, &[(5, wire(0, 600, 0, false, 1, &[]))]),
+            "augment outside its sockets",
+        ),
+        (
+            wire(
+                13,
+                500,
+                0,
+                false,
+                0,
+                &[(
+                    0,
+                    wire(0, 600, 0, false, 1, &[(0, wire(0, 601, 0, false, 2, &[]))]),
+                )],
+            ),
+            "augment with children",
+        ),
+        (
+            // A bag in a bag still does not read.
+            wire(
+                23,
+                100,
+                8,
+                false,
+                0,
+                &[(
+                    0,
+                    wire(0, 101, 8, false, 1, &[(0, wire(0, 601, 0, false, 2, &[]))]),
+                )],
+            ),
+            "unsupported container address",
+        ),
+        (
+            // Only a common item has sockets; a book's child does not read.
+            wire(13, 500, 0, false, 0, &[(0, wire(0, 600, 0, false, 1, &[]))]).replacen(
+                "\"0|Test item 500",
+                "\"2|Test item 500",
+                1,
+            ),
+            "item outside container capacity",
+        ),
+    ] {
+        assert_eq!(augment_snapshot(&[record]).unwrap_err().to_string(), error);
+    }
+}
+
+#[test]
+fn an_inventory_with_augments_reads_but_never_reads_lighter() {
+    // The Titanium program adds augments' weight and the session does not
+    // sum augment records yet, so an augmented item's load and worn stats
+    // read as unknown, never as less (6.570 G2).
+    let mut inventory = Inventory::default();
+    inventory.apply(
+        decode(0x5394, wire(13, 500, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(
+        inventory.carried_weight_tenths(crate::GameDialect::Titanium, 0),
+        Ok(25)
+    );
+    assert!(!inventory.equipment_stats_uncertain());
+    for (slot, worn) in [(13, true), (22, false)] {
+        let record = wire(
+            slot,
+            500,
+            0,
+            false,
+            0,
+            &[(0, wire(0, 600, 0, false, 1, &[]))],
+        );
+        let mut inventory = Inventory::default();
+        inventory.apply(decode(0x5394, record.as_bytes()).unwrap().unwrap());
+        assert!(inventory.received() && !inventory.stale());
+        assert_eq!(
+            inventory.carried_weight_tenths(crate::GameDialect::Titanium, 0),
+            Err(WeightUnavailable::Augments),
+            "{slot}"
+        );
+        assert_eq!(inventory.equipment_stats_uncertain(), worn, "{slot}");
+    }
+    let bagged = wire(0, 700, 0, false, 1, &[(0, wire(0, 701, 0, false, 2, &[]))]);
+    let mut inventory = Inventory::default();
+    inventory.apply(
+        decode(
+            0x5394,
+            wire(23, 100, 8, false, 0, &[(0, bagged)]).as_bytes(),
+        )
+        .unwrap()
+        .unwrap(),
+    );
+    assert_eq!(
+        inventory.carried_weight_tenths(crate::GameDialect::Titanium, 0),
+        Err(WeightUnavailable::Augments)
+    );
+}

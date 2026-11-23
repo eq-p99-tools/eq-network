@@ -15,6 +15,7 @@ fn item(slot: i32, id: u32) -> InventoryItem {
         stack_count: None,
         charges: 0,
         bag_slots: 0,
+        augments: Default::default(),
         rules: ItemPlacement {
             titanium_item_class: Some(0),
             stack_size: 1,
@@ -289,4 +290,27 @@ fn a_swap_still_waits_after_its_moves_settle() {
         swap(&set([Some(1), None, None, None]), &settled),
         Err("Wait until your inventory is known to swap sets.")
     );
+}
+
+#[test]
+fn a_set_naming_an_augment_socketed_in_any_held_item_is_refused() {
+    // `HasItem` matches an augment too (6.570 G3), worn, packed or bagged.
+    for host in [13, 22, 252] {
+        let mut socketed = item(host, 50);
+        socketed.augments[1] = Some(77);
+        let mut held = vec![socketed, item(23, 77)];
+        if host == 252 {
+            held.push(bag(22, 90, 4, 0));
+        }
+        let before = inventory(held);
+        assert_eq!(
+            swap(&set([Some(77), None, None, None]), &before),
+            Err("That set names an augment in one of your items."),
+            "{host}"
+        );
+        assert!(
+            swap(&set([Some(50), None, None, None]), &before).is_ok(),
+            "{host}"
+        );
+    }
 }

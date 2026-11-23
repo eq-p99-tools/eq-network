@@ -95,7 +95,7 @@ pub(crate) fn parse_at(body: &[u8], location: InventorySlot) -> Result<Vec<Inven
         text,
         items: Vec::new(),
     };
-    parser.item(0, Some(location))?;
+    parser.item(0, Some(location), false)?;
     ensure!(parser.text.is_empty(), "more than one item in a view");
     Ok(parser.items)
 }
@@ -109,7 +109,7 @@ pub(crate) fn parse(body: &[u8]) -> Result<Vec<InventoryItem>> {
         items: Vec::new(),
     };
     while !parser.text.is_empty() {
-        parser.item(0, None)?;
+        parser.item(0, None, false)?;
     }
     let mut slots = BTreeSet::new();
     ensure!(
@@ -137,9 +137,13 @@ impl<'a> Parser<'a> {
         Ok(value)
     }
 
-    fn item(&mut self, depth: usize, location: Option<InventorySlot>) -> Result<()> {
+    /// Reads one item and its children: a bag's contents, placed in its
+    /// slots, or a common item's augments (`augment` for one of those),
+    /// kept as ids on the item. Only an augment may sit two deep, on an
+    /// item in a bag.
+    fn item(&mut self, depth: usize, location: Option<InventorySlot>, augment: bool) -> Result<()> {
         ensure!(
-            depth <= 1 && self.items.len() < MAX_ITEMS,
+            (depth <= 1 || (depth == 2 && augment)) && self.items.len() < MAX_ITEMS,
             "inventory nesting or item limit exceeded"
         );
         let wrapper = format!("{}\"", "\\".repeat(depth.saturating_sub(1)));
@@ -215,23 +219,63 @@ impl<'a> Parser<'a> {
             },
             charges: header[8].parse().context("invalid item charges")?,
             bag_slots,
+            augments: Default::default(),
         });
-        for index in 0..10 {
-            self.take("|")?;
-            if self.text.starts_with(&quote) {
-                ensure!(index < bag_slots, "item outside container capacity");
-                let child = slot.child(index).context("unsupported container address")?;
-                self.item(depth + 1, Some(child))?;
-            }
-        }
+        let augmented = self.children(
+            (depth, &quote),
+            slot,
+            (item_index, bag_slots),
+            fields[0] == "0",
+            augment,
+        )?;
         if depth > 0 {
             self.take(&wrapper)?;
         } else {
             self.take("\0")?;
         }
-        let empty_children = self.items.len() == item_index + 1;
+        let empty_children = self.items.len() == item_index + 1 && !augmented;
         self.items[item_index].rules.titanium_link_hash =
             crate::items::owned::hash(&header, &fields, empty_children);
         Ok(())
+    }
+
+    /// Reads an item's ten child places: a common item's are its augment
+    /// sockets, kept as ids on it, and any other's are contents placed in
+    /// its slots. Whether any augment was read.
+    fn children(
+        &mut self,
+        (depth, quote): (usize, &str),
+        slot: InventorySlot,
+        (item_index, bag_slots): (usize, u8),
+        common: bool,
+        augment: bool,
+    ) -> Result<bool> {
+        let mut augmented = false;
+        for index in 0..10 {
+            self.take("|")?;
+            if self.text.starts_with(quote) {
+                ensure!(!augment, "augment with children");
+                // `EQEmu` keeps one contents map per instance: a bag's slots,
+                // or a common item's augment sockets (`GetAugment` is
+                // `GetItem` on a common item), even where a common record
+                // claims room (ours, 6.570 G1).
+                if common {
+                    let socket = usize::from(index);
+                    ensure!(
+                        socket < super::AUGMENT_SOCKETS,
+                        "augment outside its sockets"
+                    );
+                    self.item(depth + 1, Some(slot), true)?;
+                    let socketed = self.items.pop().context("augment not read")?;
+                    self.items[item_index].augments[socket] = Some(socketed.details.id);
+                    augmented = true;
+                } else {
+                    ensure!(index < bag_slots, "item outside container capacity");
+                    let child = slot.child(index).context("unsupported container address")?;
+                    self.item(depth + 1, Some(child), false)?;
+                }
+            }
+        }
+        Ok(augmented)
     }
 }

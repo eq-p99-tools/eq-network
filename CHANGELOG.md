@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read augments from Titanium item records (6.570). A common item's
+  children are its augment sockets, which `EQEmu` serializes on worn,
+  carried and bagged items; before, any augmented item made the whole
+  inventory unreadable. **Breaking:** the new field
+  `InventoryItem::augments` (an id per socket, `AUGMENT_SOCKETS` 5) and
+  the new `WeightUnavailable::Augments`. What augments add is not summed
+  yet, so carried weight reads unknown while a counted item is augmented,
+  and `Inventory::equipment_stats_uncertain()` is true while a worn one
+  is. A bandolier swap naming an id socketed in a held item is refused.
 - Use a potion belt slot on Titanium (6.568, slice 4), from stock `EQEmu`'s
   source and not yet checked live. New `GameCommand::UseBeltItem` (with
   `bandolier::BeltUse`) under the new `Capability::UsingPotionBelt`, offered

@@ -38,12 +38,9 @@ const SMALL_THROWING: u8 = 19;
 /// it, for an [`crate::inventory::InventoryUpdate::Prediction`].
 ///
 /// `HasItem` also matches an augment socketed in an item, and then the
-/// weapon slot stays as it is; the session does not read augment ids. A
-/// worn or bagged item with children is an unreadable record, which leaves
-/// the inventory stale, and a stale inventory is refused here. A pack item
-/// that is not a bag but has room or contents (the reader keeps children
-/// a common record's capacity allows, which may be its augments) is
-/// refused too, so that match cannot be met.
+/// weapon slot stays as it is. A set naming an id socketed in any worn or
+/// carried item is refused (6.570 G3), and so is a pack item that is not a
+/// bag but has room or contents, whose record is not what `EQEmu` holds.
 ///
 /// # Errors
 /// Refuses, in words for the player, an inventory that is not known
@@ -70,6 +67,16 @@ pub fn swap(set: &BandolierSet, inventory: &Inventory) -> Result<Vec<InventoryIt
         .collect();
     if items.contains_key(&InventorySlot::CURSOR.0) {
         return Err("Put down what you hold before swapping sets.");
+    }
+    if items.values().any(|item| {
+        item.augments.iter().flatten().any(|augment| {
+            set.items
+                .iter()
+                .flatten()
+                .any(|named| named.item_id == *augment)
+        })
+    }) {
+        return Err("That set names an augment in one of your items.");
     }
     for slot in PACKS {
         let Some(item) = items.get(&slot) else {
