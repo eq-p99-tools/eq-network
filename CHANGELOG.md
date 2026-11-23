@@ -9,8 +9,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Titanium program's own side is pending read R49-12). From the world's
   Titanium chat-channel offer (`OP_SetChatServer`, letter `B`), where the
   server type opens one (`EQEmu`; not Project 1999, withheld until Adam
-  has attended a session there, nor Quarm, TAKP or RoF2), the session opens one link per character on its own
-  thread: the offered address through the zone handoff's checks, then the
+  has attended a session there, nor Quarm, TAKP or RoF2), the session
+  opens one link per character on its own thread: the offered address
+  through the zone handoff's checks, then the
   modern transport, then `OP_MailLogin` with the key, which stays zeroized in
   `chat_server::Login` and in no event, log or `Debug` (the transport's
   resend queue holds the login until the server acknowledges it). A login
@@ -28,7 +29,59 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gap log by opcode and length. New `eq_network_game::chat_server`.
 
   Breaking: new variants on the exhaustive command, event and capability
-  enums (`Capability::ALL` holds 73).
+  enums (`Capability::ALL` holds 76).
+- Read RoF2's spawn records as stock `EQEmu` writes them, labelled inferred
+  for RoF2 (6.510). Stock `EQEmu` sends every spawn a RoF2 client sees as
+  one `OP_ZoneEntry` record. `eq_network_game::rof2_player::spawn` walks
+  any of them whole, choosing each branch from the record's own bytes as
+  the encoder chooses it: players, creatures and corpses, treasure chests
+  and destructible objects with their three strings and fixed block, and
+  non-players of races given three textures in place of nine tints and
+  nine textures. It refuses contradictory bits, a property count the
+  branch doesn't take, a GUID of any length but the encoder's, a string
+  that doesn't end in its field, a cut and a trailing byte. The packed
+  position is read from the active `Spawn_Struct_Position`; its deltas,
+  animation and angle are not, and appearance and the `/who` listing stay
+  default. `Rof2::messages` makes each record one spawn, and a refused
+  record unreadable by opcode and length. The own-spawn reader is now a
+  caller of the same walker. `Rof2Admission` keeps the first record, the
+  player's own, and any later one with the player's id to itself
+  (`Admission::kept`), so the player is never another spawn. The coverage
+  row for 0x5089 lists the zone decoder as a reader. An admitted RoF2
+  session still sends nothing and offers nothing. Still unreachable: a
+  RoF2 configuration is refused before a socket opens.
+- Challenge another player to a duel (6.492b). **Breaking:**
+  `GameCommand::ChallengeDuel { session_id, target, created }` is a new
+  variant, under `Capability::Dueling`, so exhaustive matches on
+  `GameCommand` take an arm. `Request::DuelRequest` now encodes on Titanium
+  (`socials::titanium_duel_request`: `OP_RequestDuel`, the other player then
+  the player, each 32 bits, the order `EQEmu`'s handler needs; inferred,
+  pending R49-6h). The duel feature sends a challenge only at a player in
+  its spawn list other than the player, one at a time and five seconds
+  apart, and refuses anything else with `WorldEvent::SocialRefused`, since
+  `EQEmu` looks the one challenged up unchecked. The challenge is remembered
+  for sixty seconds at most, and ends sooner on the server's
+  `OP_DuelAccept`, the other client's refusal, the one challenged leaving,
+  or a zone change. While it lasts, the record `EQEmu` sends the challenger
+  before the duel starts opens no question and sends nothing; today it
+  would have asked the player to accept their own duel. Both bounds and
+  the refusal lines are ours, labelled. Only stock `EQEmu` offers dueling,
+  as before.
+- Send petitions, bug reports and feedback to the server's staff (gap list
+  3.6, recording checklist 6.511), laid out from stock `EQEmu`'s and TAKP's
+  handlers: `eq_network_game::reports` encodes Titanium's `OP_Petition`
+  (0x251f) and `OP_Bug` (0x7ac2, 8736 bytes) and `EQMac`'s petition, bug
+  (3340 bytes) and feedback (1131 bytes). Stock `EQEmu` lists
+  `Capability::Petitioning` and `Capability::ReportingBugs`; feedback, P99,
+  Quarm and TAKP list nothing until their own live checks. A bug report
+  carries its category, the player's place and heading and the target, and
+  leaves the interface path, time played and system information empty.
+  Over-long text is refused, never cut, and two reports of a kind are 10
+  seconds apart (inferred). No refusal or diagnostic repeats a report's
+  text. **Breaking:** new variants on the exhaustive `GameCommand`
+  (`SendPetition`, `ReportBug`, `SendFeedback`), `WorldEvent`
+  (`ReportSent`, `ReportRefused`) and `Capability` (`Petitioning`,
+  `ReportingBugs`, `SendingFeedback`; `Capability::ALL` grows to 75).
 
 - Ask for a last name with `/surname` (gap 3.6, checklist 6.507).
   `GameCommand::Surname` sends `OP_Surname`'s 100-byte record (Titanium

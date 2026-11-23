@@ -553,17 +553,22 @@ fn run_connected(
         // Everything else is read once, in the server's client generation, the
         // same way before and after admission, and heard by every feature;
         // a kind no server is known to send leaves a trace, once a session.
-        let messages = unheard.sift(
-            server.wire(),
-            (packet.opcode, &packet.body),
-            read_messages(
+        // What the handshake keeps to itself is not read again.
+        let messages = if admission.kept() {
+            Vec::new()
+        } else {
+            unheard.sift(
                 server.wire(),
-                packet.opcode,
-                &packet.body,
-                server.item_rules(),
-            ),
-            log,
-        )?;
+                (packet.opcode, &packet.body),
+                read_messages(
+                    server.wire(),
+                    packet.opcode,
+                    &packet.body,
+                    server.item_rules(),
+                ),
+                log,
+            )?
+        };
         if context.commands.is_none() && !world.ready() && !entry_position_superseded {
             // A later handshake packet cannot restore a superseded fallback.
             entry_position_superseded = messages
@@ -938,7 +943,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 118;
+    const KINDS: usize = 122;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -975,7 +980,7 @@ mod tests {
             ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::SocialEmote { .. } => 111,
             ClientCommand::ApplyPoison { .. } => 112,
-            ClientCommand::ChatChannel { .. } => 117,
+            ClientCommand::ChatChannel { .. } => 121,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1046,6 +1051,10 @@ mod tests {
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
             ClientCommand::AnswerDuel { .. } => 115,
+            ClientCommand::SendPetition { .. } => 117,
+            ClientCommand::ReportBug { .. } => 118,
+            ClientCommand::SendFeedback { .. } => 119,
+            ClientCommand::ChallengeDuel { .. } => 120,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1103,6 +1112,26 @@ mod tests {
             },
             ClientCommand::YellForHelp {
                 session_id,
+                created,
+            },
+            ClientCommand::SendPetition {
+                session_id,
+                text: "A synthetic petition.".into(),
+                created,
+            },
+            ClientCommand::ReportBug {
+                session_id,
+                report: eq_network_game::reports::BugReport {
+                    category: eq_network_game::reports::BugCategory::Other,
+                    text: "A synthetic report.".into(),
+                    place: None,
+                    target: None,
+                },
+                created,
+            },
+            ClientCommand::SendFeedback {
+                session_id,
+                text: "Synthetic feedback.".into(),
                 created,
             },
             ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
@@ -1508,6 +1537,11 @@ mod tests {
                     sequence: 1,
                 },
                 accept: true,
+            },
+            ClientCommand::ChallengeDuel {
+                session_id,
+                target: 2,
+                created: Instant::now(),
             },
             ClientCommand::DropInvisibility {
                 session_id,
@@ -1990,6 +2024,14 @@ mod tests {
                 assert!(servers.iter().all(|features| features
                     .capabilities()
                     .contains(&crate::world::Capability::ServerFilters)));
+                continue;
+            }
+            if matches!(command, ClientCommand::SendFeedback { .. }) {
+                // Built and tested, and listed by no server type until its
+                // own live check (6.511f).
+                assert!(!servers.iter().any(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::SendingFeedback)));
                 continue;
             }
             if Features::is_departure(&command) {

@@ -663,6 +663,12 @@ pub enum Capability {
     /// Asking for a last name: `/surname`
     /// ([`crate::command::GameCommand::Surname`]).
     Surnaming,
+    /// Sending a petition to the server's staff ([`crate::reports`]).
+    Petitioning,
+    /// Sending a bug report ([`crate::reports`]).
+    ReportingBugs,
+    /// Sending feedback, where a server reads it ([`crate::reports`]).
+    SendingFeedback,
     /// The chat server's channels ([`crate::chat_server`]): offered where
     /// the server type opens a chat link; whether one is up is told by
     /// [`WorldEvent::ChannelLink`].
@@ -672,7 +678,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 73] = [
+    pub const ALL: [Self; 76] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -745,6 +751,9 @@ impl Capability {
         Self::ServerFiltersAtOnce,
         Self::Dueling,
         Self::Surnaming,
+        Self::Petitioning,
+        Self::ReportingBugs,
+        Self::SendingFeedback,
         Self::ChatChannels,
     ];
 }
@@ -1277,7 +1286,7 @@ pub enum WorldEvent {
         last_name: String,
     },
     /// The server's answer to the player's `/surname`
-    /// ([`crate::names::surname_answer`]): whether it took the surname, and
+    /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
     /// [`WorldEvent::LastName`] changes the name the spawns carry.
     SurnameAnswer {
@@ -1861,6 +1870,25 @@ pub enum WorldEvent {
         string_id: Option<u32>,
         /// What the official string names, in its order: a member's name.
         arguments: Vec<String>,
+    },
+    /// A petition, bug report or feedback went to the server. The servers
+    /// answer some of these themselves and not others; a host shows its own
+    /// line only where the server sends none (recording checklist 6.511b).
+    ReportSent {
+        /// Admission from the request.
+        session_id: u64,
+        /// Which report.
+        report: crate::reports::ReportKind,
+    },
+    /// A petition, bug report or feedback was not sent, and why. The reason
+    /// never repeats the report's text.
+    ReportRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Which report.
+        report: crate::reports::ReportKind,
+        /// Why not.
+        reason: String,
     },
     /// A roll, emote, assist or surname was not sent, and why.
     SocialRefused {
@@ -2453,8 +2481,10 @@ fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
     })
 }
 
+/// A signed 19-bit position field in eighths of a unit, from the low bits
+/// of `value`.
 #[allow(clippy::cast_possible_wrap, clippy::cast_precision_loss)]
-fn signed_position(value: u32) -> f32 {
+pub(crate) fn signed_position(value: u32) -> f32 {
     (((value & 0x7ffff) << 13) as i32 >> 13) as f32 / 8.0
 }
 pub(crate) fn until_nul(bytes: &[u8]) -> &[u8] {
@@ -2564,7 +2594,10 @@ mod tests {
             Capability::ServerFiltersAtOnce => 69,
             Capability::Dueling => 70,
             Capability::Surnaming => 71,
-            Capability::ChatChannels => 72,
+            Capability::Petitioning => 72,
+            Capability::ReportingBugs => 73,
+            Capability::SendingFeedback => 74,
+            Capability::ChatChannels => 75,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

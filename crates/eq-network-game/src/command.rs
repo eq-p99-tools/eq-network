@@ -239,6 +239,37 @@ pub enum GameCommand {
         /// When the player asked.
         created: std::time::Instant,
     },
+    /// Send a petition to the server's staff ([`crate::reports::petition`]).
+    /// A person reads it, so a host sends one only when the player types
+    /// it.
+    SendPetition {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player asks.
+        text: String,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// Send a bug report ([`crate::reports::bug`]); the session names the
+    /// reporter.
+    ReportBug {
+        /// Current zone admission.
+        session_id: u64,
+        /// The report.
+        report: crate::reports::BugReport,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// Send feedback where a server reads it ([`crate::reports::feedback`]);
+    /// the session names the sender.
+    SendFeedback {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player says.
+        text: String,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Cast a memorized spell; the server decides completion and resource use.
     CastSpell {
         /// Current zone admission.
@@ -706,6 +737,18 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Challenge another player to a duel: Titanium's `/duel` at the
+    /// player's target (checklist 6.492b; what the program checks and
+    /// prints is pending R49-6h). The session sends it only at a player
+    /// spawn in the zone other than the player, one challenge at a time.
+    ChallengeDuel {
+        /// Current zone admission.
+        session_id: u64,
+        /// The player challenged.
+        target: u16,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Choose a button on the exact popup that was displayed.
     RespondToPopup {
         /// Current zone admission.
@@ -1139,6 +1182,9 @@ impl GameCommand {
             Self::StopSong { .. } => "StopSong",
             Self::StopCasting { .. } => "StopCasting",
             Self::YellForHelp { .. } => "YellForHelp",
+            Self::SendPetition { .. } => "SendPetition",
+            Self::ReportBug { .. } => "ReportBug",
+            Self::SendFeedback { .. } => "SendFeedback",
             Self::EmoteAnimation { .. } => "EmoteAnimation",
             Self::SocialEmote { .. } => "SocialEmote",
             Self::SetPosture { .. } => "SetPosture",
@@ -1189,6 +1235,7 @@ impl GameCommand {
             Self::AnswerSacrifice { .. } => "AnswerSacrifice",
             Self::AnswerTranslocate { .. } => "AnswerTranslocate",
             Self::AnswerDuel { .. } => "AnswerDuel",
+            Self::ChallengeDuel { .. } => "ChallengeDuel",
             Self::RespondToPopup { .. } => "RespondToPopup",
             Self::InspectPlayer { .. } => "InspectPlayer",
             Self::SetInspectNote { .. } => "SetInspectNote",
@@ -1318,6 +1365,10 @@ impl GameCommand {
             | Self::StopSong { session_id, .. }
             | Self::StopCasting { session_id, .. }
             | Self::YellForHelp { session_id, .. }
+            | Self::ChallengeDuel { session_id, .. }
+            | Self::SendPetition { session_id, .. }
+            | Self::ReportBug { session_id, .. }
+            | Self::SendFeedback { session_id, .. }
             | Self::EmoteAnimation { session_id, .. }
             | Self::SocialEmote { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
@@ -1396,6 +1447,9 @@ impl GameCommand {
             Self::StopSong { .. } => Capability::StoppingSongs,
             Self::StopCasting { .. } => Capability::StoppingCasts,
             Self::YellForHelp { .. } => Capability::Yelling,
+            Self::SendPetition { .. } => Capability::Petitioning,
+            Self::ReportBug { .. } => Capability::ReportingBugs,
+            Self::SendFeedback { .. } => Capability::SendingFeedback,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -1470,7 +1524,7 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
-            Self::AnswerDuel { .. } => Capability::Dueling,
+            Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
             Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
                 Capability::PlayerInspection
@@ -1606,6 +1660,10 @@ impl GameCommand {
             | Self::StopSong { created, .. }
             | Self::StopCasting { created, .. }
             | Self::YellForHelp { created, .. }
+            | Self::ChallengeDuel { created, .. }
+            | Self::SendPetition { created, .. }
+            | Self::ReportBug { created, .. }
+            | Self::SendFeedback { created, .. }
             | Self::EmoteAnimation { created, .. }
             | Self::SetPosture { created, .. }
             | Self::FeignLanded { created, .. }
@@ -1844,6 +1902,7 @@ pub fn encode(
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
         | GameCommand::AnswerDuel { .. }
+        | GameCommand::ChallengeDuel { .. }
         | GameCommand::RespondToPopup { .. }
         | GameCommand::InspectPlayer { .. }
         | GameCommand::SetInspectNote { .. }
@@ -1851,6 +1910,9 @@ pub fn encode(
         | GameCommand::StopSong { .. }
         | GameCommand::StopCasting { .. }
         | GameCommand::YellForHelp { .. }
+        | GameCommand::SendPetition { .. }
+        | GameCommand::ReportBug { .. }
+        | GameCommand::SendFeedback { .. }
         | GameCommand::EmoteAnimation { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }

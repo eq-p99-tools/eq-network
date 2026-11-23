@@ -31,6 +31,37 @@ The kinds are named for what the servers do with each word. Which official
 option sets each word, and with which values, is unread (6.494b), so a set
 built from these kinds may be one the official options cannot produce.
 
+## Petitions, bug reports and feedback
+
+`GameCommand::SendPetition { session_id, text, created }`,
+`GameCommand::ReportBug { session_id, report, created }` and
+`GameCommand::SendFeedback { session_id, text, created }` send a report to
+the server's staff (`eq_network_game::reports`), under
+`Capability::Petitioning`, `Capability::ReportingBugs` and
+`Capability::SendingFeedback`. A person reads each one, so a host sends one
+only when the player types it, never from a script, social or setting.
+Stock `EQEmu` lists petitions and bug reports; no server type lists feedback,
+or any of the three on P99, Quarm or TAKP, until its own live check
+(recording checklist 6.511).
+
+A `BugReport` carries its category (the servers' names), the player's text,
+and, when the host knows them, the player's place and heading and the
+target's spawn and name. The session names the reporter. The interface path,
+time played and system information go empty or zero; the report's other
+flags are not set until the official client's are read. Text is trimmed,
+must not be empty or hold a NUL, and must fit its field (a petition 1023
+bytes, a bug report 2049 on Titanium and 1023 on `EQMac`, feedback 1023);
+longer text is refused, never cut. RoF2 refuses every report.
+
+The session sends one report of a kind and refuses another of that kind for
+10 seconds (inferred). A sent report answers
+`WorldEvent::ReportSent { session_id, report }`; a refused one
+`WorldEvent::ReportRefused { session_id, report, reason }`, whose reason
+never repeats the text. The servers' own answers arrive as chat: stock
+`EQEmu` says nothing to the player when a petition or bug report is taken,
+so a host may show its own line on `ReportSent`, and the server's refusals
+(a petition already queued, bug reporting off) follow as ordinary lines.
+
 ## Own-player update gates
 
 `UpdateGate::Flagged` applies the generation's `FlagRule` and packet packing.
@@ -1537,6 +1568,23 @@ player's behalf. It closes with `WorldEvent::ConsentClosed`: `AnswerSent`
 after an answer, `Interrupted` on zoning, death or logout, a newer
 challenge, the duel's start or the challenger's refusal. A stale answer is
 refused with `WorldEvent::DuelRefused` and sends nothing.
+
+Challenge another player with `GameCommand::ChallengeDuel`, naming their
+spawn in `target` (Titanium's `/duel` at the target). The session sends it
+only at a player spawn in its spawn list other than the player, with one
+challenge out at a time and at least five seconds between two; anything
+else is refused with `WorldEvent::SocialRefused` and sends nothing.
+`EQEmu` looks the one challenged up without checking they exist, so a
+host must never reach the wire another way. The challenge is remembered
+until the server's `OP_DuelAccept` starts the duel, the other client turns
+it down, the one challenged leaves the zone, the player zones, or sixty
+seconds pass, since `EQEmu` tells a decline only in a line of text. While
+it is remembered, the record from the one challenged that `EQEmu` sends
+before the duel starts is not a question: no `DuelOffer` comes for it and
+nothing is sent. Both bounds and every refusal line are this crate's,
+pending a read of the program (checklist 6.492b). The server says its own
+line when the other player is considering another duel or the player has
+already accepted one.
 
 ## Surnames
 

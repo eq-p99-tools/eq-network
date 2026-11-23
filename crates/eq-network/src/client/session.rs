@@ -40,6 +40,7 @@ mod pets;
 mod posture;
 mod raids;
 mod reading;
+mod reports;
 mod resurrection;
 mod riders;
 pub(super) mod server_filters;
