@@ -136,6 +136,11 @@ unreachable because validation refuses the generation:
   in four constants. The death record's bind zone and attack skill sit the other way round on
   stock `EQEmu` from where both programs' structs declare them, for both generations. The mana
   and endurance updates with their maxima, and the group and raid percents, stay unlisted.
+- Its chat and the server's own lines (`chat`'s `RoF2` reading, 6.521): the channel message is
+  its own layout, two NUL-ended names, five fixed fields, the text and a 15-byte zero tail;
+  every other line keeps Titanium's shape under `RoF2`'s numbers. Links are 56 characters,
+  passed through unchanged, with the item at Titanium's digits. Outbound chat still refuses
+  `RoF2`.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.
