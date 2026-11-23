@@ -354,7 +354,12 @@ mod tests {
         // The key the server reads after the mailbox: the letter and eight
         // digits up to their NUL.
         let mailbox_end = 1 + expected[1..].iter().position(|&b| b == 0).unwrap();
-        let key_end = mailbox_end + 1 + expected[mailbox_end + 1..].iter().position(|&b| b == 0).unwrap();
+        let key_end = mailbox_end
+            + 1
+            + expected[mailbox_end + 1..]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap();
         assert_eq!(key_end - mailbox_end - 1, 9);
         assert!(!format!("{login:?}").contains(KEY));
     }

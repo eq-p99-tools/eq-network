@@ -341,6 +341,16 @@ struct Thread {
     connecting: Arc<AtomicBool>,
 }
 
+/// The program's keep-alive check (read R49-12 a): once every `every`,
+/// whether the server has been silent past [`SILENCE_LIMIT_SECS`].
+fn silent(transport: &dyn Transport, checked: &mut Instant, every: Duration) -> bool {
+    if checked.elapsed() < every {
+        return false;
+    }
+    *checked = Instant::now();
+    transport.last_received_seconds() > SILENCE_LIMIT_SECS
+}
+
 /// The link's thread: connects, logs in, then carries commands out and what
 /// the server says in until it is stopped or fails; why it failed, or None
 /// when it was stopped.
@@ -396,15 +406,10 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
             let _ = transport.close();
             return Some(LinkLoss::Login);
         }
-        if up && checked.elapsed() >= *silence_check {
-            checked = Instant::now();
-            if transport.last_received_seconds() > SILENCE_LIMIT_SECS {
-                // The program's keep-alive check (read R49-12 a): a link
-                // the server has gone silent on ends, once, with nothing
-                // sent. Whether the program says anything then is unread.
-                let _ = transport.close();
-                return Some(LinkLoss::Dropped);
-            }
+        if up && silent(&*transport, &mut checked, *silence_check) {
+            // Whether the program says anything then is unread.
+            let _ = transport.close();
+            return Some(LinkLoss::Dropped);
         }
         loop {
             match commands.try_recv() {
