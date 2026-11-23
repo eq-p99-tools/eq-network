@@ -3010,6 +3010,48 @@ fn a_rooted_swimmer_still_sinks_within_the_water_gravity() {
         .is_err());
 }
 
+/// Zone 222's own set is level 5's only, so a stroke in its slower water
+/// moves by the 6-8 set, faster than poearthb's WT water allows (read
+/// R49-26). The bound covers both sets.
+#[test]
+fn a_stroke_in_poearthb_slower_water_stays_within_the_bound() {
+    use crate::movement::water::{
+        WetInput, WetKind, WetVelocity, LIQUID_5_POEARTHB, LIQUID_6_TO_8,
+    };
+    let start = Instant::now();
+    let calibration = titanium_swimmer(Some(100), 222);
+    let swim = calibration.swim.unwrap();
+    assert_eq!(swim.set_for(WetKind::Normal), LIQUID_5_POEARTHB);
+    assert_eq!(swim.set_for(WetKind::Slower), LIQUID_6_TO_8);
+    let wt_only = crate::movement::water::WetCaps::new(swim.set, swim.forward, swim.forward);
+    assert!(swim.caps().horizontal > wt_only.horizontal * 2.0);
+    let mut session = swimming_session(start, calibration);
+    let mut velocity = WetVelocity::default();
+    let mut at = Position::default();
+    for step in 1..=30_u64 {
+        let ([_, y], z) = velocity.advance(
+            swim.set_for(WetKind::Slower),
+            WetInput {
+                horizontal: [0.0, swim.forward],
+                vertical: 0.0,
+                jump: false,
+            },
+            0.1,
+        );
+        at.y += y;
+        at.z += z;
+        session
+            .send_move_sample(
+                &swim_to(at, step * 100, start, MovementMode::Swim),
+                start + Duration::from_millis(step * 100),
+                |_| Ok(()),
+            )
+            .unwrap_or_else(|error| panic!("step {step}: {error}"));
+    }
+    // Settled near 20/3 x 1.7 = 11.3 u/s, where poearthb's WT caps at 2.3.
+    assert!(at.y > 25.0, "{at:?}");
+}
+
 /// Samples across the water line, sample by sample through the bound:
 /// a run off a bank, a fall at terminal speed into water, and a rise out
 /// of it into a fall. The client clamps the entry velocity to the caps.

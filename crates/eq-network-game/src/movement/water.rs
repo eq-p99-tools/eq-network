@@ -58,15 +58,33 @@ pub const LIQUID_5_POEARTHB: WetCoefficients = WetCoefficients {
     vertical_keep: 0.1,
 };
 
-/// One generation's water: the set its `WT` regions take, a zone whose
-/// water differs, and a zone with no air to breathe. These are facts of
+/// Which of the step's two sets a wet region takes. Titanium's region
+/// classifier (0x435ec9, read R49-26) gives `WT` 5, `SL` 6, `LA` 7, `VW` 8,
+/// `W2` 9 and `W3` 10; the step (0x4bfe0f, read R33) moves 5, 9 and 10 by
+/// one set and 6, 7 and 8 by a slower one.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum WetKind {
+    /// Kinds 5, 9 and 10: `WT`, `W2` and `W3`.
+    #[default]
+    Normal,
+    /// Kinds 6, 7 and 8: `SL`, `LA` and `VW`.
+    Slower,
+}
+
+/// One generation's water: the set its `WT` regions take, the set its
+/// slower water takes, a zone whose water differs, and a zone with no air
+/// to breathe. These are facts of
 /// the generation's own region parser and zone table, so they come from
 /// [`crate::GameDialect::water`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaterRules {
     /// The set of a `WT` region: level 5 (parser 0x435db5, read R41 a).
     pub water: WetCoefficients,
-    /// A zone whose level 5 takes another set.
+    /// The set of `SL`, `LA` and `VW` regions: levels 6 to 8 (0x4bfe0f,
+    /// read R33; kinds read R49-26).
+    pub slower: WetCoefficients,
+    /// A zone whose level 5 takes another set. Levels 6 to 8 keep theirs
+    /// there (read R49-26).
     pub zone_water: Option<(u16, WetCoefficients)>,
     /// A zone whose air can't be breathed: there a head out of water
     /// breathes only by race or effect 14 (0x41a753 / 0x5f6c40, zone flag
@@ -78,9 +96,19 @@ impl WaterRules {
     /// The set a `WT` region takes in `zone`.
     #[must_use]
     pub fn set(&self, zone: u16) -> WetCoefficients {
-        self.zone_water
-            .filter(|(id, _)| *id == zone)
-            .map_or(self.water, |(_, set)| set)
+        self.set_for(zone, WetKind::Normal)
+    }
+
+    /// The set a region of this kind takes in `zone`.
+    #[must_use]
+    pub fn set_for(&self, zone: u16, kind: WetKind) -> WetCoefficients {
+        match kind {
+            WetKind::Normal => self
+                .zone_water
+                .filter(|(id, _)| *id == zone)
+                .map_or(self.water, |(_, set)| set),
+            WetKind::Slower => self.slower,
+        }
     }
 
     /// Whether `zone` has no air to breathe.
@@ -95,6 +123,7 @@ impl WaterRules {
 /// R41 a and d).
 pub const TITANIUM_WATER: WaterRules = WaterRules {
     water: LIQUID_5,
+    slower: LIQUID_6_TO_8,
     zone_water: Some((222, LIQUID_5_POEARTHB)),
     airless_zone: Some(171),
 };
@@ -191,6 +220,17 @@ impl WetCaps {
             horizontal: horizontal * TICKS_PER_SECOND,
             up: (stroke + push) * TICKS_PER_SECOND,
             down: (stroke + gravity) * TICKS_PER_SECOND,
+        }
+    }
+
+    /// The larger of two caps on each axis, for a swimmer who may be in
+    /// either set's water.
+    #[must_use]
+    pub fn covering(self, other: Self) -> Self {
+        Self {
+            horizontal: self.horizontal.max(other.horizontal),
+            up: self.up.max(other.up),
+            down: self.down.max(other.down),
         }
     }
 }
@@ -398,6 +438,41 @@ mod tests {
         assert_eq!(TITANIUM_WATER.set(222), LIQUID_5_POEARTHB);
         assert_eq!(TITANIUM_WATER.set(1), LIQUID_5);
         assert!(TITANIUM_WATER.airless(171) && !TITANIUM_WATER.airless(1));
+    }
+
+    #[test]
+    fn slower_water_keeps_its_set_in_poearthb_and_the_covering_caps_hold_both() {
+        assert_eq!(TITANIUM_WATER.set_for(1, WetKind::Normal), LIQUID_5);
+        assert_eq!(TITANIUM_WATER.set_for(1, WetKind::Slower), LIQUID_6_TO_8);
+        assert_eq!(
+            TITANIUM_WATER.set_for(222, WetKind::Normal),
+            LIQUID_5_POEARTHB
+        );
+        // Zone 222's own set is level 5's only (read R49-26).
+        assert_eq!(TITANIUM_WATER.set_for(222, WetKind::Slower), LIQUID_6_TO_8);
+        let speed = 1.7;
+        let level = WetInput {
+            horizontal: [0.0, speed],
+            ..WetInput::default()
+        };
+        // Slower water settles at two thirds of WT's level speed.
+        let ([_, slow], _) = settle(LIQUID_6_TO_8, level, 10.0).units_per_second();
+        let ([_, normal], _) = settle(LIQUID_5, level, 10.0).units_per_second();
+        assert!(close(slow, 20.0 / 3.0 * speed, 0.01), "{slow}");
+        assert!(close(normal, 10.0 * speed, 0.01), "{normal}");
+        for normal in [LIQUID_5, LIQUID_5_POEARTHB] {
+            let caps = WetCaps::new(normal, speed, speed).covering(WetCaps::new(
+                LIQUID_6_TO_8,
+                speed,
+                speed,
+            ));
+            for set in [normal, LIQUID_6_TO_8] {
+                let own = WetCaps::new(set, speed, speed);
+                assert!(
+                    own.horizontal <= caps.horizontal && own.up <= caps.up && own.down <= caps.down
+                );
+            }
+        }
     }
 
     #[test]
