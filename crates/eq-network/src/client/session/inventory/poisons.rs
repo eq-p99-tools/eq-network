@@ -7,17 +7,21 @@
 //!   a standing player is sat down (0x483556), and one who is still not
 //!   sitting is told 0x305d. One already starting or in flight is ignored
 //!   without a word. Otherwise the wait starts, with 0x305e.
-//! - The request goes out when the wait ends: effect 234's total, or 10 s
-//!   when that is 0 (the character tick, 0x422617). This session waits the
-//!   10 s always, as it does not sum effect 234: where an effect would
-//!   shorten the wait, this one is the slower (inferred, a follow-up).
+//! - The request goes out when the wait ends (the character tick,
+//!   0x422617): effect 234's total in ms, the sum over every active buff and
+//!   every usable AA, in place of 10 s when it is not 0 (read R49-1f). This
+//!   session does not sum effect 234 yet and waits the 10 s always: the same
+//!   for a player with no such effect, slower where a total is below 10 s.
+//!   A total above 10 s, or a negative one (with which the program never
+//!   sends), would make this session the faster: a known departure until
+//!   the follow-up sums it.
 //! - Any posture change before then cancels it, with 0x30d1. Leaving the
 //!   zone drops it without a line, as the program's zoning clears it: this
 //!   state ends with the zone session. The posture
 //!   state counts its changes, so a stand and re-sit between two ticks
 //!   cancels too. A change the server forces without a posture report is
 //!   not seen (inferred: the servers report the stances they force). The
-//!   read gives 0x30d1 no colour: the host's 0x111 for it is inferred.
+//!   program prints 0x30d1 in colour 0x111 (read R49-1f).
 //! - The answer ends the hold; which line it brings is the host's. The
 //!   program's hold is its general wait for a server answer, which other
 //!   answers clear too (read R49-5 asks); this one is the poison's own.
@@ -41,10 +45,9 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// How long the program waits, seated, before it sends: effect 234's total,
-/// or this when that is 0 (read R49-1 c). Effect 234 is not summed here, so
-/// this wait is always used (inferred): where the effect would shorten it,
-/// this session is the slower, never the faster.
+/// How long the program waits, seated, before it sends when effect 234's
+/// total is 0 (read R49-1 c, R49-1f). The total is not summed here yet, so
+/// this wait is always used: see the module notes for where that departs.
 pub(super) const WAIT: Duration = Duration::from_secs(10);
 /// The Apply Poison skill, the program's only class test (read R49-1 b).
 const APPLY_POISON_SKILL: usize = 6;
@@ -78,6 +81,9 @@ impl Poisons {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<Option<(&'static str, Option<u32>)>> {
+        // The program cancels in its posture routine, at the change itself:
+        // a stand since the last tick has already ended the wait.
+        self.cancel_if_moved(world, out)?;
         let inventory = &world.inventory;
         if !inventory.received() || inventory.stale() {
             return Ok(Some(("Wait for a current inventory snapshot", None)));
@@ -112,15 +118,6 @@ impl Poisons {
                 Some(NO_SKILL),
             )));
         }
-        if self.starting.is_some() || self.pending.is_some() {
-            return out
-                .log
-                .diagnostic(
-                    "A poison click while one is under way was ignored, as the program ignores it"
-                        .into(),
-                )
-                .map(|()| None);
-        }
         let Some(spawn_id) = world.own_spawn else {
             return Ok(Some(("Not in the zone yet", None)));
         };
@@ -132,6 +129,17 @@ impl Poisons {
                 "You must be sitting to apply a poison",
                 Some(NOT_SITTING),
             )));
+        }
+        // Only after the sit and its refusal, as the program's starter
+        // orders them (read R49-1 b).
+        if self.starting.is_some() || self.pending.is_some() {
+            return out
+                .log
+                .diagnostic(
+                    "A poison click while one is under way was ignored, as the program ignores it"
+                        .into(),
+                )
+                .map(|()| None);
         }
         self.starting = Some((slot, Instant::now(), world.posture.changes()));
         out.log
@@ -151,20 +159,10 @@ impl Poisons {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let Some((slot, since, changes)) = self.starting else {
+        self.cancel_if_moved(world, out)?;
+        let Some((slot, since, _)) = self.starting else {
             return Ok(());
         };
-        if world.posture.changes() != changes
-            || world.posture.current() != Some(PostureState::Sitting)
-        {
-            self.starting = None;
-            return out
-                .log
-                .send(ClientEvent::World(WorldEvent::PoisonInterrupted {
-                    session_id: world.session_id,
-                    string_id: INTERRUPTED,
-                }));
-        }
         if now.saturating_duration_since(since) <= WAIT {
             return Ok(());
         }
@@ -172,6 +170,25 @@ impl Poisons {
         out.request(&Request::ApplyPoison { slot })?;
         self.pending = Some(slot);
         Ok(())
+    }
+
+    /// Ends a wait whose player changed stance since it began, with the
+    /// program's 0x30d1.
+    fn cancel_if_moved(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some((_, _, changes)) = self.starting else {
+            return Ok(());
+        };
+        if world.posture.changes() == changes
+            && world.posture.current() == Some(PostureState::Sitting)
+        {
+            return Ok(());
+        }
+        self.starting = None;
+        out.log
+            .send(ClientEvent::World(WorldEvent::PoisonInterrupted {
+                session_id: world.session_id,
+                string_id: INTERRUPTED,
+            }))
     }
 
     /// Hears the server's answer, which ends the request in flight. An answer

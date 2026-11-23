@@ -875,21 +875,27 @@ same flow, inferred, as its program is not read.
   `WorldEvent::Posture`. A player still not sitting (ducking, lying,
   feigning) is refused with `string_id` 0x305d.
 - A command while a poison is waiting or in flight is ignored, as the
-  program ignores it: a diagnostic, and no world event.
+  program ignores it: a diagnostic, and no world event. It is ignored only
+  after the sit and the 0x305d refusal, in the program's order, so a
+  standing player's click while one is in flight still sits them.
 - Otherwise the wait starts, with `WorldEvent::PoisonStarted { slot,
   string_id: 0x305e }`. After 10 s seated the request goes out. The program
-  waits effect 234's total where that is not 0; this session does not sum
-  it and always waits 10 s, which can only be slower (inferred).
+  waits effect 234's total in ms (every active buff and usable AA, summed)
+  in place of 10 s where that is not 0 (read R49-1f). This session does not
+  sum it yet and always waits 10 s: slower where a total is below 10 s, and
+  faster where one is above 10 s or negative, a known departure until the
+  sum lands.
 - Any posture change before the send, a stand and re-sit between two ticks
   included, cancels it with `WorldEvent::PoisonInterrupted { string_id:
-  0x30d1 }` and nothing sent. The read gives that line no colour. Leaving
-  the zone drops it silently, as the program's zoning does.
+  0x30d1 }` and nothing sent. A click checks this first, so a stand and a
+  click before the next tick cancel and start anew. Leaving the zone drops
+  it silently, as the program's zoning does.
 
 It never removes the poison itself: the server's own inventory record does,
 applied or not. `WorldEvent::PoisonAnswered { slot, applied }` is the
 server's answer and ends the request in flight; the program says 0x3269 when
 `applied`, else 0x326a, in colour 0x10e. The program's lines for 0x305f,
-0x305d and 0x305e are in colour 0x111.
+0x305d, 0x305e and 0x30d1 are in colour 0x111.
 
 ## Command diagnostic identity
 

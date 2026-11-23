@@ -1733,8 +1733,7 @@ pub enum WorldEvent {
     },
     /// A poison waiting to go out was stopped by a posture change before
     /// its request went (read R49-1 d); nothing was sent. The host says
-    /// `string_id` (0x30d1); the read gives it no colour, so a host's
-    /// colour for it is inferred.
+    /// `string_id` (0x30d1), in colour 0x111 (read R49-1f).
     PoisonInterrupted {
         /// Admission from the request.
         session_id: u64,

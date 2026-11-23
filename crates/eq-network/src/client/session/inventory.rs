@@ -2104,6 +2104,91 @@ mod tests {
     }
 
     #[test]
+    fn a_poison_click_sits_or_refuses_before_it_is_ignored_and_a_stand_restarts_it() {
+        use eq_network_game::command::Posture;
+        let wire = &super::super::wire::Titanium;
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let (mut world, vial, _) = poisoned(&mut belongings, wire);
+        let apply = ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: vial,
+            created: Instant::now(),
+        };
+        let stance = |world: &mut World, posture| {
+            testing::run_on(wire, |out| world.posture.set(7, posture, out))
+                .result
+                .unwrap();
+        };
+        // (b) A stand, then a click before the next tick: the stand ended
+        // the first wait, so the click sits the player and starts anew.
+        testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out))
+            .result
+            .unwrap();
+        stance(&mut world, Posture::Standing);
+        let restart = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        restart.result.unwrap();
+        assert_eq!(restart.sent.len(), 1, "{:?}", restart.sent);
+        assert!(
+            matches!(
+                world_events(&restart.events).as_slice(),
+                [
+                    WorldEvent::PoisonInterrupted {
+                        string_id: 0x30d1,
+                        ..
+                    },
+                    WorldEvent::Posture {
+                        posture: PostureState::Sitting,
+                        ..
+                    },
+                    WorldEvent::PoisonStarted { .. },
+                ]
+            ),
+            "{:?}",
+            restart.events
+        );
+        belongings
+            .poisons
+            .backdate(poisons_wait() + std::time::Duration::from_secs(1));
+        let sent = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent.len(), 1, "{:?}", sent.sent);
+        // (a) In flight, a standing player's click still sits them, and
+        // only then is ignored: the sit goes out, nothing else.
+        stance(&mut world, Posture::Standing);
+        let sat = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        sat.result.unwrap();
+        assert_eq!(sat.sent.len(), 1, "{:?}", sat.sent);
+        assert!(
+            matches!(
+                world_events(&sat.events).as_slice(),
+                [WorldEvent::Posture {
+                    posture: PostureState::Sitting,
+                    ..
+                }]
+            ),
+            "{:?}",
+            sat.events
+        );
+        assert_eq!(world.posture.current(), Some(PostureState::Sitting));
+        // In flight and ducking, the click is refused with 0x305d.
+        stance(&mut world, Posture::Ducking);
+        let ducked = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        ducked.result.unwrap();
+        assert_eq!(ducked.sent, no_sends());
+        assert!(
+            matches!(
+                world_events(&ducked.events).as_slice(),
+                [WorldEvent::ApplyPoisonRefused {
+                    string_id: Some(0x305d),
+                    ..
+                }]
+            ),
+            "{:?}",
+            ducked.events
+        );
+    }
+
+    #[test]
     fn a_stand_and_re_sit_between_two_ticks_stops_the_poison() {
         use eq_network_game::command::Posture;
         let wire = &super::super::wire::Titanium;

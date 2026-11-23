@@ -10,8 +10,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Any posture change before then cancels it. The skill and posture refusals
   carry the program's string ids (0x305f, 0x305d); a bag slot and unknown
   skills are refused in this library's words; a command while one is under
-  way is ignored. The 10 s wait ignores effect 234, so it can only be slower
-  (inferred, follow-up filed). `EQMac` takes the same flow, inferred.
+  way is ignored, after the sit. The 10 s wait does not sum effect 234 yet
+  (read R49-1f): slower where a total is below 10 s, faster where one is
+  above 10 s or negative, until the follow-up. `EQMac` takes the same flow,
+  inferred.
   - New: `WorldEvent::PoisonStarted { session_id, slot, string_id }` and
     `WorldEvent::PoisonInterrupted { session_id, string_id }`.
   - **Breaking:** new variants on the exhaustive `WorldEvent`. A host that
