@@ -119,12 +119,71 @@ pub fn titanium_language_trainable(language: u8, race: u32, class: Option<u32>, 
     }) else {
         return false;
     };
-    level >= minimum
-        || matches!((class, language),
-            (Some(11), 12) if level > 7
-        )
+    level >= minimum || class_learns(language, class, level)
+}
+
+/// The languages a class may learn whatever its race's table says, as both
+/// the Titanium program (0x4bbeda) and the `EQMac` program (0x4ef555) allow
+/// them: a necromancer (11) Dark Speech (12) past level 7 and Elder Elvish
+/// (17) past 19, and Thieves' Cant (11) past level 7 for classes 12 and 13
+/// and always for class 14.
+fn class_learns(language: u8, class: Option<u32>, level: u8) -> bool {
+    matches!((class, language), (Some(11), 12) if level > 7)
         || matches!((class, language), (Some(11), 17) if level > 19)
         || (language == 11 && (class == Some(14) || (matches!(class, Some(12 | 13)) && level > 7)))
+}
+
+/// How many languages the `EQMac` program's minimum-level table covers.
+pub const EQMAC_TABLE_LANGUAGES: usize = 25;
+/// The races the table has a column for, in its order: 1 to 12, Iksar and
+/// Vah Shir.
+pub const EQMAC_TABLE_RACES: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 128, 130];
+
+/// The `EQMac` program's minimum level for each language and race, which
+/// its training gate checks (0x4ef555): a host reads it from the installed
+/// program (races 1 to 12 at 0x60b0ac + (language x 14 + race) x 4, Iksar
+/// at 0x60b0e0 + language x 0x38, Vah Shir at 0x60b0e4 + language x 0x38)
+/// and hands it to the session through its configuration. No values are
+/// kept here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LanguageLevels([[u32; 14]; EQMAC_TABLE_LANGUAGES]);
+
+impl LanguageLevels {
+    /// Takes a table read from an installed program, by language then by
+    /// [`EQMAC_TABLE_RACES`], if it looks like the program's: every race may
+    /// speak the first language (0) at level 1, and no race at all learns
+    /// languages 10 or 23 below 99. None for any other table, which keeps
+    /// language training shut.
+    #[must_use]
+    pub fn checked(rows: [[u32; 14]; EQMAC_TABLE_LANGUAGES]) -> Option<Self> {
+        let all = |row: &[u32; 14], value: u32| row.iter().all(|cell| *cell == value);
+        (all(&rows[0], 1) && all(&rows[10], 99) && all(&rows[23], 99)).then_some(Self(rows))
+    }
+
+    /// The minimum level for this language and race; None for a language or
+    /// race the table has no place for.
+    #[must_use]
+    pub fn minimum(&self, language: u8, race: u32) -> Option<u32> {
+        let column = EQMAC_TABLE_RACES.iter().position(|known| *known == race)?;
+        Some(self.0.get(usize::from(language))?[column])
+    }
+}
+
+/// The `EQMac` program's rule for whether the player may learn a language
+/// (0x4ef555, read 6.597): their level at least the table's minimum for
+/// the language and race, or one of the class exceptions Titanium has too.
+/// A language or race outside the table is refused.
+#[must_use]
+pub fn eqmac_language_trainable(
+    levels: &LanguageLevels,
+    language: u8,
+    race: u32,
+    class: Option<u32>,
+    level: u8,
+) -> bool {
+    levels
+        .minimum(language, race)
+        .is_some_and(|minimum| u32::from(level) >= minimum || class_learns(language, class, level))
 }
 
 // Rows: languages 0..24. Columns: races 1..12, Iksar, Vah Shir, Froglok.
@@ -378,6 +437,25 @@ pub fn eqmac_practice_cost(value: u32, scale: PriceScale) -> u64 {
     }
 }
 
+/// What the `EQMac` program asks a practice to cost before it sends one
+/// (0x4ef6c7, read 6.597): the value over 10, cubed, times the
+/// guildmaster's scale, times 0.01, cut to whole copper; nothing up to 10.
+/// The server then takes its own figure ([`eqmac_practice_cost`]), which
+/// can be a copper apart.
+#[must_use]
+pub fn eqmac_program_cost(value: u32, scale: f32) -> u64 {
+    let over = f64::from(value.saturating_sub(10));
+    let cost = over * over * over * f64::from(scale) * 0.01;
+    if cost.is_finite() && cost >= 1.0 {
+        // Cut toward zero, as the program's conversion does.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let whole = cost.trunc() as u64;
+        whole
+    } else {
+        0
+    }
+}
+
 /// Decodes a Titanium training packet from the server: the guildmaster's
 /// answer to an open request; None for any other opcode.
 ///
@@ -600,6 +678,55 @@ pub fn titanium_end(trainer: u16, player: u16) -> EncodedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A made-up table that passes the shape check: language 0 at 1, 10 and
+    /// 23 at 99, everything else at 20 but language 5, which race 2 and Vah
+    /// Shir learn at 1.
+    fn made_up_levels() -> LanguageLevels {
+        let mut rows = [[20; 14]; EQMAC_TABLE_LANGUAGES];
+        rows[0] = [1; 14];
+        rows[10] = [99; 14];
+        rows[23] = [99; 14];
+        rows[5][1] = 1;
+        rows[5][13] = 1;
+        LanguageLevels::checked(rows).unwrap()
+    }
+
+    #[test]
+    fn a_language_table_must_look_like_the_programs() {
+        let good = made_up_levels();
+        assert_eq!(good.minimum(5, 2), Some(1));
+        assert_eq!(good.minimum(5, 130), Some(1));
+        assert_eq!(good.minimum(5, 1), Some(20));
+        assert_eq!(good.minimum(25, 1), None);
+        assert_eq!(good.minimum(5, 330), None);
+        let mut rows = [[20; 14]; EQMAC_TABLE_LANGUAGES];
+        rows[0] = [1; 14];
+        rows[10] = [99; 14];
+        assert_eq!(LanguageLevels::checked(rows), None);
+        assert_eq!(
+            LanguageLevels::checked([[0; 14]; EQMAC_TABLE_LANGUAGES]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_mac_gate_takes_the_tables_level_or_a_class_exception() {
+        let levels = made_up_levels();
+        assert!(!eqmac_language_trainable(&levels, 5, 1, Some(1), 19));
+        assert!(eqmac_language_trainable(&levels, 5, 1, Some(1), 20));
+        assert!(eqmac_language_trainable(&levels, 5, 2, Some(1), 1));
+        // The class exceptions, the same as Titanium's.
+        assert!(!eqmac_language_trainable(&levels, 12, 1, Some(11), 7));
+        assert!(eqmac_language_trainable(&levels, 12, 1, Some(11), 8));
+        assert!(eqmac_language_trainable(&levels, 17, 1, Some(11), 20));
+        assert!(eqmac_language_trainable(&levels, 11, 1, Some(14), 1));
+        assert!(eqmac_language_trainable(&levels, 11, 1, Some(12), 8));
+        assert!(!eqmac_language_trainable(&levels, 11, 1, Some(12), 7));
+        // Outside the table: refused.
+        assert!(!eqmac_language_trainable(&levels, 25, 1, Some(14), 60));
+        assert!(!eqmac_language_trainable(&levels, 0, 330, Some(1), 60));
+    }
 
     #[test]
     fn the_two_training_banks_do_not_share_request_ids() {

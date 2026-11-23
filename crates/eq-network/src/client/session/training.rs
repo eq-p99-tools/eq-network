@@ -3,8 +3,9 @@
 //! opening per trainer and one unresolved practice per admission. Received
 //! skill values remain authoritative without establishing a practice spend.
 //! TAKP and Quarm follow `EQEmu`'s projection with the guildmaster's price
-//! scale, and hold languages until the `EQMac` program's rule is read
-//! (6.597).
+//! scale, and train languages as the `EQMac` program does (6.597): its own
+//! gate in its order, then the practice resolved at once, as neither server
+//! says anything back.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -47,7 +48,7 @@ pub(super) struct Training {
     /// P99 follows native admission and requires new balance evidence after a spend.
     p99: bool,
     /// TAKP and Quarm: `EQEmu`'s projection, priced by the guildmaster's
-    /// scale, with languages held (6.597).
+    /// scale, with languages under the `EQMac` program's gate (6.597).
     eqmac: bool,
     /// Each trainer ID can receive one opening request in this P99 admission.
     requested_trainers: BTreeSet<u16>,
@@ -83,6 +84,16 @@ struct Practice {
 /// (254) or cannot have (255): `Client::OPGMTrainSkill` takes 254 as a new
 /// skill once its level is reached, and prices a new skill at nothing.
 const EQMAC_UNTRAINED: u32 = 254;
+
+/// The `EQMac` program's training lines (read 6.597): a language the player
+/// can't learn yet (0x327c), no practice points (0x327d), a language at 100
+/// (0x327e, naming it), one at the guildmaster's limit (0x327f), and coins
+/// short of the cost (0x2f21, naming the guildmaster).
+const EQMAC_LANGUAGE_TOO_YOUNG: u32 = 0x327c;
+const EQMAC_NO_PRACTICES: u32 = 0x327d;
+const EQMAC_LANGUAGE_MASTERED: u32 = 0x327e;
+const EQMAC_TRAINER_LIMIT: u32 = 0x327f;
+const EQMAC_CANNOT_AFFORD: u32 = 0x2f21;
 
 impl Training {
     /// P99 uses native admission fields and keeps skill and point authority separate.
@@ -225,9 +236,6 @@ impl Training {
                 );
             }
         }
-        if self.eqmac && matches!(subject, TrainingSubject::Language(_)) {
-            return Err("Language training is unavailable on this server until checked.");
-        }
         // Recheck the live trainer for the new bank as well as the received offer.
         if matches!(subject, TrainingSubject::Language(_)) {
             Self::eligible(trainer, world)?;
@@ -303,6 +311,9 @@ impl Training {
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
+        if let (true, TrainingSubject::Language(language)) = (self.eqmac, subject) {
+            return self.train_eqmac_language(command, language, world, out);
+        }
         let (trainer, from, cost) = match self.practice(subject, world) {
             Ok(practice) => practice,
             Err(reason) => return actions::refuse(command, reason, out.log),
@@ -457,6 +468,8 @@ impl Training {
                     .send(ClientEvent::World(WorldEvent::TrainingRefused {
                         session_id: world.session_id,
                         reason: "The guildmaster declined to open training.".into(),
+                        string_id: None,
+                        arguments: Vec::new(),
                     }))?;
             }
             Message::Event(WorldEvent::Skill { skill_id, value }) => {
@@ -502,6 +515,136 @@ impl Training {
             _ => (),
         }
         Ok(())
+    }
+
+    /// Practices a language on TAKP or Quarm as the `EQMac` program does
+    /// (0x47ea1f, 0x4efc95, 0x4ef6c7; reads 6.597a and its follow-up): its
+    /// gate's checks in its order, each refusing with the program's line
+    /// and sending nothing, then the coins, then the send. Neither server
+    /// answers a language practice (TAKP 44afcbf and Quarm fc75fcf,
+    /// `Client::OPGMTrainSkill` and `IncreaseLanguageSkill`: only string
+    /// 449), so the practice is resolved at once, as the program resolves
+    /// it: a point spent, the cost paid, the language one higher. The next
+    /// profile the server sends overwrites that prediction either way.
+    fn train_eqmac_language(
+        &mut self,
+        command: &ClientCommand,
+        language: u8,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let (trainer, from, cost) = match self.eqmac_language(language, world) {
+            Ok(practice) => practice,
+            Err((reason, line, arguments)) => {
+                return actions::refuse_naming(command, (reason, line), &arguments, out.log)
+            }
+        };
+        let subject = TrainingSubject::Language(language);
+        out.request(&Request::Practice { trainer, subject })?;
+        world.happened(Message::Event(WorldEvent::Training(
+            TrainingUpdate::Trained {
+                skill: subject.update_id(),
+                value: from.saturating_add(1),
+                cost,
+            },
+        )));
+        Ok(())
+    }
+
+    /// The `EQMac` program's checks before a language practice, in its
+    /// order, with each refusal's words, the program's line and what that
+    /// line names; or the guildmaster, the language's value and the cost the
+    /// server will take.
+    #[allow(clippy::type_complexity)]
+    fn eqmac_language(
+        &self,
+        language: u8,
+        world: &World,
+    ) -> Result<(u16, u32, u64), (&'static str, Option<u32>, Vec<String>)> {
+        let ours = |reason: &'static str| (reason, None, Vec::new());
+        let Some((trainer, offer)) = self.trainer.as_ref().and_then(|trainer| {
+            trainer
+                .offer
+                .as_ref()
+                .map(|offer| (trainer.spawn_id, offer))
+        }) else {
+            return Err(ours("You are not training with a guildmaster."));
+        };
+        Self::eligible(trainer, world).map_err(ours)?;
+        let Some(levels) = world.language_levels.as_ref() else {
+            return Err(ours(
+                "Language training needs the installed program's language table.",
+            ));
+        };
+        let Some(player) = world.player.as_ref() else {
+            return Err(ours("Not in the zone yet"));
+        };
+        let subject = TrainingSubject::Language(language);
+        let Some(value) = subject.value(player) else {
+            return Err(ours("Your current skill value is unknown."));
+        };
+        // The window lists only the languages the player already speaks.
+        let cap = offer.subject_cap(subject);
+        if value == 0 || cap == 0 {
+            return Err(ours("Your guildmaster cannot train you in that language."));
+        }
+        if !training::eqmac_language_trainable(
+            levels,
+            language,
+            player.race,
+            player.class,
+            player.level,
+        ) {
+            return Err((
+                "Your guildmaster cannot train you in that language yet.",
+                Some(EQMAC_LANGUAGE_TOO_YOUNG),
+                Vec::new(),
+            ));
+        }
+        let unanswered = u32::try_from(self.pending.len()).unwrap_or(u32::MAX);
+        if self.points.unwrap_or(0) <= unanswered {
+            return Err((
+                "You do not have any practice points left.",
+                Some(EQMAC_NO_PRACTICES),
+                Vec::new(),
+            ));
+        }
+        if value >= training::LANGUAGE_CAP {
+            return Err((
+                "You have mastered that language.",
+                Some(EQMAC_LANGUAGE_MASTERED),
+                vec![language.to_string()],
+            ));
+        }
+        if value >= cap {
+            return Err((
+                "Your guildmaster cannot train you any further in that language.",
+                Some(EQMAC_TRAINER_LIMIT),
+                Vec::new(),
+            ));
+        }
+        // The program checks the purse against its own figure; the server
+        // then takes its own (TAKP 44afcbf and Quarm fc75fcf,
+        // `TakeMoneyFromPP`) without saying so, which is what is paid here.
+        let scale = offer.price_scale.map_or(1.0, training::PriceScale::get);
+        let owed: u64 = self.pending.iter().map(|practice| practice.cost).sum();
+        let purse = world.coins.purse.map_or(0, |coins| coins.total_copper());
+        if purse < owed.saturating_add(training::eqmac_program_cost(value, scale)) {
+            let name = world
+                .spawns
+                .visible(trainer)
+                .map(|spawn| spawn.name.clone())
+                .unwrap_or_default();
+            return Err((
+                "You cannot afford to train that language.",
+                Some(EQMAC_CANNOT_AFFORD),
+                vec![name],
+            ));
+        }
+        let cost = offer
+            .price_scale
+            .map_or(0, |scale| training::eqmac_practice_cost(value, scale));
+        Ok((trainer, value, cost))
     }
 
     /// Tells the host how many practice points are left.
@@ -592,6 +735,8 @@ impl Feature for Training {
                 out.log.send(ClientEvent::World(WorldEvent::TrainingRefused {
                     session_id: world.session_id,
                     reason: if self.p99 { "The guildmaster has not answered. The outcome is unknown." } else { "The guildmaster has not answered. The outcome is unknown; re-enter the zone before asking this guildmaster again." }.into(),
+                    string_id: None,
+                    arguments: Vec::new(),
                 }))?;
             } else if self.p99
                 && (world.lifecycle.blocks_motion()
@@ -635,8 +780,26 @@ impl Feature for Training {
                 } else {
                     reply.offer.clone()
                 };
-                // TAKP and Quarm flag every language; the `EQMac` program's
-                // own rule is unread, so none is offered (6.597a).
+                // The `EQMac` program lists the languages the player already
+                // speaks, each to the guildmaster's byte for it (TAKP and
+                // Quarm send 201 for every one), and gates the practice
+                // itself (6.597); without the installed table, none.
+                let eqmac_caps = self.eqmac.then(|| {
+                    (0..training::LANGUAGES)
+                        .map(|language| {
+                            let speaks = world.player.as_ref().is_some_and(|player| {
+                                TrainingSubject::Language(language)
+                                    .value(player)
+                                    .is_some_and(|value| value > 0)
+                            });
+                            if speaks && world.language_levels.is_some() {
+                                u32::from(reply.language_flags[usize::from(language)])
+                            } else {
+                                0
+                            }
+                        })
+                        .collect()
+                });
                 offer.language_caps = (0..training::LANGUAGES)
                     .map(|language| {
                         if !self.eqmac
@@ -656,6 +819,9 @@ impl Feature for Training {
                         }
                     })
                     .collect();
+                if let Some(caps) = eqmac_caps {
+                    offer.language_caps = caps;
+                }
                 *message = Message::Event(WorldEvent::Training(TrainingUpdate::Offered(offer)));
             }
             return;
@@ -1818,7 +1984,7 @@ mod tests {
         })
     }
 
-    fn mac_open(training: &mut Training, world: &mut World) {
+    fn mac_open(training: &mut Training, world: &mut World) -> training::TrainingOffer {
         let opened = mac_handle(training, world, TrainingRequest::Open { trainer: 42 });
         opened.result.unwrap();
         assert_eq!(opened.sent, [training::eqmac_open(42, 7)]);
@@ -1828,11 +1994,52 @@ mod tests {
         };
         assert_eq!(offer.cap(30), 200);
         assert_eq!(offer.price_scale.map(training::PriceScale::get), Some(1.25));
-        assert_eq!(
-            offer.language_caps,
-            [0; training::LANGUAGES as usize],
-            "languages held (6.597a)"
-        );
+        offer
+    }
+
+    /// A made-up language table (no program values): language 0 at 1, 10
+    /// and 23 at 99, language 5 at 1 for humans, everything else at 30.
+    fn made_up_levels() -> training::LanguageLevels {
+        let mut rows = [[30; 14]; training::EQMAC_TABLE_LANGUAGES];
+        rows[0] = [1; 14];
+        rows[10] = [99; 14];
+        rows[23] = [99; 14];
+        rows[5][0] = 1;
+        training::LanguageLevels::checked(rows).unwrap()
+    }
+
+    /// The TAKP or Quarm warrior (a human) with the installed table, who
+    /// speaks languages 5 and 6 at 20 and nothing else.
+    fn mac_speaker() -> (Training, World) {
+        let (training, mut world) = mac_warrior();
+        world.language_levels = Some(made_up_levels());
+        let mut languages = vec![0; 28];
+        languages[5] = 20;
+        languages[6] = 20;
+        world.player.corrected().unwrap().languages = Some(languages);
+        (training, world)
+    }
+
+    fn practice_language(language: u8) -> TrainingRequest {
+        TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Language(language),
+        }
+    }
+
+    /// Each refusal's program line and what it names.
+    fn refusal_lines(events: &[ClientEvent]) -> Vec<(Option<u32>, Vec<String>)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::TrainingRefused {
+                    string_id,
+                    arguments,
+                    ..
+                }) => Some((*string_id, arguments.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -1933,24 +2140,179 @@ mod tests {
     }
 
     #[test]
-    fn mac_languages_are_held_until_read() {
+    fn mac_languages_stay_shut_without_the_installed_table() {
         let (mut training, mut world) = mac_warrior();
-        world.player.corrected().unwrap().level = 20;
-        mac_open(&mut training, &mut world);
-        let held = mac_handle(
-            &mut training,
-            &mut world,
-            TrainingRequest::PracticeAt {
-                trainer: 42,
-                subject: TrainingSubject::Language(5),
-            },
-        );
+        world.player.corrected().unwrap().languages = Some(vec![20; 28]);
+        let offer = mac_open(&mut training, &mut world);
+        assert_eq!(offer.language_caps, [0; training::LANGUAGES as usize]);
+        let held = mac_handle(&mut training, &mut world, practice_language(5));
         held.result.unwrap();
         assert_eq!(held.sent, []);
         assert_eq!(
             refusals(&held.events),
-            ["Language training is unavailable on this server until checked."]
+            ["Language training needs the installed program's language table."]
         );
+        assert_eq!(refusal_lines(&held.events), [(None, Vec::new())]);
+        assert!(world.take_news().is_empty());
+    }
+
+    #[test]
+    fn the_mac_window_lists_only_the_languages_the_player_speaks() {
+        let (mut training, mut world) = mac_speaker();
+        let offer = mac_open(&mut training, &mut world);
+        let listed: Vec<usize> = (0..offer.language_caps.len())
+            .filter(|language| offer.language_caps[*language] != 0)
+            .collect();
+        assert_eq!(listed, [5, 6]);
+        assert_eq!(offer.language_caps[5], 201);
+        let unspoken = mac_handle(&mut training, &mut world, practice_language(7));
+        assert_eq!(unspoken.sent, []);
+        assert_eq!(refusal_lines(&unspoken.events), [(None, Vec::new())]);
+    }
+
+    #[test]
+    fn the_mac_language_gate_refuses_in_the_programs_order() {
+        let (mut training, mut world) = mac_speaker();
+        mac_open(&mut training, &mut world);
+        training.points = Some(0);
+        let refused = |training: &mut Training, world: &mut World, language| {
+            let outcome = mac_handle(training, world, practice_language(language));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, [], "nothing is sent on a refusal");
+            assert!(world.take_news().is_empty(), "nothing is resolved");
+            refusal_lines(&outcome.events)
+        };
+        // Language 6 at level 10 against the table's 30, before the points.
+        assert_eq!(
+            refused(&mut training, &mut world, 6),
+            [(Some(EQMAC_LANGUAGE_TOO_YOUNG), Vec::new())]
+        );
+        world.player.corrected().unwrap().level = 30;
+        assert_eq!(
+            refused(&mut training, &mut world, 6),
+            [(Some(EQMAC_NO_PRACTICES), Vec::new())]
+        );
+        training.points = Some(3);
+        world
+            .player
+            .corrected()
+            .unwrap()
+            .languages
+            .as_mut()
+            .unwrap()[6] = 100;
+        assert_eq!(
+            refused(&mut training, &mut world, 6),
+            [(Some(EQMAC_LANGUAGE_MASTERED), vec!["6".to_owned()])]
+        );
+        world
+            .player
+            .corrected()
+            .unwrap()
+            .languages
+            .as_mut()
+            .unwrap()[6] = 25;
+        let offer = training.trainer.as_mut().unwrap().offer.as_mut().unwrap();
+        offer.language_caps[6] = 25;
+        assert_eq!(
+            refused(&mut training, &mut world, 6),
+            [(Some(EQMAC_TRAINER_LIMIT), Vec::new())]
+        );
+    }
+
+    #[test]
+    fn a_mac_language_practice_needs_the_programs_figure_in_coins() {
+        let (mut training, mut world) = mac_speaker();
+        mac_open(&mut training, &mut world);
+        // 50 over 10, cubed, at 1.25 and 0.01: 1,562 copper of the 1,000.
+        world
+            .player
+            .corrected()
+            .unwrap()
+            .languages
+            .as_mut()
+            .unwrap()[5] = 60;
+        let short = mac_handle(&mut training, &mut world, practice_language(5));
+        short.result.unwrap();
+        assert_eq!(short.sent, []);
+        let name = world.spawns.visible(42).unwrap().name.clone();
+        assert_eq!(
+            refusal_lines(&short.events),
+            [(Some(EQMAC_CANNOT_AFFORD), vec![name])]
+        );
+        // 40 over: 800 copper, which the purse holds.
+        world
+            .player
+            .corrected()
+            .unwrap()
+            .languages
+            .as_mut()
+            .unwrap()[5] = 50;
+        let paid = mac_handle(&mut training, &mut world, practice_language(5));
+        paid.result.unwrap();
+        assert_eq!(paid.sent.len(), 1);
+    }
+
+    #[test]
+    fn a_mac_language_practice_is_resolved_at_once_as_the_program_does() {
+        let (mut training, mut world) = mac_speaker();
+        mac_open(&mut training, &mut world);
+        let sent = mac_handle(&mut training, &mut world, practice_language(5));
+        sent.result.unwrap();
+        assert_eq!(
+            sent.sent,
+            [training::eqmac_practice(42, 7, TrainingSubject::Language(5)).unwrap()]
+        );
+        assert_eq!(refusals(&sent.events), Vec::<String>::new());
+        assert!(training.pending.is_empty(), "no answer is awaited");
+        let mut news = world.take_news();
+        assert_eq!(news.len(), 1, "{news:?}");
+        let resolve = news.remove(0);
+        let Message::Event(WorldEvent::Training(TrainingUpdate::Trained { skill, value, cost })) =
+            &resolve
+        else {
+            panic!("expected the resolve, got {resolve:?}");
+        };
+        assert_eq!(*skill, TrainingSubject::Language(5).update_id());
+        assert_eq!(*value, 21);
+        // The server's own figure, which it takes without a word: 10 over
+        // 10, cubed, at 1.25, cut.
+        assert_eq!(
+            *cost,
+            training::eqmac_practice_cost(20, training::PriceScale::new(1.25))
+        );
+        let (_, events) = hear(&mut training, &mut world, resolve);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PracticePoints(2)))));
+    }
+
+    /// The resolve is the program's prediction (G1, G5): the character
+    /// applies it, and the next profile the server sends replaces it,
+    /// raised or not, with nothing more said.
+    #[test]
+    fn the_next_profile_overwrites_a_mac_language_prediction() {
+        for kept in [21u8, 20] {
+            let (mut training, mut world) = mac_speaker();
+            mac_open(&mut training, &mut world);
+            mac_handle(&mut training, &mut world, practice_language(5))
+                .result
+                .unwrap();
+            let news = world.take_news();
+            let Message::Event(WorldEvent::Training(TrainingUpdate::Trained {
+                skill, value, ..
+            })) = &news[0]
+            else {
+                panic!("expected the resolve, got {news:?}");
+            };
+            let player = world.player.corrected().unwrap();
+            player.apply_skill(*skill, *value);
+            assert_eq!(player.languages.as_ref().unwrap()[5], 21);
+            let mut profile = player.clone();
+            profile.languages.as_mut().unwrap()[5] = kept;
+            world.player.admit(profile);
+            let player = world.player.as_ref().unwrap();
+            assert_eq!(player.languages.as_ref().unwrap()[5], kept);
+        }
     }
 
     #[test]
