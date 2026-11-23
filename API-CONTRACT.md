@@ -81,6 +81,13 @@ The Mac-era server types keep the earlier rules: the song holds what any
 cast holds, a gem click casts, and the book's answers leave the song alone.
 The Mac-era program is unread. First use on P99 is attended.
 
+`Capability::Melody` says where the server type takes a Bard's `/melody`
+(read R49-33 c): the Titanium server types, P99 (by the owner's word) and
+stock `EQEmu`. The Mac-era program is unread, so TAKP and Quarm don't. The host keeps the melody
+list and runs each step on the player's own gem refresh as `StopSong` then
+the next gem's `CastSpell`; the session adds no command for it. The stop
+ends the song, so the press that follows casts.
+
 ## Server filters
 
 `ClientConfig::server_filters` is the set a character starts with; the
@@ -123,27 +130,42 @@ servers read.
 
 `GameCommand::SendPetition { session_id, text, created }`,
 `GameCommand::ReportBug { session_id, report, created }` and
-`GameCommand::SendFeedback { session_id, text, created }` send a report to
+`GameCommand::SendFeedback { session_id, text, place, created }` send a report to
 the server's staff (`eq_network_game::reports`), under
 `Capability::Petitioning`, `Capability::ReportingBugs` and
 `Capability::SendingFeedback`. A person reads each one. A host may send one
 the player types or one from a script, since a script may do whatever the
 player can; the pace below holds either way.
 Stock `EQEmu` lists petitions and bug reports, and so do Quarm and TAKP from
-their own handlers (6.604 E6, source-derived, not yet checked live). No
-server type lists feedback, or any of the three on P99, until its own live
-check (recording checklist 6.511). On `EQMac` a petition is the text and a
+their own handlers (6.604 E6, source-derived, not yet checked live). Stock
+`EQEmu` also lists feedback: it has no handler and drops it, but Titanium's
+program sends it all the same (read R49-23). The Mac servers list no
+feedback, and P99 lists none of the three, until their own live checks
+(recording checklist 6.511). On Titanium, feedback carries the sender's
+name, the place and rounded heading the host gives, and the text, in the
+program's 1148 bytes.
+
+How Titanium's program takes `/petition` follows the world's petition-window
+byte (`WorldRules::petition_window`): with the window on it shows the window
+and ignores the words, and otherwise it sends them.
+`reports::petition_form(dialect, rules)` says which, per generation; `EQMac`
+and RoF2 take the text form until their programs are read.
+
+On `EQMac` a petition is the text and a
 NUL; a bug report is the servers' 1131-byte short record, carrying only the
 reporter's name and the player's text, and the servers fill in the place and
 target themselves. Quarm runs with petitions off, and answers with a line.
 
 A `BugReport` carries its category (the servers' names), the player's text,
 and, when the host knows them, the player's place and heading and the
-target's spawn and name. The session names the reporter. The interface path,
-time played and system information go empty or zero; the report's other
-flags are not set until the official client's are read. Text is trimmed,
-must not be empty or hold a NUL, and must fit its field (a petition 1023
-bytes, a bug report 2049 on Titanium and 1023 on `EQMac`, feedback 1023);
+target's spawn and name. The session names the reporter. The fields the
+program fills from what this library lacks (the 128 bytes at 160, time
+played, the word at 464, and three of the window's four check boxes) go
+zero. The system information, where the program names the machine's
+processor, video card and driver, always stays empty. Text is trimmed,
+must not be empty or hold a NUL, and must fit what the program sends (a
+petition 1023 bytes, a bug report 1024 on Titanium and 1023 on `EQMac`,
+feedback 1023);
 longer text is refused, never cut. RoF2 refuses every report.
 
 The session sends one report of a kind and refuses another of that kind for

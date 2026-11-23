@@ -5,11 +5,73 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reports to the staff, as read R49-23 reads the Titanium program (6.511).
+  - **Titanium feedback is sent** (`OP_Feedback` 0x5306, 1148 bytes): the
+    name, an empty field, the place and rounded heading, and the text at
+    120. Stock `EQEmu` now lists `Capability::SendingFeedback`; it has no
+    handler and drops the packet, as it drops the program's own. Breaking:
+    `GameCommand::SendFeedback` has a new `place` field, and
+    `reports::feedback` takes it.
+  - **New `reports::petition_form`**: whether the generation's program takes
+    `/petition` as a window or as text, from the world's petition-window
+    byte on Titanium.
+  - **A Titanium bug report's text holds at most 1024 bytes**, as the
+    program sends (was 2049, the field's size).
+  - The fields the program fills from what this library lacks are named and
+    stay zero; the system information always stays empty.
+- Every Titanium save on zoning (`OP_SaveOnZoneReq` 0x1540) carries a place,
+  a heading and its checksum, as read R49-36b shows the program fills every
+  one, not only a boat transfer's (row 6.145). Off a boat the place is where
+  the accepted zone request goes, with the request's heading, as 11 recorded
+  official saves hold it; the heading at +0x11 is cut toward zero to a 32-bit
+  integer, and a reason 6 transfer's saves 0xffffffff (all three
+  capture-derived). The unidentified fields stay zero, and EQMac's save is unchanged.
+  See docs/boat-riding.md, "The save before leaving".
+- The Titanium buff slot finder's steps 4 and 6 and the effect-327 top, as
+  read R49-22e reads 0x414071 (checklist 6.612).
+  - **Breaking:** `buffs::placement::Finder` is now
+    `fn(&Landing) -> Result<Placed, Unplaced>`. `Landing` holds the slots
+    held, each as a `Spell` (id, band, Bard level, the twelve `Effect`s),
+    the landing `Spell`, the step-2 blocker and `others_add_no_slots`
+    (false until the worn items' and abilities' effect 327 are known).
+    `Placed` gives the slot, the slot whose buff the program removes
+    first, and the `Rule` that chose it. `Unplaced` gains `ValueUnknown`
+    and `Refused(Rule)`.
+  - Step 4 compares the landing with every held buff, effect by effect, in
+    the read's order, and replaces a weaker conflict in place, nominates a
+    slot where either side has +0x17d, or refuses. Values are 0x40f339's,
+    as its read gives them: the formula table, the slow rule, the cap at
+    |max| and the base's sign, at the held entry's stored level and the
+    caster's (`Spell::level`, `Effect::max`). An unknown level a formula
+    needs, the random formula 123, and 137 and 138 (the owner's hit
+    points) leave the landing unslotted (`ValueUnknown`).
+  - Step 6: a landing without +0x17d and no room evicts the first held
+    spell with it, from slot 0; the player's +0x256 is taken as 0 [I].
+  - The normal band names slots below 15 plus what the held buffs' effect
+    327 adds (at most 10). Past that the top is unknown unless every slot
+    to 25 is full.
+  - A replace or an eviction is a prediction: the server's next buff state
+    stays the authority. Any missing fact leaves the landing unslotted.
+- `Capability::Melody`: where the server type takes a Bard's `/melody`
+  (read R49-33 c): P99 and stock Titanium `EQEmu`; not the Mac-era server
+  types, whose program is unread. The host runs the melody with `StopSong` and gem casts, and a
+  test shows the stop followed at once by a gem press casts. **Breaking:** a
+  new `Capability` variant.
+- Say why a zone sent no inventory at admission (gap 3.11, checklist 6.437):
+  stock `EQEmu` sends a Titanium client no `OP_CharInventory` exactly when
+  the character holds nothing (its Titanium encoder drops an empty one), or
+  when the character's inventory fails to load. The session's handling is
+  unchanged (the player holds nothing), and so is its diagnostic; the docs
+  now name the source. The Titanium program doesn't wait for the message
+  either: it enters the zone once the zone server is connected, and takes
+  the inventory whenever it arrives (read R49-36 a). Whether it clears the
+  last zone's items at zone-in is still unread, so that the original client
+  then holds nothing stays inferred.
 - Velious water's cold as the Titanium program reports it (reads R49-3 b and
   R49-26; checklist 6.491d). New `LiquidHazard::Cold`, sent as type 246
   (`Hazard::Freezing`) with its damage record, on the lava's feet tick, and
   `Capability::ColdWater`, offered on every Titanium session. **Breaking:**
-  both enums are exhaustive, and `Capability::ALL` grows to 91.
+  both enums are exhaustive, and `Capability::ALL` grows to 92.
   - `ItemBonuses::cold_resistance`, from field 16 of the Titanium item
     record (`None` on `EQMac`), and
     `TitaniumEnvironment::base_cold_resistance`, `None` until read R49-3c

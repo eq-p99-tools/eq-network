@@ -694,6 +694,8 @@ fn a_later_profile_cannot_restore_a_superseded_recording_heartbeat() {
 
 /// A Titanium zone that sends no inventory message, as after a death that
 /// left everything on the corpse: the admitted player holds nothing, and the host is asked for speed inputs it can supply.
+/// Stock `EQEmu` sends none exactly then: its Titanium encoder drops an
+/// `OP_CharInventory` with no entries. The diagnostic says so on every server.
 #[test]
 fn a_titanium_admission_without_an_inventory_admits_an_empty_one() {
     let config = config();
@@ -705,8 +707,12 @@ fn a_titanium_admission_without_an_inventory_admits_an_empty_one() {
     script.stop_when_drained = Some(stop.clone());
     let mut inventory = Vec::new();
     let mut entered = false;
+    let mut said = Vec::new();
     let mut handler = |event| {
         match event {
+            ClientEvent::Diagnostic(line) if line.starts_with("Zone sent no inventory") => {
+                said.push(line);
+            }
             ClientEvent::World(WorldEvent::Entered { .. }) => entered = true,
             ClientEvent::World(WorldEvent::Inventory(update)) => {
                 assert!(entered, "inventory reported before admission");
@@ -729,6 +735,10 @@ fn a_titanium_admission_without_an_inventory_admits_an_empty_one() {
         &inventory[..],
         [eq_network_game::inventory::InventoryUpdate::Snapshot(items)] if items.is_empty()
     ));
+    assert_eq!(
+        said,
+        ["Zone sent no inventory message before admission; the player holds nothing"]
+    );
 }
 
 #[test]

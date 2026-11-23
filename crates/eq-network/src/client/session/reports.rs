@@ -3,8 +3,11 @@
 //!
 //! A person reads each of these, so a server type lists a report only after
 //! its own live check (recording checklist 6.511e and f). Today that is
-//! stock `EQEmu`'s petition and bug report. The `EQMac` encoders and feedback
-//! are built and tested, and no server type lists them yet.
+//! stock `EQEmu`'s petition, bug report and feedback, and TAKP's and
+//! Quarm's petition and bug report. Stock `EQEmu` reads no feedback and
+//! drops it; it is listed there because Titanium's program sends it all
+//! the same (read R49-23), so the player's window does what the original's
+//! does. `EQMac` feedback is built and tested, and listed nowhere yet.
 //!
 //! The session paces each kind on its own: a second report of a kind waits
 //! [`BETWEEN`] after the first. This bound is this library's own (inferred,
@@ -52,11 +55,12 @@ pub(super) struct Listed {
 }
 
 impl Listed {
-    /// Stock `EQEmu`'s: petitions and bug reports, as its handlers read them.
+    /// Stock `EQEmu`'s: petitions and bug reports, as its handlers read them,
+    /// and feedback, which it drops as it drops the official program's.
     pub(super) const EQEMU: Self = Self {
         petitions: true,
         bugs: true,
-        feedback: false,
+        feedback: true,
     };
 
     /// TAKP's and Quarm's: petitions and bug reports, as their own
@@ -162,8 +166,8 @@ impl Feature for Reports {
             ClientCommand::ReportBug { report, .. } => {
                 reports::bug(dialect, out.sender.name, report)
             }
-            ClientCommand::SendFeedback { text, .. } => {
-                reports::feedback(dialect, out.sender.name, text)
+            ClientCommand::SendFeedback { text, place, .. } => {
+                reports::feedback(dialect, out.sender.name, text, *place)
             }
             _ => return Ok(()),
         };
@@ -233,6 +237,7 @@ mod tests {
         ClientCommand::SendFeedback {
             session_id: 5,
             text: text.into(),
+            place: None,
             created: Instant::now(),
         }
     }
@@ -260,15 +265,20 @@ mod tests {
     }
 
     #[test]
-    fn eqemu_lists_petitions_and_bug_reports_only() {
+    fn eqemu_lists_every_report_and_the_mac_servers_no_feedback() {
         let feature = Reports::new(Listed::EQEMU);
         assert_eq!(
             feature.capabilities(),
-            [Capability::Petitioning, Capability::ReportingBugs]
+            [
+                Capability::Petitioning,
+                Capability::ReportingBugs,
+                Capability::SendingFeedback
+            ]
         );
         assert!(feature.owns(&petition("Help")));
         assert!(feature.owns(&bug("Stuck")));
-        assert!(!feature.owns(&feedback("Thanks")));
+        assert!(feature.owns(&feedback("Thanks")));
+        assert!(!Reports::new(Listed::EQMAC).owns(&feedback("Thanks")));
     }
 
     #[test]

@@ -1189,6 +1189,7 @@ mod tests {
             ClientCommand::SendFeedback {
                 session_id,
                 text: "Synthetic feedback.".into(),
+                place: None,
                 created,
             },
             ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
@@ -2210,14 +2211,13 @@ mod tests {
                 continue;
             }
             // Built and tested, and listed by no server type until each
-            // one's own live check: feedback (6.511f), browsing a trader
+            // one's own live check: browsing a trader
             // (6.558a), and the bandolier's sets and belt (6.564), its swap
             // (6.566) and belt use (6.568). AAs are listed on local EQEmu
             // (6.581), so they take the owner check below, as does the
             // Mac-era Bazaar search, offered on TAKP and Quarm (6.580).
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
-                    crate::world::Capability::SendingFeedback,
                     crate::world::Capability::BazaarBrowsing,
                     crate::world::Capability::Bandoliers,
                     crate::world::Capability::PotionBelt,
