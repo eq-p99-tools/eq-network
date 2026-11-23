@@ -781,3 +781,66 @@ fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
         .iter()
         .all(|capability| Capability::ALL.contains(capability)));
 }
+
+#[test]
+fn a_command_sent_during_the_reconnect_wait_is_dropped_and_told_once() {
+    let socket = peer();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(13)))
+        .unwrap();
+    let mut settings = config(socket.local_addr().unwrap().port());
+    settings.local_only = true;
+    settings.reconnect_delay = Duration::from_secs(10);
+    let engine = client(settings);
+    let cancel = CancellationToken::default();
+    let _stop = CancelOnDrop(cancel.clone());
+    let worker_cancel = cancel.clone();
+    let (queue, commands) = mpsc::sync_channel(4);
+    let (done, result) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let mut told = Vec::new();
+        let mut connecting_after_drop = false;
+        let outcome =
+            engine.run_with_commands(&worker_cancel, RunOptions::default(), &commands, |event| {
+                match event {
+                    ClientEvent::Reconnecting {
+                        attempt, attempts, ..
+                    } => {
+                        assert_eq!((attempt, attempts), (1, 5));
+                        // Typed while the client waits to log in again.
+                        queue
+                            .send(ClientCommand::SendChat(OutboundChat::Say("late".into())))
+                            .unwrap();
+                    }
+                    ClientEvent::CommandDropped { command, reason } => {
+                        assert!(!reason.contains("late"));
+                        told.push(command);
+                    }
+                    // The fresh login says Connecting after the drain.
+                    ClientEvent::Status(status)
+                        if status.state == ConnectionState::Connecting && !told.is_empty() =>
+                    {
+                        connecting_after_drop = true;
+                    }
+                    _ => (),
+                }
+                Ok(())
+            });
+        done.send((outcome, told, connecting_after_drop)).unwrap();
+    });
+    let (address, _id) = negotiate(&socket);
+    // A malformed application reply is a retryable protocol error.
+    socket
+        .send_to(&application_packet(0, 0x17, &[]), address)
+        .unwrap();
+    // The failed session closes before the wait.
+    let (_closed, _) = receive(&socket);
+    let (_fresh_address, _fresh_id) = negotiate(&socket);
+    cancel.cancel();
+    let completed = result.recv_timeout(Duration::from_secs(3));
+    worker.join().unwrap();
+    let (outcome, told, connecting_after_drop) = completed.unwrap();
+    outcome.unwrap();
+    assert_eq!(told, ["SendChat"]);
+    assert!(connecting_after_drop);
+}

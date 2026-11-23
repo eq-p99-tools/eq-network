@@ -446,6 +446,12 @@ pub struct RunOptions {
     /// Reconnect after transient session failures, including modern peer
     /// termination. Each retry is a fresh login after the configured delay.
     pub reconnect: bool,
+    /// How many fresh logins in a row may follow transient failures before
+    /// the last failure is returned: 5 by default (our bound, 6.534; no read
+    /// or server source gives one). The count starts again once a run has
+    /// stayed in its zone for at least the reconnect delay. 0 reconnects
+    /// never, as `reconnect: false` does.
+    pub reconnect_attempts: u32,
     /// Stop after character selection without opening the zone connection.
     pub world_only: bool,
     /// Optional maximum time in the zone, including zone admission.
@@ -456,6 +462,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             reconnect: true,
+            reconnect_attempts: 5,
             world_only: false,
             zone_duration: None,
         }
@@ -706,6 +713,19 @@ pub enum ClientEvent {
         error: String,
         /// Delay before the next attempt.
         delay_seconds: u64,
+        /// Which fresh login in a row this will be, from 1.
+        attempt: u32,
+        /// How many in a row may follow ([`RunOptions::reconnect_attempts`]).
+        attempts: u32,
+    },
+    /// A command the host queued before a fresh login, dropped unread so
+    /// that nothing asked for in the ended session acts in the next one.
+    /// It names the command's kind and why, never its contents.
+    CommandDropped {
+        /// The command's kind ([`ClientCommand::name`]).
+        command: &'static str,
+        /// Why it was dropped, in our words.
+        reason: String,
     },
 }
 
@@ -817,11 +837,14 @@ impl Client {
     /// Before the zone admits the player, the queue answers the lists the
     /// session sends: the login server's worlds, when no world is
     /// configured, and the world's characters, when no character is. Other
-    /// commands are consumed only after zone admission and may remain queued
-    /// while a reconnect is in progress. A failed player admission leaves
-    /// pending commands in this host-owned receiver. Start a fresh queue for
-    /// a separate run so unscoped commands such as `SendChat` cannot carry
-    /// over. Dropping every sender disables input.
+    /// commands are consumed only after zone admission. Before each fresh
+    /// login of a reconnect, every command still queued is dropped unread
+    /// and told as [`ClientEvent::CommandDropped`]; a command sent once that
+    /// login says `ConnectionState::Connecting` is read by it. A failed
+    /// player admission, a confirmed login rejection and the end of the
+    /// reconnect count leave pending commands in this host-owned receiver.
+    /// Start a fresh queue for a separate run so unscoped commands such as
+    /// `SendChat` cannot carry over. Dropping every sender disables input.
     ///
     /// # Errors
     ///
@@ -855,9 +878,13 @@ impl Client {
             !self.config.character.is_empty() || commands.is_some() || options.world_only,
             "interactive character selection requires a command receiver"
         );
+        let mut attempt = 0;
         loop {
             if cancel.is_cancelled() {
                 return events.status(ConnectionState::Stopped, 0, None);
+            }
+            if attempt > 0 {
+                drop_queued(commands, &mut events)?;
             }
             events.reset();
             events.status(ConnectionState::Connecting, 0, None)?;
@@ -881,16 +908,25 @@ impl Client {
                 return events.status(ConnectionState::Stopped, 0, None);
             }
             events.status(ConnectionState::Disconnected, 0, None)?;
-            if !options.reconnect
-                || result.as_ref().is_err_and(|error| {
-                    error.is::<LoginError>() || error.is::<PlayerAdmissionError>()
-                })
-            {
+            let fatal = result
+                .as_ref()
+                .is_err_and(|error| error.is::<LoginError>() || error.is::<PlayerAdmissionError>());
+            let Some(next) = next_attempt(
+                attempt,
+                &options,
+                events.ready.map(|ready| ready.elapsed()),
+                self.config.reconnect_delay,
+                fatal,
+            ) else {
+                // The queue stays the host's, as with reconnect off.
                 return result;
-            }
+            };
+            attempt = next;
             events.send(ClientEvent::Reconnecting {
                 error: format!("{:#}", result.unwrap_err()),
                 delay_seconds: self.config.reconnect_delay.as_secs(),
+                attempt,
+                attempts: options.reconnect_attempts,
             })?;
             let retry = Instant::now()
                 .checked_add(self.config.reconnect_delay)
@@ -904,6 +940,47 @@ impl Client {
             }
         }
     }
+}
+
+/// Which fresh login in a row comes next after a failed run, or none: the
+/// run ends with reconnect off, after a confirmed rejection, or once
+/// `reconnect_attempts` have followed in a row (6.534). A run that stayed in
+/// its zone for at least the reconnect delay starts the count again; one
+/// admitted and dropped at once does not, so the cap still bounds it.
+fn next_attempt(
+    attempt: u32,
+    options: &RunOptions,
+    in_zone: Option<Duration>,
+    delay: Duration,
+    fatal: bool,
+) -> Option<u32> {
+    let attempt = if in_zone.is_some_and(|stayed| stayed >= delay) {
+        0
+    } else {
+        attempt
+    };
+    (options.reconnect && !fatal && attempt < options.reconnect_attempts).then_some(attempt + 1)
+}
+
+/// Drops, unread, every command the host queued before a fresh login,
+/// telling each one's kind: none was made for the next login's screens or
+/// admission (6.534). This is the one point where the queue is drained,
+/// just before the fresh login says `ConnectionState::Connecting`; a
+/// command sent after that is read by the new login, even one composed
+/// before the host saw `Reconnecting`, so hosts should prefer the
+/// admission-scoped forms such as `SendChatInAdmission`.
+fn drop_queued(commands: Option<&Receiver<ClientCommand>>, events: &mut Events<'_>) -> Result<()> {
+    let Some(commands) = commands else {
+        return Ok(());
+    };
+    while let Ok(command) = commands.try_recv() {
+        events.send(ClientEvent::CommandDropped {
+            command: command.name(),
+            reason: "The connection was lost before it was sent; ask again once back in."
+                .to_owned(),
+        })?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -936,6 +1013,8 @@ struct Events<'a> {
     liquid_inputs: session::hazards::Observations,
     /// The stage under way, and what it has left unread.
     gaps: gaps::Tally,
+    /// When this run's zone admitted the player, if it did.
+    ready: Option<Instant>,
 }
 
 impl<'a> Events<'a> {
@@ -954,6 +1033,7 @@ impl<'a> Events<'a> {
             spell_tables: session::spell_tables::Sequence::new(rand::random()),
             liquid_inputs: session::hazards::Observations::default(),
             gaps: gaps::Tally::default(),
+            ready: None,
         }
     }
 
@@ -963,6 +1043,7 @@ impl<'a> Events<'a> {
         self.spell_tables = session::spell_tables::Sequence::new(run_id);
         self.liquid_inputs = session::hazards::Observations::default();
         self.gaps = gaps::Tally::default();
+        self.ready = None;
         self.zone.clear();
         self.messages = 0;
         self.server.clone_from(&self.config.server);
@@ -970,6 +1051,9 @@ impl<'a> Events<'a> {
     }
 
     fn send(&mut self, event: ClientEvent) -> Result<()> {
+        if matches!(event, ClientEvent::Progress(ConnectionStage::Ready)) {
+            self.ready.get_or_insert_with(Instant::now);
+        }
         let revision = self.liquid_inputs.observe(&event);
         (self.handler)(event).map_err(EventDeliveryError)?;
         if let Some(revision) = revision {
@@ -1339,6 +1423,93 @@ mod tests {
         packet[132..136].copy_from_slice(&channel.to_le_bytes());
         packet.extend(b"Example message\0");
         chat::parse(0x1004, &packet, false).unwrap().unwrap()
+    }
+
+    #[test]
+    fn reconnects_stop_at_the_cap_and_count_again_only_after_a_settled_stay() {
+        let delay = Duration::from_secs(30);
+        let options = RunOptions::default();
+        assert_eq!(options.reconnect_attempts, 5);
+        // Five in a row, numbered from 1, then the run ends.
+        let mut attempt = 0;
+        let mut told = Vec::new();
+        while let Some(next) = next_attempt(attempt, &options, None, delay, false) {
+            told.push(next);
+            attempt = next;
+        }
+        assert_eq!(told, [1, 2, 3, 4, 5]);
+        // A zone that admitted and dropped before the delay does not reset.
+        assert_eq!(
+            next_attempt(5, &options, Some(Duration::from_secs(29)), delay, false),
+            None
+        );
+        // One that stayed for the delay starts the count again.
+        assert_eq!(
+            next_attempt(5, &options, Some(delay), delay, false),
+            Some(1)
+        );
+        // A confirmed rejection, reconnect off, or no attempts: none.
+        assert_eq!(next_attempt(0, &options, None, delay, true), None);
+        let off = RunOptions {
+            reconnect: false,
+            ..RunOptions::default()
+        };
+        assert_eq!(next_attempt(0, &off, None, delay, false), None);
+        let none = RunOptions {
+            reconnect_attempts: 0,
+            ..RunOptions::default()
+        };
+        assert_eq!(next_attempt(0, &none, Some(delay), delay, false), None);
+    }
+
+    #[test]
+    fn commands_queued_before_a_fresh_login_are_dropped_and_told_by_kind_only() {
+        use crate::chat::OutboundChat;
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let (queue, commands) = std::sync::mpsc::sync_channel(8);
+        for command in [
+            ClientCommand::SendChat(OutboundChat::Tell {
+                recipient: "Someone".into(),
+                message: "a secret".into(),
+            }),
+            ClientCommand::SelectCharacter {
+                selection_id: 1,
+                slot: 0,
+            },
+            ClientCommand::Camp {
+                session_id: 3,
+                created: Instant::now(),
+            },
+        ] {
+            queue.send(command).unwrap();
+        }
+        let mut dropped = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::CommandDropped { command, reason } = event {
+                dropped.push((command, reason));
+            }
+            Ok(())
+        };
+        let mut events = Events::new(&config, &mut handler);
+        drop_queued(Some(&commands), &mut events).unwrap();
+        // Each once, by kind, and nothing of what it said or to whom.
+        assert_eq!(
+            dropped
+                .iter()
+                .map(|(command, _)| *command)
+                .collect::<Vec<_>>(),
+            ["SendChat", "SelectCharacter", "Camp"]
+        );
+        for (_, reason) in &dropped {
+            assert!(!reason.contains("secret") && !reason.contains("Someone"));
+            assert!(!reason.contains("Tester"));
+        }
+        assert!(commands.try_recv().is_err());
+        // A command sent after the drain is the next login's to read.
+        queue
+            .send(ClientCommand::SendChat(OutboundChat::Say("ok".into())))
+            .unwrap();
+        assert!(commands.try_recv().is_ok());
     }
 
     #[test]
