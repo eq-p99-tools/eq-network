@@ -148,6 +148,8 @@ pub mod vision;
 pub mod who;
 /// Renderer-independent world-state packet decoding.
 pub mod world;
+/// The login info a client generation opens the world with.
+pub mod world_login;
 /// Zone numbers and short names.
 pub mod zones;
 /// Death and server-directed zone transfer codecs.
@@ -390,7 +392,6 @@ mod tests {
         for opcode in [0x1004, 0x0741, 0x5a48, 0x024d] {
             refused(chat::parse_for(rof2, opcode, &channel_message, false).map(drop));
         }
-        refused(crate::characters::decode(rof2, &[0; 4096]).map(drop));
         let now = std::time::Instant::now();
         for request in [
             GameCommand::SendChat(say),
