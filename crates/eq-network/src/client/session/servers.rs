@@ -3206,6 +3206,7 @@ mod tests {
             Capability::BoatControl,
             Capability::Petitioning,
             Capability::ReportingBugs,
+            Capability::SendingFeedback,
             Capability::LookingForGroup,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
