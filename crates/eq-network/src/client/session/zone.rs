@@ -3765,3 +3765,5 @@ mod discipline_tests;
 
 #[cfg(test)]
 mod local_damage_tests;
+#[cfg(test)]
+mod tracking_zone_tests;
