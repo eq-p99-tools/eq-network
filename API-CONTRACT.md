@@ -539,10 +539,14 @@ Quarm shares the decoding, assumed as TAKP, but isn't offered it until its
 own attended row; remote TAKP waits for the local row. An unreadable Mac
 packet withdraws as its Titanium kind does, and a timer withdraws nothing.
 
-Since checklist 6.556 the session can send Titanium's AA requests, though
-no server type lists them yet: `Capability::AlternateAdvancement` waits for
-its local EQEmu live row, and until then the three commands are refused as
-not offered. `ClientCommand::TrainAlternateAdvancement { rank_id }` buys a
+Since checklist 6.556 the session can send Titanium's AA requests. Since
+6.581 `Capability::AlternateAdvancement` is listed under the same gate as
+the facts: only on a local stock `EQEmu` or local TAKP session, until their
+live rows (6.556, 6.562) pass. Public `EQEmu`, P99, Quarm and RoF2 never
+list it, local or not, and there the three commands are refused as not
+offered. On a local TAKP session only the split goes (below): Train and
+Activate stay refused until the client's AA data is read (R49-41b).
+`ClientCommand::TrainAlternateAdvancement { rank_id }` buys a
 rank, `ActivateAlternateAdvancement { rank_id, target }` uses an owned
 rank's ability, and `SetAlternateAdvancementSplit { percentage }` sets the
 share of experience that goes to AAs, each as one 16-byte `OP_AAAction`
