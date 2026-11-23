@@ -5,6 +5,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Tell the player's bind zone (checklist 6.524). `world::titanium_bind_zone`
+  reads the primary bind's zone from Titanium's profile (`binds[5]` at byte
+  24, 20-byte records, as `EQEmu`'s `titanium_structs.h` lays them out), and
+  the `EQMac` profile's first bind, already read for the move home after
+  death, gives the same. Each says it as the new
+  `WorldEvent::BoundIn { zone_id }`, told once after the admission, after
+  the buffs and experience. A zone past 16 bits is unreadable and gives
+  none; the zone-in goes on. It needs no capability and sends nothing.
+  Stock `EQEmu` sends a Titanium client nothing when a bind lands
+  mid-session, so the zone is believed current only until the next zone-in
+  (inferred, pending R49-6m). `EQMac`'s move home is unchanged.
+  **Breaking:** a new variant on the exhaustive `WorldEvent`.
+
 - Read RoF2's own-player news and combat records as stock `EQEmu` sends
   them, labelled inferred for RoF2 (6.519). The new `rof2_news` module reads
   `OP_Death` (0x6517), `OP_LevelUpdate` (0x1eec), `OP_ExpUpdate` (0x20ed),

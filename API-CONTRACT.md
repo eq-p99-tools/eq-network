@@ -222,6 +222,13 @@ Titanium program sends, and the server decides what it allows.
   `WorldEvent::AutoSplitSet`, as the server answers nothing. The Titanium
   profile's setting arrives at admission as `WorldEvent::AutoSplit`, so a
   host can toggle it as the official client does.
+- `WorldEvent::BoundIn { zone_id }` tells the zone of the player's primary
+  bind point, once after each admission, from that zone-in's profile, on
+  both generations (Titanium's `binds[0]` at byte 24, `EQMac`'s first bind).
+  It needs no capability and sends nothing. A zone the reader can't take
+  gives none, and the zone-in goes on. The server sends no change when a
+  bind lands mid-session, so a host should take it as current only until
+  the next zone-in (inferred, pending R49-6m).
 - `GameCommand::ChangeCoins` needs a banker within the bank reach. It holds
   coin moves until `WorldEvent::CoinsChanged` arrives, which the worker
   follows with `Coins` and `CoinsElsewhere`. If no answer arrives within the
