@@ -15,6 +15,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `SwimCalibration::set_for`. The session bound takes the larger of the
     two sets' caps on each axis (`WetCaps::covering`), which widens it only
     in poearthb. Breaking: a new required field.
+- A Bard's song under the Titanium program's rules (read R49-21; gap 3.5,
+  checklist 6.442, 6.542), on P99 and Titanium EQEmu only. See
+  API-CONTRACT.md, "A Bard's song under the Titanium program's rules".
+  - **Nothing is held because of a song.** While a Bard sings, a strike, an
+    item use, a belt use, an item move, a ranged attack, a memorize and a
+    forget go at once. The ranged attack, memorize and forget are inferred
+    (read R49-48 a). Every other cast holds as before, including an item
+    cast started alongside the song.
+  - **A gem cast while singing stops the song and casts nothing**, as the
+    program's gem click does. The host is told the cast was refused, with
+    the reason "The song stopped; the gem did not cast".
+  - **A forget's answer stops the song**, with the stop sent. A memorize's
+    answer leaves it.
+  - **An item cast goes alongside the song.** When the server ends an item
+    cast of over 100 ms, the song ends here too, with nothing sent; an
+    instant item's end leaves it (read R49-21e).
+  - A gem's song is now always taken as the class's, so `StopSong` sends
+    the stop for it even after its gem was forgotten or changed (read
+    R49-21b: the song test reads the spell, not the gems).
+  - The Mac-era server types keep the earlier holds: their program is
+    unread.
+  - **Labelled:** the 100 ms test at the player's own cast start compares
+    the base time, which is what the server sends: for a Bard's song every
+    adjustment is 0 (read R49-21a).
 
 - Keep the Titanium server filters as the program keeps them (read R49-2,
   checklist 6.494b and c). The client's 28 filters (eqgame.exe table
