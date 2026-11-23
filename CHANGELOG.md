@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Quarm and TAKP offer the Tracking ability (checklist 6.619; TAKP program
+  read row 10d; source-derived from `Client::Handle_OP_Track` at TAKP 44afcbf
+  and Quarm fc75fcf, not live): each press sends an empty `OP_Track`
+  (0x8441), as the program does, with no send per skill roll. Only a
+  Ranger, Druid or Bard with the skill at any rank may press it, since both
+  servers kick any other class; a press while a trade is open is refused
+  (the program ignores it; which window its flag is, is inferred). The list
+  is the host's to build (row 10c). `abilities::eqmac::SUPPORTED` grows to
+  16; not breaking beyond that constant's length.
+
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
   192-byte body with the event's reason at +4, carrying where the player

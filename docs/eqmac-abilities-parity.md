@@ -60,10 +60,11 @@ source-compatible requests, not newly captured official-client packets.
 | Mend (32) | `14ef`, empty | `9d41`, empty | Monk, qualified skill (zero permitted); HP is never predicted | 360 |
 | Feign Death (25) | `7489`, empty | `ac40`, 6 bytes: own spawn id, zero word, two zero bytes (program 0x4bdf2f) | Monk, qualified skill; intentional lying posture before attempt, no success assertion | 10 |
 | Sense Heading (40) | `05ac`, empty | `8741`, empty | Qualified skill, including zero; existing consumer displays heading locally | 2 |
+| Tracking (53) | `5d11` list, then `6177` | `8441`, empty, once per press (program 0x4bdf2f, row 10d) | Ranger, Druid or Bard (both servers kick any other class), qualified skill including zero; refused while a trade is open (the program's byte [0x8092d8], inferred); the list is the host's (row 10c). 6.619, source-derived (TAKP 44afcbf, Quarm fc75fcf `Handle_OP_Track`), not live | 10 (Titanium's; the Mac program's is unread) |
 
 The new `abilities::eqmac` module owns packet layouts, eligibility, reset
 records and range policy. `Request::Ability` dispatches there only on EQMac.
-Both policies offer its explicit 15-element list, never `Ability::ALL`.
+Both policies offer its explicit 16-element list, never `Ability::ALL`.
 
 Quarm's profile builder at `client_packet.cpp:1908` distinguishes 254
 (untrained or not yet eligible), 255 (unavailable), and 0 (eligible without
