@@ -533,6 +533,18 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Send a command to the chat server's channels, as text it takes
+    /// ([`crate::chat_server::command`]): `join a, b`, `leave a`, `list`,
+    /// `2 hello` and the rest. Only while the link is up
+    /// ([`crate::chat_server::ChannelLink`]); recording checklist 6.509.
+    ChatChannel {
+        /// Current zone admission.
+        session_id: u64,
+        /// The command, as the chat server takes it.
+        text: String,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Put the poison in a slot on the weapon, as a right-click on it does
     /// ([`crate::poisons`]; what starts it in the program is pending read
     /// R49-1, recording checklist 6.493).
@@ -1202,6 +1214,7 @@ impl GameCommand {
             Self::LiquidDamage { .. } => "LiquidDamage",
             Self::Consume { .. } => "Consume",
             Self::ApplyPoison { .. } => "ApplyPoison",
+            Self::ChatChannel { .. } => "ChatChannel",
             Self::AutoEat { .. } => "AutoEat",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
             Self::SetMovementOptions { .. } => "SetMovementOptions",
@@ -1328,6 +1341,7 @@ impl GameCommand {
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
             | Self::ApplyPoison { session_id, .. }
+            | Self::ChatChannel { session_id, .. }
             | Self::AutoEat { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
             | Self::SetServerFilters { session_id, .. }
@@ -1463,6 +1477,7 @@ impl GameCommand {
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::ApplyPoison { .. } => Capability::ApplyingPoison,
+            Self::ChatChannel { .. } => Capability::ChatChannels,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SetServerFilters { .. } => Capability::ServerFilters,
             Self::SendChat(_)
@@ -1669,6 +1684,7 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::ApplyPoison { created, .. }
+            | Self::ChatChannel { created, .. }
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
             | Self::UseDiscipline { created, .. }
@@ -1869,6 +1885,7 @@ pub fn encode(
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::ApplyPoison { .. }
+        | GameCommand::ChatChannel { .. }
         | GameCommand::AutoEat { .. }
         | GameCommand::AnswerListPolls { .. }
         | GameCommand::SetServerFilters { .. }

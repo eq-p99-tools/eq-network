@@ -148,6 +148,7 @@ fn context<'a>(
         answer_list_polls: Cell::new(false),
         server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
+        chat: std::sync::Arc::default(),
     }
 }
 

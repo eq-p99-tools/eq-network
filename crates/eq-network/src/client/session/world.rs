@@ -692,6 +692,14 @@ fn titanium_owned(
                 }));
             }
             _ => {
+                if packet.opcode == channels::TITANIUM_CHANNELS_OPCODE {
+                    super::chat_link::offered(
+                        server,
+                        &context.chat,
+                        &packet.body,
+                        context.config.local_only,
+                    );
+                }
                 if !news(packet.opcode, &packet.body, log)? && !chatted {
                     unheard(server.wire(), packet.opcode, &packet.body, log)?;
                 }
@@ -856,6 +864,7 @@ pub(super) mod tests {
             answer_list_polls: std::cell::Cell::new(false),
             server_filters: std::cell::RefCell::default(),
             riding: std::sync::Arc::default(),
+            chat: std::sync::Arc::default(),
         };
         let mut received = Vec::new();
         let mut handler = |event| {

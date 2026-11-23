@@ -335,6 +335,9 @@ fn run_connected(
     let mut list_replies = super::list_poll::Replies::default();
     let mut setup = servers::Setup::new(&config.character, config.auto_eat);
     setup.local_only = world.local_eqemu();
+    // Channels are offered only where the world offered a chat server and
+    // a link was opened from it (the server's own signal).
+    setup.chat = Some(std::sync::Arc::clone(&context.chat)).filter(|link| link.opened());
     world.riding = std::sync::Arc::clone(&context.riding);
     let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();
@@ -940,7 +943,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 121;
+    const KINDS: usize = 122;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -977,6 +980,7 @@ mod tests {
             ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::SocialEmote { .. } => 111,
             ClientCommand::ApplyPoison { .. } => 112,
+            ClientCommand::ChatChannel { .. } => 121,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1437,6 +1441,11 @@ mod tests {
             ClientCommand::ApplyPoison {
                 session_id,
                 slot: InventorySlot(23),
+                created,
+            },
+            ClientCommand::ChatChannel {
+                session_id,
+                text: "list".into(),
                 created,
             },
             ClientCommand::AnswerListPolls {
@@ -1985,7 +1994,8 @@ mod tests {
     #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
         // Every server type, so that each command has an owner somewhere:
-        // EQEmu has every feature but the bleed-out report, which TAKP has.
+        // EQEmu has every feature but the bleed-out report, which TAKP has,
+        // and chat channels, which it has while the world opened a link.
         let servers: Vec<_> = [
             crate::client::ServerProtocol::EqEmu,
             crate::client::ServerProtocol::Project1999,
@@ -1997,6 +2007,8 @@ mod tests {
             let mut setup =
                 servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
             setup.local_only = protocol == crate::client::ServerProtocol::EqEmu;
+            // A zone offers chat channels only while the world opened a link.
+            setup.chat = setup.local_only.then(std::sync::Arc::default);
             Features::from_setup(servers::server_type(protocol), &setup)
         })
         .collect();
