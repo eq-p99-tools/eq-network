@@ -197,7 +197,15 @@ fn no_generations_number_reads_under_the_other() {
             .is_none());
     }
     for opcode in [
-        0x024d, 0x1004, 0x547a, 0x2372, 0x5a48, 0x673c, 0x475a, 0x0b2d,
+        0x024d,
+        0x1004,
+        0x547a,
+        0x2372,
+        0x5a48,
+        0x673c,
+        0x475a,
+        0x0b2d,
+        crate::guild::MOTD_REPLY_OPCODE,
     ] {
         assert!(
             parse_for(RO, opcode, &[0; 200], false).unwrap().is_none(),
