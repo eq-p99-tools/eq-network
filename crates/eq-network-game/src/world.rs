@@ -1147,6 +1147,21 @@ pub enum WorldEvent {
         /// The song's spell, or None when no song is sung.
         spell_id: Option<u32>,
     },
+    /// A Bard's song stopped under the Titanium program's rules (read
+    /// R49-21): the player's stop (`StopSong`, `/stopcast`, a gem click
+    /// while singing, a forget's answer) or the server's cast update ending
+    /// it. `string_id` is the line the program prints at the stop, 0x318f;
+    /// the host shows it under its Bard songs filter. A gem click that stops
+    /// the song gets this and no `CastRejected`. The Mac-era server types
+    /// never send it.
+    SongStopped {
+        /// Zone admission whose song it was.
+        session_id: u64,
+        /// The song's spell.
+        spell_id: u32,
+        /// The program's line for the stop.
+        string_id: u32,
+    },
     /// A cast request failed local validation; existing cast state is unchanged.
     CastRejected {
         /// Admission identifier from the rejected request.

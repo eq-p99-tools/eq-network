@@ -759,3 +759,30 @@ fn the_hosts_word_never_starts_a_song_or_sends_a_stop_alone() {
     assert_eq!(bard.casting.song, None);
     nothing_sent(&mut bard, "No song is playing");
 }
+
+#[test]
+fn under_the_titanium_rules_only_a_class_song_says_the_stop_line() {
+    // Another class's song is no song by 0x40db0b, so the program's stop
+    // takes its non-song path: no send and no line (read R49-21e).
+    let mut bard = item_song(Some(false));
+    bard.casting.song_rules = SongRules::Titanium;
+    nothing_sent(
+        &mut bard,
+        "A song not of the class stops here only; nothing is sent",
+    );
+    // The class's song sends the stop and says 0x318f.
+    let mut bard = item_song(Some(true));
+    bard.casting.song_rules = SongRules::Titanium;
+    let stop = bard.stop_command();
+    let output = bard.command(&stop);
+    output.result.unwrap();
+    assert_eq!(output.sent, [eq_network_game::spells::titanium_stop_song()]);
+    assert!(output.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::SongStopped {
+            spell_id: 999,
+            string_id: 0x318f,
+            ..
+        })
+    )));
+}
