@@ -71,8 +71,19 @@ The existing 42.667 conversion, HP/sneak rules, caps and snare floor remain.
 A zone sends its whole inventory, when it sends one, before the weather the
 client waits for to request the zone, on the same ordered stream; admission
 ends later on every generation. When a zone sent no inventory message by
-admission, the player holds nothing, as the original client then holds
-(inferred, recording checklist 6.437), and the session logs a diagnostic. An
+admission, the player holds nothing, and the session logs a diagnostic. Stock
+`EQEmu` sends a Titanium client no `OP_CharInventory` exactly when there is
+nothing in it: `Client::BulkSendInventoryItems` puts one entry per item held
+(and banked, unless `Inventory:LazyLoadBank` is on), and the Titanium encoder
+drops a packet with no entries. It also sends none when the character's
+inventory fails to load from its database. The Titanium program doesn't
+wait for the message either: it enters the zone once the zone server is
+connected, and takes the inventory whenever it arrives (read R49-36 a).
+Whether it clears the last zone's items at zone-in, so that it too then
+holds nothing, is unread (recording checklist 6.437). With
+`Inventory:LazyLoadBank` on, a character holding nothing but with a bank gets
+no message either, so the empty snapshot wrongly says the bank is empty too
+(an open follow-up). An
 unreadable or partial inventory at admission is news and stays unavailable; a
 later snapshot replaces the empty one.
 
