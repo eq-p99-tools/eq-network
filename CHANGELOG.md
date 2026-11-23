@@ -15,7 +15,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - The Mac profile's practice points (+156) and `OP_SkillUpdate2` are now
     read; the silent update is the player's skill only for their own spawn.
   - A paid practice leaves the purse as the server's copper-first take, or
-    uncertain. Languages are held until the `EQMac` program's rule is read.
+    uncertain; an unanswered one leaves the points unknown and a paid one the
+    purse uncertain. Languages are held until the `EQMac` program's rule is
+    read.
   - Source-derived, not live.
 
 - Offer `Resurrection` and `Sacrifice` on Quarm and TAKP (6.596), from their

@@ -1575,6 +1575,15 @@ fc75fcf and TAKP 44afcbf.
   - Points come from the profile (+156), and each level adds 5.
 - **Languages** are held: both servers accept any language 0 to 25, and the
   `EQMac` program's own rule is unread (open row 6.597a).
+- **Caps.** An offer's caps are each skill's most at the server's top level,
+  not at the player's level, so a host shows a larger number than the player
+  can reach now. A practice at the player's current most is refused with the
+  value repeated, which closes it with no spend.
+- **Unanswered.** A practice the server leaves unanswered for 5 s leaves the
+  points unknown and, when it had a cost, the purse uncertain: the server
+  takes both without a word. A late answer is plain skill news. An untrained
+  skill the player's level has not reached is likely dropped without an
+  answer (`MaxSkill` 0); the `EQMac` program would not ask (open row 6.597d).
 
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its

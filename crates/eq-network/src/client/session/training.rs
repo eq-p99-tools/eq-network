@@ -389,13 +389,17 @@ impl Training {
         Ok(())
     }
 
-    /// Retires only unresolved `EQEmu` language operations. Ordinary skill
-    /// projection remains unchanged. The event goes through the feature loop
-    /// so the purse owner can withdraw potentially spent coins exactly once.
+    /// Retires unresolved `EQEmu` language operations, and on TAKP and Quarm
+    /// every unresolved practice. `EQEmu`'s ordinary skill projection remains
+    /// unchanged. The event goes through the feature loop so the purse owner
+    /// can withdraw potentially spent coins exactly once.
     fn retire_eqemu_languages(&mut self, world: &mut World, expired_at: Option<Instant>) {
         let mut retired = Vec::new();
+        // TAKP and Quarm take a skill's cost and point without a word, so an
+        // unanswered skill practice is as unknown as a language (6.597 F1).
+        let eqmac = self.eqmac;
         self.pending.retain(|practice| {
-            let retire = practice.skill >= training::SKILLS
+            let retire = (eqmac || practice.skill >= training::SKILLS)
                 && expired_at
                     .is_none_or(|now| now.saturating_duration_since(practice.sent) >= ANSWER_WAIT);
             if retire {
@@ -1956,5 +1960,59 @@ mod tests {
         let left = mac_handle(&mut training, &mut world, TrainingRequest::End);
         left.result.unwrap();
         assert_eq!(left.sent, [training::eqmac_end(42, 7)]);
+    }
+
+    #[test]
+    fn an_unanswered_mac_practice_leaves_the_purse_and_points_unknown() {
+        let (mut training, mut world) = mac_warrior();
+        mac_open(&mut training, &mut world);
+        let kick = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Skill(30),
+        };
+        mac_handle(&mut training, &mut world, kick).result.unwrap();
+        let sent = training.pending.front().unwrap().sent;
+        let early = (sent + ANSWER_WAIT)
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        testing::run(|out| training.tick(early, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.take_news().is_empty());
+        assert_eq!(training.points, Some(3));
+        testing::run(|out| training.tick(sent + ANSWER_WAIT, &mut world, out))
+            .result
+            .unwrap();
+        assert!(training.pending.is_empty());
+        assert_eq!(training.points, None, "the server may have taken a point");
+        let news = world.take_news();
+        assert!(
+            matches!(
+                news.as_slice(),
+                [Message::Event(WorldEvent::Training(
+                    TrainingUpdate::Practice(PracticeUpdate::OutcomeUnknown {
+                        skill: 30,
+                        estimated_cost: 799
+                    })
+                ))]
+            ),
+            "{news:?}"
+        );
+        // A late answer is plain skill news, never a practice.
+        let (late, _) = hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 30,
+                value: 51,
+            }),
+        );
+        assert!(matches!(
+            late,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 30,
+                value: 51
+            })
+        ));
     }
 }
