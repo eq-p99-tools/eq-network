@@ -3224,6 +3224,42 @@ mod tests {
     }
 
     #[test]
+    fn two_kinds_destroyed_back_to_back_are_both_sent_with_nothing_held() {
+        // A host destroys a cursor holding two kinds as two commands in one
+        // frame. Nothing paces or holds a destroy (actions.rs lists it with
+        // the coin moves that hold nothing back), so the second goes as the
+        // first did.
+        use eq_network_game::money::{Coin, CoinDestroy, MOVE_OPCODE as COIN_OPCODE};
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.destroying_coins = true;
+        world.coins.0.cursor = Coins {
+            platinum: 3,
+            gold: 2,
+            ..Coins::default()
+        };
+        let destroy = |coin, amount| ClientCommand::DestroyCoins {
+            session_id: 5,
+            destroy: CoinDestroy { coin, amount },
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| {
+            belongings.handle(&destroy(Coin::Platinum, 3), &mut world, out)?;
+            belongings.handle(&destroy(Coin::Gold, 2), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 2);
+        assert!(outcome
+            .sent
+            .iter()
+            .all(|packet| packet.opcode == COIN_OPCODE));
+        assert_eq!(&outcome.sent[0].body[8..12], &3i32.to_le_bytes());
+        assert_eq!(&outcome.sent[1].body[8..12], &2i32.to_le_bytes());
+        assert_eq!(coins_refused(&outcome.events), [] as [String; 0]);
+        assert!(world.coins.cursor.is_empty());
+        assert_eq!(world.coins.purse.map(|purse| purse.gold), Some(5));
+    }
+
+    #[test]
     fn coins_on_the_cursor_are_destroyed_all_of_one_kind_and_only_where_offered() {
         use eq_network_game::money::{
             Coin, CoinDestroy, CoinPlace, EQMAC_MOVE_OPCODE, MOVE_OPCODE as COIN_OPCODE,
