@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Looting` on TAKP (6.577), from TAKP's own corpse handlers at
+  EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
+  the echo before the server's checks, and an empty cursor before an item
+  request, as TAKP's `CheckCursorEmptyWhenLooting` defaults. Source-derived,
+  not yet checked live. On TAKP and Quarm, item requests on one corpse are
+  now at least 10 ms apart, the servers' `loot_cooldown_timer`; one asked
+  sooner is refused.
+
 - List the AA requests on local sessions only (6.581): a local stock
   `EQEmu` session and a local TAKP session now offer
   `Capability::AlternateAdvancement`, under the same local-only gate as

@@ -1705,9 +1705,13 @@ impl ServerType for Quarm {
     }
 
     /// Quarm's source-derived corpse flow uses the existing inventory owner
-    /// for delivery and coins. Public-server validation remains pending.
+    /// for delivery and coins, with item requests paced to its 10 ms
+    /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
+    /// Public-server validation remains pending.
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Looting::requiring_empty_cursor()))
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     fn item_rules(&self) -> ItemRules {
@@ -2045,6 +2049,24 @@ impl ServerType for Takp {
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::translocate(std::time::Duration::from_secs(3600)))
+    }
+
+    /// Corpse looting in the `EQMac` program's packets
+    /// ([`eq_network_game::loot::eqmac`]), from TAKP's own handlers at
+    /// EQMacEmu/Server 44afcbf: `Handle_OP_LootRequest` and
+    /// `Handle_OP_EndLootRequest` take a 2-byte corpse ID,
+    /// `Handle_OP_LootItem` the 12-byte item request, and
+    /// `Corpse::LootCorpseItem` echoes the request before its checks.
+    /// TAKP's `CheckCursorEmptyWhenLooting` defaults true
+    /// (`common/ruletypes.h`), so an item request waits for an empty
+    /// cursor, as on Quarm. Its `loot_cooldown_timer` is 10 ms, as Quarm's,
+    /// so item requests are paced ([`super::looting::EQMAC_ITEM_PACE`]).
+    /// Delivery and coins stay with the inventory owner. Source-derived, not
+    /// live (6.577).
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     /// Giving items to NPCs and trading with players, in the `EQMac`
@@ -2513,7 +2535,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 23);
+        assert_eq!(takp.features(&setup).len(), 24);
         assert_eq!(
             offers(takp),
             [
@@ -2526,6 +2548,7 @@ mod tests {
                 Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Doors,

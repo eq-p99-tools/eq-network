@@ -1,7 +1,7 @@
-# Quarm corpse access
+# Quarm and TAKP corpse access
 
 This implementation is source-derived and tested with synthetic packets. It
-has not been exercised on Quarm or an attended local server. No installed
+has not been exercised on Quarm, on TAKP or on an attended local server. No installed
 assets, identities or captured packets are fixtures.
 
 ## Evidence
@@ -41,13 +41,27 @@ establishes these layouts and server actions:
   than another looter; callers must not infer a specific permission cause
   from it. Server chat may supply further explanation.
 
+TAKP's server at
+[`44afcbf`](https://github.com/EQMacEmu/Server/tree/44afcbf) was read the same
+way for its own offer (6.577). It has the same opcodes in
+`utils/patches/patch_Mac.conf`, the same `LootingItem_Struct` (12 bytes) and
+`moneyOnCorpseStruct`, and the same size checks in `Handle_OP_LootRequest`,
+`Handle_OP_LootItem` and `Handle_OP_EndLootRequest`. Its
+`Corpse::LootCorpseItem` echoes the item request before its checks too, and its
+`CheckCursorEmptyWhenLooting` also defaults true. Its open refusals use
+responses 0 and 2 (`SendLootReqErrorPacket` defaults to 2), and its loot views
+come through the same `ENCODE(OP_ItemPacket)` as `OP_LootItemPacket`, read
+under TAKP's item rules. Quarm's version adds only its trivial-loot and
+legacy-item rules, which stay server decisions.
+
 These sources do not establish the deployed public-server revision or the
 official program's exact UI timing. No new inference checklist ID is used.
 
 ## Ownership and lifecycle
 
-The generation encodes/decodes loot. `ServerType` offers it for Quarm;
-TAKP availability stays unchanged pending its own validation. Item-rule
+The generation encodes/decodes loot. `ServerType` offers it for Quarm (from
+Quarm's handlers) and for TAKP (from TAKP's own, 6.577), each source-derived
+and not yet checked live. Item-rule
 selection follows the same server policy as ordinary inventory decoding.
 Titanium packet formats retain their existing slot conversion.
 
@@ -58,7 +72,16 @@ chooses automatic destinations or writes the purse. The existing inventory
 owner consumes successful coin grants and ordinary carried/cursor updates.
 Duplicate open-success messages cannot add coins twice. An item request is
 not retried automatically; its place cannot be requested twice in the same
-listing. Different listed places have no added pacing timer.
+listing. Item requests on one corpse are paced to the servers' own rule:
+TAKP's and Quarm's `Corpse::loot_cooldown_timer` is 10 ms (TAKP 44afcbf,
+Quarm fc75fcf), checked just after the echo in `LootCorpseItem`, and a
+request that comes sooner ends the loot with `OP_LootComplete`. The session
+never sends an item request sooner than 10 ms after the last on the same
+corpse; one asked sooner is refused locally ("Wait a moment before taking the
+next item.") and can be asked again. The timer is measured when the server
+reads the packet, so two requests sent 10 ms apart can still arrive closer
+together; the official program's own pace between loot clicks is unread
+(open row 6.577a).
 
 `LootUpdate::Acknowledged` is informational. Consumers must handle this new
 enum variant separately from `Taken`: it does not prove an item was received.

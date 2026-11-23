@@ -80,7 +80,7 @@ each.
 | `Trading` | Buying from and selling to merchants | Yes | Yes | Yes | Yes |
 | `MerchantOffers` | Showing what a merchant pays | – | Yes | – | – |
 | `Giving` | Handing items to NPCs and trading with players | Yes | Yes | Yes | Yes |
-| `Looting` | Looting corpses | Yes | Yes | Yes | – |
+| `Looting` | Looting corpses | Yes | Yes | Yes | Yes |
 | `Corpses` | Consenting, summoning and dragging corpses | Yes | Yes | – | – |
 | `Tradeskills` | Combining in your own containers | Yes | Yes | – | – |
 | `WorldContainers` | Combining in world containers such as forges | Yes | Yes | – | – |

@@ -3289,6 +3289,7 @@ mod tests {
                 Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Doors,
