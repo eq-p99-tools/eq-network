@@ -1,19 +1,38 @@
 //! Reports to the server's staff: a petition, a bug report and, where the
 //! server reads it, feedback.
 //!
-//! Each packet is laid out as the servers that read it take it:
+//! Each packet is laid out as the servers that read it take it, and on
+//! Titanium as the program builds it (read R49-23, eqgame.exe):
 //! - Petition: stock `EQEmu`'s and TAKP's `Client::Handle_OP_Petition`.
-//!   The body is the text, ending in a NUL.
+//!   The body is the text, ending in a NUL. Titanium's program sends at
+//!   most 1023 bytes of it (0x4649eb), from `/petition` and `/guidehelp`
+//!   in their text form ([`petition_form`](crate::reports::petition_form)).
 //! - Bug report: `Client::Handle_OP_Bug` and `Client::RegisterBug`, with
 //!   `EQEmu`'s Titanium `BugReport_Struct` (8736 bytes) and TAKP's
-//!   (3340 bytes). The servers take only these exact sizes.
-//! - Feedback: TAKP's `Client::Handle_OP_Feedback` and `Feedback_Struct`
-//!   (1131 bytes). Stock `EQEmu` has no handler for it.
+//!   (3340 bytes). The servers take only these exact sizes. Titanium's
+//!   program builds it from a zeroed buffer on its window's Send
+//!   (0x4e9f7a), with at most 1024 bytes of text.
+//! - Feedback: Titanium's program sends 1148 bytes on its window's Send
+//!   (0x50157c): the name, an empty field, the player's place and heading
+//!   and the text. Stock `EQEmu` has no handler for it and drops it, as it
+//!   drops the program's own. `EQMac`'s is TAKP's
+//!   `Client::Handle_OP_Feedback` and `Feedback_Struct` (1131 bytes).
 //!
-//! What the official client puts in the fields this session leaves empty
-//! (the interface path, time played and system information) is unread,
-//! as are its own forms and windows for these reports (recording checklist
-//! 6.511a and c). The system information stays empty by choice.
+//! What this library leaves zero, where the program fills a field from
+//! something this library does not have:
+//! - The bug report's 128 bytes at 160 (copied from a program buffer that
+//!   is not identified; `EQEmu` names it `ui_path`), the time played at 308
+//!   (a character field `EQEmu` names `time_played`), the word at 464 (1
+//!   when an unidentified program check is false) and the window's check
+//!   boxes worth 1, 2 and 8 in the mask at 532. The box worth 4 is the
+//!   target's, which this library sets with the target.
+//! - The bug report's system information at 4638, where the program writes
+//!   a line naming the processor, the video card and its driver: this
+//!   library never sends it or anything about the machine, by choice.
+//!
+//! The program also holds a petition back while one of two of its own
+//! flags is set (0x923798, 0x923884). What sets them is unread, so this
+//! library never holds one back for them.
 
 use crate::{command::EncodedCommand, GameDialect};
 
@@ -23,6 +42,8 @@ use serde::Serialize;
 pub const TITANIUM_PETITION_OPCODE: u16 = 0x251f;
 /// Titanium's `OP_Bug`.
 pub const TITANIUM_BUG_OPCODE: u16 = 0x7ac2;
+/// Titanium's `OP_Feedback`.
+pub const TITANIUM_FEEDBACK_OPCODE: u16 = 0x5306;
 /// `EQMac`'s `OP_Petition` (TAKP's 0x400e, byte-swapped as this crate writes
 /// `EQMac` opcodes).
 pub const EQMAC_PETITION_OPCODE: u16 = 0x0e40;
@@ -32,10 +53,12 @@ pub const EQMAC_BUG_OPCODE: u16 = 0xb340;
 pub const EQMAC_FEEDBACK_OPCODE: u16 = 0x3c41;
 
 /// The longest petition, in bytes before its NUL. The servers take any
-/// length; this bound is this client's own (inferred, 6.511a).
+/// length; Titanium's program sends at most this (read R49-23, 0x4649eb).
 pub const PETITION_LONGEST: usize = 1023;
-/// The longest feedback, in bytes before its NUL: `Feedback_Struct`'s
-/// message field less its NUL.
+/// The longest feedback, in bytes before its NUL: `EQMac`'s
+/// `Feedback_Struct` message field less its NUL. Titanium's field holds
+/// more; how much the program's window takes is unread, so this bound
+/// serves both (inferred).
 pub const FEEDBACK_LONGEST: usize = 1023;
 
 /// Titanium's `BugReport_Struct`.
@@ -47,6 +70,8 @@ const TITANIUM_BUG_LENGTH: usize = 8736;
 const EQMAC_BUG_LENGTH: usize = 1131;
 /// `EQMac`'s `Feedback_Struct`.
 const FEEDBACK_LENGTH: usize = 1131;
+/// Titanium's feedback (read R49-23, 0x50157c).
+const TITANIUM_FEEDBACK_LENGTH: usize = 1148;
 /// A name field, in every layout here.
 const NAME_FIELD: usize = 64;
 
@@ -133,7 +158,8 @@ impl BugCategory {
     }
 }
 
-/// Where the player stood when they reported, as the client knows it.
+/// Where the player stood when they reported, as the client knows it: for a
+/// bug report, and for Titanium's feedback.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BugPlace {
     /// The player's x.
@@ -196,12 +222,52 @@ pub enum ReportKind {
     Feedback,
 }
 
-/// The longest bug report text the generation's packet holds, in bytes
-/// before its NUL; none for a generation not built yet.
+/// How a generation's program takes `/petition`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub enum PetitionForm {
+    /// The command shows or hides the petition window, and its words are
+    /// ignored.
+    Window,
+    /// The command sends its words as a petition ([`petition`]).
+    Text,
+}
+
+/// How the generation's program takes `/petition` on a world with these
+/// rules (`None` before the world has sent any).
+///
+/// Titanium's program shows its window when the world turns the window on
+/// and otherwise sends the words (read R49-23, 0x4683af; the flag at
+/// 0x923d64). The world's log-server settings set it, read here as
+/// [`crate::rules::WorldRules::petition_window`] (`EQEmu` names the byte
+/// `enable_petition_wnd`; that it is the program's flag is inferred). The
+/// program also takes the flag from a world packet, 0x3f0d, which no
+/// server source here sends, so it is not read. `EQMac`'s program is
+/// unread, and the text form stands for it, as it does for `RoF2`, which is
+/// not built yet (6.489).
+#[must_use]
+pub const fn petition_form(
+    dialect: GameDialect,
+    rules: Option<&crate::rules::WorldRules>,
+) -> PetitionForm {
+    match dialect {
+        GameDialect::Titanium => match rules {
+            Some(crate::rules::WorldRules {
+                petition_window: Some(true),
+                ..
+            }) => PetitionForm::Window,
+            _ => PetitionForm::Text,
+        },
+        GameDialect::EqMac | GameDialect::Rof2 => PetitionForm::Text,
+    }
+}
+
+/// The longest bug report text the generation's program sends, in bytes
+/// before its NUL; none for a generation not built yet. Titanium's field
+/// holds 2049, and the program sends at most 1024 (read R49-23, 0x4e9f7a).
 #[must_use]
 pub const fn bug_longest(dialect: GameDialect) -> Option<usize> {
     match dialect {
-        GameDialect::Titanium => Some(2049),
+        GameDialect::Titanium => Some(1024),
         GameDialect::EqMac => Some(1023),
         GameDialect::Rof2 => None,
     }
@@ -313,11 +379,14 @@ pub fn bug(
             let mut body = vec![0; TITANIUM_BUG_LENGTH];
             put(&mut body, 0, NAME_FIELD, report.category.name())?;
             put_name(&mut body, 64, reporter);
-            // ui_path at 160 stays empty (6.511c).
+            // The 128 bytes at 160 stay empty: the program's source buffer
+            // is not identified (read R49-23).
             body[288..292].copy_from_slice(&place.x.to_le_bytes());
             body[292..296].copy_from_slice(&place.y.to_le_bytes());
             body[296..300].copy_from_slice(&place.z.to_le_bytes());
-            // A whole number of the game's units (inferred, 6.511c).
+            // A whole number of the game's units, as `EQEmu` reads the
+            // word; what the program puts here is not identified (read
+            // R49-23).
             #[allow(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
@@ -325,14 +394,16 @@ pub fn bug(
             )]
             let heading = place.heading.rem_euclid(512.0) as u32;
             body[300..304].copy_from_slice(&heading.to_le_bytes());
-            // time_played at 308 stays zero (6.511c).
+            // The time played at 308 and the word at 464 stay zero (read
+            // R49-23).
             if let Some(target) = &report.target {
                 body[320..324].copy_from_slice(&u32::from(target.spawn_id).to_le_bytes());
                 put_name(&mut body, 468, &target.name);
             }
             body[532..536].copy_from_slice(&report.mask().to_le_bytes());
             put(&mut body, 2588, 2050, text)?;
-            // system_info at 4638 stays empty by choice (6.511c).
+            // The system information at 4638 stays empty by choice: never
+            // the machine's processor, card or driver.
             Ok(EncodedCommand {
                 opcode: TITANIUM_BUG_OPCODE,
                 body,
@@ -354,17 +425,51 @@ pub fn bug(
     }
 }
 
-/// Feedback from the named character, on a generation whose servers read it.
+/// Feedback from the named character, standing at `place` when the client
+/// knows it. Titanium's carries the place and heading (read R49-23,
+/// 0x50157c): the position from the spawn's 0x30, 0x34 and 0x38 at 96, 100
+/// and 104, the heading rounded to a whole number at 108, and the text at
+/// 120. `EQMac`'s carries only the name and the text.
 ///
 /// # Errors
-/// Refuses an empty or over-long text, one holding a NUL, Titanium (no
-/// server reads it) and a generation not built yet.
+/// Refuses an empty or over-long text, one holding a NUL, and a generation
+/// not built yet.
 pub fn feedback(
     dialect: GameDialect,
     name: &str,
     text: &str,
+    place: Option<BugPlace>,
 ) -> Result<EncodedCommand, ReportError> {
     match dialect {
+        GameDialect::Titanium => {
+            let text = checked(text, FEEDBACK_LONGEST)?;
+            let place = place.unwrap_or(BugPlace {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                heading: 0.0,
+            });
+            let mut body = vec![0; TITANIUM_FEEDBACK_LENGTH];
+            put_name(&mut body, 0, name);
+            // The field at 64 is the program's empty string.
+            body[96..100].copy_from_slice(&place.x.to_le_bytes());
+            body[100..104].copy_from_slice(&place.y.to_le_bytes());
+            body[104..108].copy_from_slice(&place.z.to_le_bytes());
+            // Rounded, in the game's 512 units; the word's width is
+            // inferred.
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a heading in 0 to 512"
+            )]
+            let heading = (place.heading.rem_euclid(512.0).round() as u32) % 512;
+            body[108..112].copy_from_slice(&heading.to_le_bytes());
+            put(&mut body, 120, TITANIUM_FEEDBACK_LENGTH - 120, text)?;
+            Ok(EncodedCommand {
+                opcode: TITANIUM_FEEDBACK_OPCODE,
+                body,
+            })
+        }
         GameDialect::EqMac => {
             let text = checked(text, FEEDBACK_LONGEST)?;
             let mut body = vec![0; FEEDBACK_LENGTH];
@@ -375,9 +480,8 @@ pub fn feedback(
                 body,
             })
         }
-        // No stock EQEmu handler reads it on Titanium, and RoF2 is not
-        // built yet (6.489).
-        GameDialect::Titanium | GameDialect::Rof2 => Err(ReportError::NotRead),
+        // Not built for RoF2 yet (6.489).
+        GameDialect::Rof2 => Err(ReportError::NotRead),
     }
 }
 
@@ -432,10 +536,6 @@ mod tests {
                 longest: PETITION_LONGEST
             }
         );
-        assert_eq!(
-            feedback(GameDialect::Titanium, "Reporter", "Hi").unwrap_err(),
-            ReportError::NotRead
-        );
         assert!(petition(GameDialect::Titanium, &"x".repeat(PETITION_LONGEST)).is_ok());
         assert!(petition(GameDialect::Titanium, &"x".repeat(PETITION_LONGEST + 1)).is_err());
         assert!(petition(GameDialect::Rof2, "Help").is_err());
@@ -479,7 +579,7 @@ mod tests {
 
     #[test]
     fn bug_reports_refuse_what_their_field_cannot_hold() {
-        for (dialect, longest) in [(GameDialect::Titanium, 2049), (GameDialect::EqMac, 1023)] {
+        for (dialect, longest) in [(GameDialect::Titanium, 1024), (GameDialect::EqMac, 1023)] {
             assert_eq!(bug_longest(dialect), Some(longest));
             let mut long = report();
             long.text = "x".repeat(longest);
@@ -496,15 +596,73 @@ mod tests {
     }
 
     #[test]
-    fn feedback_goes_only_where_a_server_reads_it() {
-        let packet = feedback(GameDialect::EqMac, "Reporter", "Nice boats.").unwrap();
+    fn feedback_is_laid_out_as_each_generation_sends_it() {
+        let place = report().place;
+        let packet = feedback(GameDialect::EqMac, "Reporter", "Nice boats.", place).unwrap();
         assert_eq!(packet.opcode, 0x3c41);
         assert_eq!(packet.body.len(), 1131);
         assert_eq!(text_at(&packet.body, 0), "Reporter");
         assert_eq!(text_at(&packet.body, 107), "Nice boats.");
-        assert!(feedback(GameDialect::EqMac, "Reporter", &"x".repeat(1024)).is_err());
-        assert!(feedback(GameDialect::Titanium, "Reporter", "Nice boats.").is_err());
-        assert!(feedback(GameDialect::Rof2, "Reporter", "Nice boats.").is_err());
+        assert!(feedback(GameDialect::EqMac, "Reporter", &"x".repeat(1024), None).is_err());
+        assert!(feedback(GameDialect::Rof2, "Reporter", "Nice boats.", None).is_err());
+
+        let packet = feedback(GameDialect::Titanium, "Reporter", " Nice boats. ", place).unwrap();
+        assert_eq!(packet.opcode, 0x5306);
+        let body = &packet.body;
+        assert_eq!(body.len(), 1148);
+        assert_eq!(text_at(body, 0), "Reporter");
+        assert!(body["Reporter".len()..96].iter().all(|byte| *byte == 0));
+        assert_eq!(&body[96..100], &10.5f32.to_le_bytes());
+        assert_eq!(&body[100..104], &(-20.25f32).to_le_bytes());
+        assert_eq!(&body[104..108], &3.0f32.to_le_bytes());
+        assert_eq!(&body[108..112], &256u32.to_le_bytes());
+        assert!(body[112..120].iter().all(|byte| *byte == 0));
+        assert_eq!(text_at(body, 120), "Nice boats.");
+        assert!(body[120 + "Nice boats.".len()..]
+            .iter()
+            .all(|byte| *byte == 0));
+        // Rounded, and a heading of nearly 512 is 0.
+        let mut near = place.unwrap();
+        near.heading = 511.7;
+        let body = feedback(GameDialect::Titanium, "Reporter", "Hi", Some(near))
+            .unwrap()
+            .body;
+        assert_eq!(&body[108..112], &0u32.to_le_bytes());
+        assert!(feedback(GameDialect::Titanium, "Reporter", "", None).is_err());
+        assert!(feedback(GameDialect::Titanium, "Reporter", &"x".repeat(1024), None).is_err());
+    }
+
+    #[test]
+    fn titanium_takes_the_petition_window_from_the_world() {
+        use crate::rules::WorldRules;
+        let on = WorldRules {
+            petition_window: Some(true),
+            ..WorldRules::default()
+        };
+        let off = WorldRules {
+            petition_window: Some(false),
+            ..WorldRules::default()
+        };
+        assert_eq!(
+            petition_form(GameDialect::Titanium, Some(&on)),
+            PetitionForm::Window
+        );
+        assert_eq!(
+            petition_form(GameDialect::Titanium, Some(&off)),
+            PetitionForm::Text
+        );
+        assert_eq!(
+            petition_form(GameDialect::Titanium, None),
+            PetitionForm::Text
+        );
+        assert_eq!(
+            petition_form(GameDialect::EqMac, Some(&on)),
+            PetitionForm::Text
+        );
+        assert_eq!(
+            petition_form(GameDialect::Rof2, Some(&on)),
+            PetitionForm::Text
+        );
     }
 
     #[test]
