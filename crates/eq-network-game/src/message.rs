@@ -127,6 +127,20 @@ impl fmt::Display for Part {
     }
 }
 
+/// What one `RoF2` zone packet says. Only its spawn records are read yet,
+/// each one spawn (6.510); a record the walker refuses is unreadable, told
+/// by its opcode and length only.
+#[must_use]
+pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
+    match opcode {
+        crate::rof2_player::SPAWN_OPCODE => vec![crate::rof2_player::spawn(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |spawn| Message::Event(WorldEvent::Spawns(vec![spawn])),
+        )],
+        _ => Vec::new(),
+    }
+}
+
 /// What one Titanium zone packet says. A mana update is both a spell notice
 /// and a change in resources, so one packet can say two things; the player's
 /// profile says what is in their spellbook, which buffs they wear and the

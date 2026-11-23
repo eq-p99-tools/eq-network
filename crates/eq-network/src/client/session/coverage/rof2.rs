@@ -5,11 +5,12 @@
 //! The login rows come from `loginserver/login_util/login_opcodes_sod.conf`
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
-//! rows from the same list and the entry (6.501, 6.502).
+//! rows from the same list, the entry (6.501, 6.502) and the zone decoder
+//! (6.510).
 
 use super::{
     sent, Part,
-    Reader::{Admission, Login, World},
+    Reader::{Admission, Login, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned},
     ServerMessage,
@@ -34,17 +35,15 @@ const PROFILE: &[Part] = &[Part(
      rest of the profile",
     Planned(Rof2),
 )];
-/// What the entry leaves unread of the player's own spawn (6.502), and
-/// the other players' spawns stock `EQEmu` sends under the same number
-/// after the entry (`ENCODE(OP_NewSpawn)` and `ENCODE(OP_ZoneSpawns)` both
-/// write `OP_ZoneEntry` records), which nothing reads yet.
-const OWN_SPAWN: &[Part] = &[
+/// What the entry and the zone decoder leave unread of a spawn record:
+/// the player's own, which the entry reads (6.502), and every other
+/// spawn, which stock `EQEmu` sends under the same number
+/// (`ENCODE(OP_NewSpawn)` and `ENCODE(OP_ZoneSpawns)` both write
+/// `OP_ZoneEntry` records) and the zone decoder reads (6.510).
+const SPAWN: &[Part] = &[
+    Part("appearance and the /who listing", Planned(Rof2)),
     Part(
-        "appearance, the /who listing and the packed position",
-        Planned(Rof2),
-    ),
-    Part(
-        "other players' spawns sent under this number after the entry",
+        "the motion deltas, the animation and the angle of the packed position",
         Planned(Rof2),
     ),
 ];
@@ -72,10 +71,11 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x6259 => sent("OP_PostEnterWorld", ROF2, Read(&[World])),
         0x4c44 => sent("OP_ZoneServerInfo", ROF2, Read(&[World])),
         0x4cb4 => sent("OP_ZoneUnavail", ROF2, Read(&[World])),
-        // The zone's, during the entry (6.501, 6.502).
+        // The zone's, during the entry (6.501, 6.502), and its spawns
+        // (6.510).
         0x1795 => sent("OP_NewZone", ROF2, Partly(&[Admission], DESCRIPTION)),
         0x6506 => sent("OP_PlayerProfile", ROF2, Partly(&[Admission], PROFILE)),
-        0x5089 => sent("OP_ZoneEntry", ROF2, Partly(&[Admission], OWN_SPAWN)),
+        0x5089 => sent("OP_ZoneEntry", ROF2, Partly(&[Admission, Zone], SPAWN)),
         0x5ae2 => sent("OP_WorldObjectsSent", ROF2, Read(&[Admission])),
         _ => return None,
     })

@@ -550,17 +550,22 @@ fn run_connected(
         // Everything else is read once, in the server's client generation, the
         // same way before and after admission, and heard by every feature;
         // a kind no server is known to send leaves a trace, once a session.
-        let messages = unheard.sift(
-            server.wire(),
-            (packet.opcode, &packet.body),
-            read_messages(
+        // What the handshake keeps to itself is not read again.
+        let messages = if admission.kept() {
+            Vec::new()
+        } else {
+            unheard.sift(
                 server.wire(),
-                packet.opcode,
-                &packet.body,
-                server.item_rules(),
-            ),
-            log,
-        )?;
+                (packet.opcode, &packet.body),
+                read_messages(
+                    server.wire(),
+                    packet.opcode,
+                    &packet.body,
+                    server.item_rules(),
+                ),
+                log,
+            )?
+        };
         if context.commands.is_none() && !world.ready() && !entry_position_superseded {
             // A later handshake packet cannot restore a superseded fallback.
             entry_position_superseded = messages
@@ -935,7 +940,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 121;
+    const KINDS: usize = 122;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1000,7 +1005,7 @@ mod tests {
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
-            ClientCommand::DestroyCoins { .. } => 120,
+            ClientCommand::DestroyCoins { .. } => 121,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1046,6 +1051,7 @@ mod tests {
             ClientCommand::SendPetition { .. } => 117,
             ClientCommand::ReportBug { .. } => 118,
             ClientCommand::SendFeedback { .. } => 119,
+            ClientCommand::ChallengeDuel { .. } => 120,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1531,6 +1537,11 @@ mod tests {
                     sequence: 1,
                 },
                 accept: true,
+            },
+            ClientCommand::ChallengeDuel {
+                session_id,
+                target: 2,
+                created: Instant::now(),
             },
             ClientCommand::DropInvisibility {
                 session_id,

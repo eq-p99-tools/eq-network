@@ -1,8 +1,8 @@
-//! `RoF2` profile and own-spawn bodies built from the field list, for tests
-//! here and in the session: our own writer, with filler in every field the
+//! `RoF2` profile and spawn record bodies built from the field list, for
+//! tests here and in the session: our own writer, with filler in every field the
 //! readers skip, so a reader that slips by a byte reads filler.
 #![allow(missing_docs, clippy::missing_panics_doc, clippy::must_use_candidate)]
-use super::{SUFFIX, TITLE};
+use super::{DESTRUCTIBLE, DESTRUCTIBLE_BITFIELDS, SUFFIX, TITLE, TREASURE};
 
 /// What fills every field the readers skip.
 pub const FILLER: u8 = 0x5a;
@@ -308,4 +308,246 @@ pub fn spawn_body(sample: &Sample) -> Vec<u8> {
         .fill(2 * 4)
         .fill(29);
     body.bytes
+}
+
+/// The values one spawn record carries, for any branch.
+#[derive(Clone)]
+pub struct Record {
+    pub name: &'static str,
+    pub spawn_id: u32,
+    pub level: u8,
+    pub npc: u8,
+    pub bitfields: u32,
+    pub other: u8,
+    /// The model, the second name and the string a treasure chest or a
+    /// destructible object carries; written when `object` is set.
+    pub object: Option<[&'static str; 3]>,
+    pub properties: u8,
+    pub body_type: u32,
+    pub hp: u8,
+    pub size: f32,
+    pub speeds: [f32; 2],
+    pub race: u32,
+    pub class: u8,
+    pub stand: u8,
+    pub last_name: &'static str,
+    pub pet_owner: u32,
+    /// Nine tints and nine textures (true) or three textures.
+    pub dressed: bool,
+    pub position: [u32; 5],
+    /// Written when not empty, whatever `other` says.
+    pub title: &'static str,
+    pub suffix: &'static str,
+}
+
+impl Record {
+    /// A creature of a race that is not dressed: three textures.
+    pub fn creature() -> Self {
+        Self {
+            name: "a_rat01",
+            spawn_id: 55,
+            level: 3,
+            npc: 1,
+            // Female (1), and an invisibility of 5.
+            bitfields: 1 | (5 << 10),
+            other: 0,
+            object: None,
+            properties: 1,
+            body_type: 21,
+            hp: 80,
+            size: 2.0,
+            speeds: [0.3, 0.9],
+            race: 36,
+            class: 1,
+            stand: 100,
+            last_name: "",
+            pet_owner: 0,
+            dressed: false,
+            position: pack(&Packed {
+                x: 80,
+                y: -160,
+                z: 24,
+                heading: 1024,
+                ..Packed::default()
+            }),
+            title: "",
+            suffix: "",
+        }
+    }
+
+    /// Another player, with a title and a suffix: dressed.
+    pub fn player() -> Self {
+        Self {
+            name: "Other",
+            spawn_id: 77,
+            level: 20,
+            npc: 0,
+            bitfields: 0,
+            other: TITLE | SUFFIX,
+            race: 1,
+            last_name: "Doe",
+            class: 3,
+            stand: 110,
+            dressed: true,
+            title: "Lady",
+            suffix: "the Kind",
+            ..Self::creature()
+        }
+    }
+
+    /// An NPC of a dressed race.
+    pub fn dressed_npc() -> Self {
+        Self {
+            name: "Guard_Tester00",
+            race: 128,
+            dressed: true,
+            ..Self::creature()
+        }
+    }
+
+    /// An `LDoN` treasure chest.
+    pub fn treasure() -> Self {
+        Self {
+            name: "a_chest00",
+            other: TREASURE,
+            class: 62,
+            object: Some(["chest_model", "", "click me"]),
+            ..Self::creature()
+        }
+    }
+
+    /// A destructible object, with the encoder's bits.
+    pub fn destructible() -> Self {
+        Self {
+            name: "a_barrel00",
+            bitfields: DESTRUCTIBLE_BITFIELDS,
+            other: DESTRUCTIBLE,
+            object: Some(["barrel_model", "barrel", ""]),
+            properties: 0,
+            ..Self::creature()
+        }
+    }
+
+    /// The length `ENCODE(OP_ZoneSpawns)` sizes this record at.
+    pub fn encoder_length(&self) -> usize {
+        let mut length = 206 + self.name.len() + self.last_name.len();
+        for part in [self.title, self.suffix] {
+            if !part.is_empty() {
+                length += part.len() + 1;
+            }
+        }
+        if let Some(strings) = self.object {
+            if self.properties == 0 {
+                length -= 4;
+            }
+            length += 53 + strings.iter().map(|string| string.len() + 1).sum::<usize>();
+        }
+        length + if self.dressed { 216 } else { 60 }
+    }
+}
+
+/// A spawn record as the field list in `ENCODE(OP_ZoneSpawns)` lays it out,
+/// with filler in every field the walker skips.
+pub fn record_body(record: &Record) -> Vec<u8> {
+    let mut body = Body::default();
+    body.text(record.name)
+        .word(record.spawn_id)
+        .byte(record.level);
+    // Eye height.
+    body.fill(4);
+    body.byte(record.npc)
+        .word(record.bitfields)
+        .byte(record.other);
+    // Emitter radius and id.
+    body.fill(8);
+    if let Some(strings) = record.object {
+        for string in strings {
+            body.text(string);
+        }
+        // Appearance, animation, ten sound ids, collision byte, type.
+        body.fill(4 + 4 + 10 * 4 + 1 + 4);
+    }
+    body.byte(record.properties);
+    if record.properties == 1 {
+        body.word(record.body_type);
+    }
+    body.byte(record.hp);
+    // Six colour and feature bytes, the Drakkin words, four bytes.
+    body.fill(6).fill(12).fill(4);
+    body.float(record.size)
+        .fill(1)
+        .float(record.speeds[0])
+        .float(record.speeds[1])
+        .word(record.race);
+    // Holding, deity, guild, rank.
+    body.fill(1).fill(4).fill(8);
+    body.byte(record.class).fill(1).byte(record.stand).fill(2);
+    body.text(record.last_name);
+    // AA title, guild shown, temporary pet.
+    body.fill(4 + 1 + 1).word(record.pet_owner);
+    // Find bits, player state, three tint indexes, two weapon words.
+    body.fill(1 + 4 + 12 + 8);
+    body.fill(if record.dressed {
+        9 * 4 + 9 * 20
+    } else {
+        3 * 20
+    });
+    for word in record.position {
+        body.word(word);
+    }
+    for part in [record.title, record.suffix] {
+        if !part.is_empty() {
+            body.text(part);
+        }
+    }
+    body.fill(8)
+        .fill(1)
+        .text("0000000000000000")
+        .fill(8)
+        .fill(29);
+    body.bytes
+}
+
+/// The packed position's fields, as raw bit values.
+#[derive(Clone, Copy, Default)]
+pub struct Packed {
+    /// Signed 19-bit values, in eighths of a unit.
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    /// 12 bits, in quarters of the 512-unit turn.
+    pub heading: u32,
+    pub angle: u32,
+    pub delta_x: i32,
+    pub delta_y: i32,
+    pub delta_z: i32,
+    pub delta_heading: i32,
+    pub animation: i32,
+}
+
+/// Packs the fields into five words, the bit positions written out here as
+/// our own table of the active `Spawn_Struct_Position`: (word, lowest bit,
+/// width) for each field.
+pub fn pack(packed: &Packed) -> [u32; 5] {
+    let mut words = [0u32; 5];
+    #[allow(clippy::cast_sign_loss)]
+    let fields: [(i64, usize, u32, u32); 10] = [
+        (i64::from(packed.angle), 0, 0, 12),
+        (i64::from(packed.y), 0, 12, 19),
+        (i64::from(packed.delta_z), 1, 0, 13),
+        (i64::from(packed.delta_x), 1, 13, 13),
+        (i64::from(packed.x), 2, 0, 19),
+        (i64::from(packed.heading), 2, 19, 12),
+        (i64::from(packed.delta_heading), 3, 0, 10),
+        (i64::from(packed.z), 3, 10, 19),
+        (i64::from(packed.animation), 4, 0, 10),
+        (i64::from(packed.delta_y), 4, 10, 13),
+    ];
+    for (value, word, shift, width) in fields {
+        let mask = (1u64 << width) - 1;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let bits = (value as u64 & mask) as u32;
+        words[word] |= bits << shift;
+    }
+    words
 }

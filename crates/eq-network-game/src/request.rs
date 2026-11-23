@@ -141,8 +141,9 @@ pub enum Request {
         /// True accepts.
         accept: bool,
     },
-    /// `EQMac`'s `OP_RequestDuel` naming the other player, which its client
-    /// sends to challenge and, by TAKP's note, again before it accepts.
+    /// `OP_RequestDuel` naming the other player: a challenge, and on
+    /// `EQMac`, by TAKP's note, also what its client sends before it
+    /// accepts.
     DuelRequest {
         /// The other player.
         other: u16,
@@ -550,10 +551,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
                 socials::titanium_duel_decline(*challenger, own)
             }
         }
-        // Titanium's challenge is not read yet (checklist 6.492).
-        Request::DuelRequest { .. } => {
-            anyhow::bail!("the Titanium client cannot send a duel request yet")
-        }
+        Request::DuelRequest { other } => socials::titanium_duel_request(*other, duelist(sender)?),
         Request::InviteToGroup { name, .. } => group::invite(name, sender.name)?,
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,

@@ -389,6 +389,23 @@ pub fn titanium_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
     }
 }
 
+/// Titanium's challenge to a duel: `OP_RequestDuel` (8 bytes,
+/// `Duel_Struct`), the other player then the player, each 32 bits.
+/// `EQEmu`'s `Handle_OP_RequestDuel` swaps the two words and looks up the
+/// first as the one challenged, so it must name a spawn in the zone; the
+/// order the official program writes is inferred from that handler
+/// (checklist 6.492b, pending R49-6h).
+#[must_use]
+pub fn titanium_duel_request(other: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: REQUEST_DUEL_OPCODE,
+        body: [u32::from(other), u32::from(own)]
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect(),
+    }
+}
+
 /// `EQMac`'s `OP_RequestDuel` (4 bytes): the other player, then the player,
 /// each 16 bits (TAKP's `DuelChallenge_Struct`: the target, then the
 /// challenger, who must be the sender). The client sends it to challenge
@@ -613,6 +630,13 @@ pub(crate) fn eqmac_refused(body: &[u8]) -> Result<DuelUpdate> {
 mod tests {
     use super::*;
     use crate::world::titanium_update;
+
+    #[test]
+    fn a_titanium_challenge_names_the_other_player_then_the_player() {
+        let challenge = titanium_duel_request(0x1234, 7);
+        assert_eq!(challenge.opcode, 0x28e1);
+        assert_eq!(challenge.body, [0x34, 0x12, 0, 0, 7, 0, 0, 0]);
+    }
 
     #[test]
     fn duel_answers_name_the_challenger_then_the_player() {
