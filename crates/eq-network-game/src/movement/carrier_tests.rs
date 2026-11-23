@@ -470,3 +470,42 @@ fn a_replaced_id_or_point_outside_the_radius_cannot_carry() {
         local
     );
 }
+
+#[test]
+fn a_jump_on_a_boat_sends_only_its_own_rise() {
+    // The program's update carries the actor's own velocity, which leaves
+    // out the boat's motion (R49-27 (a), (c); 6.617): a jump aboard a
+    // boat that rises and sails sends the jump's rise alone.
+    let start = Instant::now();
+    let jump = Some((
+        super::super::JUMP_SPEED,
+        super::super::gravity_per_second(None),
+    ));
+    let mut session = setup(start)
+        .with_falls(true)
+        .with_jump(jump)
+        .with_airborne_speed(true);
+    let mut local = attach(&mut session, start);
+    let at = start + Duration::from_millis(150);
+    let boat = Position {
+        x: 30.0,
+        z: 1.0,
+        heading: 64.0,
+        ..Position::default()
+    };
+    local.z += 2.03;
+    session.jumped();
+    // The host's own speed: 2.03 a tick, 40.6 a second.
+    let mut rise = request(start, at, boat, local).airborne_at(40.6);
+    rise.mode = MovementMode::Fall;
+    session.allow_carrier(Some((sample(start, at), boat)));
+    session
+        .send_move_sample(&rise, at, |wire| {
+            assert_eq!(wire.position, rise.position);
+            assert!(wire.delta[0].abs() < 0.001 && wire.delta[1].abs() < 0.001);
+            // 2.03 in 50 ms, 2.03 a tick; none of the boat's 1.
+            assert!((wire.delta[2] - 2.03).abs() < 0.001, "{:?}", wire.delta);
+            Ok(())
+        })
+        .unwrap();
+}
