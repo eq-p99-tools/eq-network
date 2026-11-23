@@ -58,6 +58,17 @@ impl Listed {
         bugs: true,
         feedback: false,
     };
+
+    /// TAKP's and Quarm's: petitions and bug reports, as their own
+    /// `Handle_OP_Petition` and `Handle_OP_Bug` read them (6.604 E6,
+    /// source-derived). Quarm keeps petitions off by rule and answers with
+    /// a line. Tests never send either to a public server: they reach the
+    /// server's staff.
+    pub(super) const EQMAC: Self = Self {
+        petitions: true,
+        bugs: true,
+        feedback: false,
+    };
 }
 
 /// Sends the player's reports, one kind at a time.
@@ -339,7 +350,7 @@ mod tests {
             [reports::EQMAC_FEEDBACK_OPCODE, reports::EQMAC_BUG_OPCODE]
         );
         assert_eq!(outcome.sent[0].body.len(), 1131);
-        assert_eq!(outcome.sent[1].body.len(), 3340);
+        assert_eq!(outcome.sent[1].body.len(), 1131);
     }
 
     /// TAKP's opcode list writes each opcode as the reverse of the bytes this

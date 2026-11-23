@@ -53,9 +53,13 @@ the server's staff (`eq_network_game::reports`), under
 `Capability::SendingFeedback`. A person reads each one. A host may send one
 the player types or one from a script, since a script may do whatever the
 player can; the pace below holds either way.
-Stock `EQEmu` lists petitions and bug reports; no server type lists feedback,
-or any of the three on P99, Quarm or TAKP, until its own live check
-(recording checklist 6.511).
+Stock `EQEmu` lists petitions and bug reports, and so do Quarm and TAKP from
+their own handlers (6.604 E6, source-derived, not yet checked live). No
+server type lists feedback, or any of the three on P99, until its own live
+check (recording checklist 6.511). On `EQMac` a petition is the text and a
+NUL; a bug report is the servers' 1131-byte short record, carrying only the
+reporter's name and the player's text, and the servers fill in the place and
+target themselves. Quarm runs with petitions off, and answers with a line.
 
 A `BugReport` carries its category (the servers' names), the player's text,
 and, when the host knows them, the player's place and heading and the
@@ -2068,7 +2072,8 @@ ready reaches the host as chat with string 393 and the server's color.
 ## Surnames
 
 Where the server type takes `/surname` (`Capability::Surnaming`: stock
-`EQEmu` so far, from its source and not yet checked live), send
+`EQEmu`, TAKP and Quarm, each from its own source and not yet checked live),
+send
 `GameCommand::Surname` with the word the player typed. It goes as typed:
 never cut, its case left for the server to set. Only what the record cannot
 carry is refused (`WorldEvent::SocialRefused`): an empty word, a space, a
@@ -2078,8 +2083,11 @@ answers with `WorldEvent::SurnameAnswer` (`accepted`, and the surname it
 names) or with a line of its own for each refusal; an answer to no request
 is withheld. The name a taken surname gives the spawns comes from the zone's
 own `WorldEvent::LastName`, not from the answer. `EQMac`'s request and
-answer are built but listed by no server type, and `EQMac`'s
-`OP_GMLastName` now gives `WorldEvent::LastName` too. A surname stays for
+answer (100 bytes) are listed by TAKP and Quarm (6.604 E5), and `EQMac`'s
+`OP_GMLastName` gives `WorldEvent::LastName` too. There the session also
+refuses first what the servers' comments say the `EQMac` program refuses
+(inferred, never more than the server does): a character with a surname, one
+under level 20, and a surname over 19 characters. A surname stays for
 good, or for days, so a host sends it only on the player's own typed word.
 
 ## Titles
