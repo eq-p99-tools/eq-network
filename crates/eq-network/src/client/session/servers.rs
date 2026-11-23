@@ -2087,6 +2087,24 @@ mod tests {
         ] {
             assert!(server_type(protocol).environmental_aa(&setup).is_none());
         }
+        // The AA requests wait for their own local EQEmu live row (6.556):
+        // no server type lists them, local or not.
+        for local_only in [false, true] {
+            setup.local_only = local_only;
+            for protocol in [
+                ServerProtocol::EqEmu,
+                ServerProtocol::Project1999,
+                ServerProtocol::Takp,
+                ServerProtocol::Quarm,
+                ServerProtocol::EqEmuRof2,
+            ] {
+                assert!(!server_type(protocol)
+                    .features(&setup)
+                    .iter()
+                    .flat_map(|provided| provided.feature.capabilities())
+                    .any(|capability| capability == Capability::AlternateAdvancement));
+            }
+        }
     }
 
     #[test]

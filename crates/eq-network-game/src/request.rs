@@ -200,6 +200,9 @@ pub enum Request {
         /// Whether it is the suffix.
         suffix: bool,
     },
+    /// Train, activate or set the split of the player's AAs
+    /// ([`crate::alternate_advancement::titanium_action`]).
+    AlternateAdvancement(crate::alternate_advancement::Action),
     /// Search the Bazaar ([`crate::bazaar::search`]).
     BazaarSearch(crate::bazaar::BazaarCriteria),
     /// Ask how many traders and items the Bazaar has
@@ -624,6 +627,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::SetTitle { title_id, suffix } => EncodedCommand {
             opcode: crate::names::SET_TITLE_OPCODE,
             body: crate::names::set_title(*title_id, *suffix),
+        },
+        Request::AlternateAdvancement(action) => EncodedCommand {
+            opcode: crate::alternate_advancement::ACTION_OPCODE,
+            body: crate::alternate_advancement::titanium_action(*action)?.to_vec(),
         },
         Request::Emote(text) => socials::emote(text)?,
         Request::SocialEmote(text) => socials::social_emote(text)?,
@@ -1063,6 +1070,24 @@ mod tests {
         }
         assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
         assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_sends_an_aa_action() {
+        use crate::alternate_advancement::Action;
+        let train = Request::AlternateAdvancement(Action::Train { rank_id: 9 });
+        let sent = titanium(&train, PLAYER).unwrap();
+        assert_eq!(
+            (sent.opcode, sent.body),
+            (0x0681, vec![3, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        );
+        assert!(titanium(
+            &Request::AlternateAdvancement(Action::Split { percentage: 101 }),
+            PLAYER
+        )
+        .is_err());
+        // TAKP's request is text, slice N4.
+        assert!(eqmac(&train, PLAYER).is_err());
     }
 
     #[test]

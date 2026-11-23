@@ -704,12 +704,17 @@ pub enum Capability {
     /// Taking offered tasks, cancelling journal entries, a finished task's
     /// steps and `/tasktimers` ([`crate::tasks::offers`]).
     Tasks,
+    /// Training, activating and setting the experience split of the
+    /// player's AAs ([`crate::command::GameCommand::TrainAlternateAdvancement`],
+    /// [`crate::command::GameCommand::ActivateAlternateAdvancement`],
+    /// [`crate::command::GameCommand::SetAlternateAdvancementSplit`]).
+    AlternateAdvancement,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 82] = [
+    pub const ALL: [Self; 83] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -792,6 +797,7 @@ impl Capability {
         Self::Titling,
         Self::BazaarSearching,
         Self::Tasks,
+        Self::AlternateAdvancement,
     ];
 }
 
@@ -2057,6 +2063,16 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// An AA train, activation or split was not sent, and why.
+    AlternateAdvancementRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not, in this library's words.
+        reason: String,
+        /// Why not, for a host to word; None where the session refused it
+        /// as it refuses any command (an earlier admission, not offered).
+        refusal: Option<crate::alternate_advancement::Refusal>,
+    },
     /// A roll, emote, assist or surname was not sent, and why.
     SocialRefused {
         /// Admission from the request.
@@ -2787,6 +2803,7 @@ mod tests {
             Capability::Titling => 79,
             Capability::BazaarSearching => 80,
             Capability::Tasks => 81,
+            Capability::AlternateAdvancement => 82,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

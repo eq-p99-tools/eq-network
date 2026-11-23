@@ -538,6 +538,49 @@ Quarm shares the decoding, assumed as TAKP, but isn't offered it until its
 own attended row; remote TAKP waits for the local row. An unreadable Mac
 packet withdraws as its Titanium kind does, and a timer withdraws nothing.
 
+Since checklist 6.556 the session can send Titanium's AA requests, though
+no server type lists them yet: `Capability::AlternateAdvancement` waits for
+its local EQEmu live row, and until then the three commands are refused as
+not offered. `ClientCommand::TrainAlternateAdvancement { rank_id }` buys a
+rank, `ActivateAlternateAdvancement { rank_id, target }` uses an owned
+rank's ability, and `SetAlternateAdvancementSplit { percentage }` sets the
+share of experience that goes to AAs, each as one 16-byte `OP_AAAction`
+0x0681 {action, ability, target, exp}: train is action 3 with the rank id,
+activate action 0 with the owned rank id and the target's spawn or 0, a
+split of 1 to 100 action 1, and 0 action 2 (off). Which ids and actions the
+program itself sends is read R49-39, inferred until then.
+
+The session checks each request against a bounded, never published view of
+what this admission's facts said: the definitions offered (at most 4096;
+one past that is not kept, so a train for it is refused), the latest
+selections and the latest unspent points (`Update::Points` or
+`Update::Progress`, whichever came last). It follows every withdrawal and a
+new admission starts it afresh. Each check is one EQEmu makes too, and what
+is not known refuses. A train goes only for an offered rank the player does
+not own, whose rank before it the table shows owned, which costs no more
+than the unspent points, whose level is no higher than the player's current
+level and whose class mask has the player's class. EQEmu's table offers each
+ability's owned rank and the next, or its first, so a rank another offered
+rank follows is owned; otherwise the selections name it, by exact id in
+`OP_RespondAA` and by an ability's first rank in the profile. So a maxed
+ability above rank one, which has no following rank in the table and which
+the profile names only by its first rank, reads as not owned until an
+`OP_RespondAA` names its exact rank: until then it can't be activated. The
+local live row checks that the zone entry brings an `OP_RespondAA` (our
+client sends `OP_UpdateAA`); if it brings none, the offer waits on a fix.
+Prerequisite abilities are left to the server. One train is in flight at a time, until
+EQEmu's answer (`OP_RespondAA`, then `OP_AAExpUpdate`) or 5 seconds. An
+activation goes for an owned rank with an ability (`spellid` not -1), at
+most one a second; a split change at most one a second, and above 100 is
+refused where EQEmu would quietly set 0. The waits and paces are ours,
+inferred. A refusal is `WorldEvent::AlternateAdvancementRefused
+{ session_id, reason, refusal }`: `refusal` is an
+`alternate_advancement::Refusal` for the host to word, and None where the
+session refused the command as it refuses any (an earlier admission, not
+offered); `reason` says the same in this library's words. The server's own
+answers (the gain line, the reuse wait, the split's on and off lines) reach
+the host as its other lines do.
+
 Malformed packets withdraw their affected observation. An unreadable
 profile withdraws its points with its selections (`Update::Points(None)`),
 unreadable experience withdraws the last (`Update::Progress(None)`), and an
