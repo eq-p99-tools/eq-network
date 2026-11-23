@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Every Titanium door is a wall (6.607), as the program's collision move filter
+  0x42cdb1 has it (portcullis follow-up read, correcting R1): a shut
+  portcullis of open types 60-77 now stops the player like a hinged door.
+  `Solidity::of` gives `wall: true` for every open type; its floor rule is
+  unchanged. No API change.
+
 - Word a spoken tongue's skill as the Titanium program does (6.495, reads
   R49-4 and R49-4b), for the client's languages slice.
   - **Breaking:** `Tongue::spoken` takes a `chat::Speaker` (the game master
