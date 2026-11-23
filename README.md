@@ -90,8 +90,8 @@ each.
 | `BazaarSearching` | Searching the Bazaar's traders, read only (source-derived on TAKP and Quarm, not yet checked live) | – | – | Yes | Yes |
 | **People** | | | | | |
 | `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
-| `Who` | `/who` | Yes | Yes | – | – |
-| `FriendsWho` | Friends online | Yes | Yes | – | – |
+| `Who` | `/who` | Yes | Yes | Yes | Yes |
+| `FriendsWho` | Friends online | Yes | Yes | Yes | Yes |
 | `Grouping` | Groups | Yes | Yes | Yes | Yes |
 | `Raiding` | Raids | – | Yes | – | – |
 | `Listing` | AFK, anonymous and roleplaying | Yes | Yes | Yes | Yes |

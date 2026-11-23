@@ -62,7 +62,7 @@ use super::{
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
-    who::{FriendsWho, Who},
+    who::{FriendsWho, PacedWho, Who},
     wire::{EqMac, Rof2, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
@@ -1717,6 +1717,23 @@ impl ServerType for Quarm {
         offer(shared::combat(ServerProtocol::Quarm))
     }
 
+    /// `/who all` and friends in the `EQMac` program's packets
+    /// ([`eq_network_game::who::eqmac`], [`eq_network_game::friends::eqmac_request`]),
+    /// from Quarm's own handlers at SecretsOTheP/EQMacEmu fc75fcf: `Handle_OP_WhoAllRequest`
+    /// drops a body other than the 140-byte `Who_All_Struct`, and
+    /// `Handle_OP_FriendsWho` takes the comma list ending in NUL. The world's
+    /// `ClientList::SendWhoAll` and `SendFriendsWho` answer in one
+    /// `OP_WhoAllResponse`, or the zone sends string 5029 when nobody
+    /// matched. Quarm puts its challenge-mode
+    /// flags before a name (`[SF] Name`), searches those modes by the words
+    /// "solo", "selffound" and "hardcore", lets anyone look a zone up by
+    /// name, and gives zones its client's numbers (`GetClientZoneID`).
+    /// One query at a time, at least a second apart, a pace
+    /// of the session's own ([`PacedWho`]). Source-derived, not live (6.583).
+    fn who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(PacedWho::default()))
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -2067,6 +2084,20 @@ impl ServerType for Takp {
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::translocate(std::time::Duration::from_secs(3600)))
+    }
+
+    /// `/who all` and friends in the `EQMac` program's packets
+    /// ([`eq_network_game::who::eqmac`], [`eq_network_game::friends::eqmac_request`]),
+    /// from TAKP's own handlers at EQMacEmu/Server 44afcbf: `Handle_OP_WhoAllRequest`
+    /// drops a body other than the 140-byte `Who_All_Struct`, and
+    /// `Handle_OP_FriendsWho` takes the comma list ending in NUL. The world's
+    /// `ClientList::SendWhoAll` and `SendFriendsWho` answer in one
+    /// `OP_WhoAllResponse`, or the zone sends string 5029 when nobody
+    /// matched. TAKP lets only a game master look a
+    /// zone up by name. One query at a time, at least a second apart, a pace
+    /// of the session's own ([`PacedWho`]). Source-derived, not live (6.583).
+    fn who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(PacedWho::default()))
     }
 
     /// Corpse looting in the `EQMac` program's packets
@@ -2518,10 +2549,12 @@ mod tests {
         // posture/camp lifecycle, abilities, casting, basic spellbook and
         // personal inventory actions, and, each from its own handlers, its
         // giving, groups, listing and translocate (6.576); both search the
-        // Bazaar from source (6.580). Other features await their own evidence.
+        // Bazaar from source (6.580), and each answers `/who all` and friends
+        // from its own handlers (6.583). Other features await their own
+        // evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 23);
+        assert_eq!(quarm.features(&setup).len(), 24);
         assert_eq!(
             offers(quarm),
             [
@@ -2541,6 +2574,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -2549,12 +2583,13 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::FriendsWho,
                 Capability::ApplyingPoison,
                 Capability::BazaarSearching,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 25);
+        assert_eq!(takp.features(&setup).len(), 26);
         assert_eq!(
             offers(takp),
             [
@@ -2574,6 +2609,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -2583,6 +2619,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::FriendsWho,
                 Capability::ApplyingPoison,
                 Capability::BazaarSearching,
             ]
