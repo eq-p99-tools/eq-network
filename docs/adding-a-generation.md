@@ -150,6 +150,13 @@ unreachable because validation refuses the generation:
   -1. What the `RoF2` program does with the action's gem, slot and item-cast type, the stun's
   constants, the illusion's bytes 70 and 71 and its constant, and the Drakkin words is a read
   still owed.
+- Its buffs (`rof2_buffs`, 6.527): the buff update in its 100-byte form, whose fade word the
+  encoder narrows to 1 or 2 (read as Titanium's 1 and 0, inferred) and which carries no
+  counters; the icon messages, its own window and a target's, which Titanium is not sent and
+  which give `WorldEvent::BuffIcons`; and the pet's window in the icon messages' shape, read
+  into Titanium's pet buffs. The server's buff slots are `RoF2`'s own. How the `RoF2` program
+  applies the fade words, and what it does with the update's hit count, location and slot
+  data, is a read still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

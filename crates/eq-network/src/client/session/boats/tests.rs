@@ -247,3 +247,109 @@ fn a_late_acquire_that_expires_during_receive_still_sends_release_cleanup() {
     assert_eq!(outcome.sent[0].body, [8, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(outcome.unreliable, []);
 }
+
+#[test]
+fn a_take_asked_again_while_pending_goes_again_and_never_extends_the_wait() {
+    let mut first_sent = None;
+    let outcome = testing::run(|out| {
+        let (mut world, sample) = admitted(out, 141);
+        let mut boats = Boats::default();
+        let take = acquire(sample, world.body.position().unwrap());
+        boats.handle(&take, &mut world, out).unwrap();
+        first_sent = Some(Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+        for _ in 0..9 {
+            boats.handle(&take, &mut world, out).unwrap();
+        }
+        assert!(matches!(
+            boats.control.as_ref().unwrap().state(),
+            ControlState::Acquiring { .. }
+        ));
+        // The deadline is still the first take's: at it, the wait ends.
+        let mut later = boats.control.take().unwrap();
+        later.expire(first_sent.unwrap() + WAIT);
+        assert!(matches!(later.state(), ControlState::Unconfirmed(_)));
+        boats.control = Some(Control::new(5));
+    });
+    // Ten clicks, ten identical takes, and nothing else.
+    assert_eq!(
+        outcome
+            .sent
+            .iter()
+            .map(|packet| (packet.opcode, packet.body.clone()))
+            .collect::<Vec<_>>(),
+        vec![(0x2c81, vec![8, 0, 0, 0, 1, 0, 0, 0]); 10]
+    );
+}
+
+#[test]
+fn one_echo_grants_a_repeated_take_and_later_echoes_change_nothing() {
+    let echo = |boat_id, action| {
+        Message::Event(WorldEvent::BoatControl(ControlBoat {
+            boat_id,
+            action,
+            unknown: [0; 3],
+        }))
+    };
+    let outcome = testing::run(|out| {
+        let (mut world, sample) = admitted(out, 141);
+        let mut boats = Boats::default();
+        let take = acquire(sample, world.body.position().unwrap());
+        boats.handle(&take, &mut world, out).unwrap();
+        boats.handle(&take, &mut world, out).unwrap();
+        boats
+            .observe(&echo(8, Action::Acquire), &mut world, out)
+            .unwrap();
+        let granted = boats.control.as_ref().unwrap().state();
+        assert!(matches!(granted, ControlState::Acquired(_)));
+        boats
+            .observe(&echo(8, Action::Acquire), &mut world, out)
+            .unwrap();
+        assert_eq!(boats.control.as_ref().unwrap().state(), granted);
+    });
+    // One state change told for the grant, and no line for the second echo.
+    let states = outcome
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                ClientEvent::World(WorldEvent::BoatControlState {
+                    state: ControlState::Acquired(_),
+                    ..
+                })
+            )
+        })
+        .count();
+    assert_eq!(states, 1);
+    assert!(!outcome
+        .events
+        .iter()
+        .any(|event| matches!(event, ClientEvent::Diagnostic(_))));
+}
+
+#[test]
+fn another_boats_take_while_one_is_pending_stays_refused() {
+    let outcome = testing::run(|out| {
+        let (mut world, sample) = admitted(out, 141);
+        let mut boats = Boats::default();
+        boats
+            .handle(
+                &acquire(sample, world.body.position().unwrap()),
+                &mut world,
+                out,
+            )
+            .unwrap();
+        // Another incarnation of the same number is another vessel.
+        let mut other = sample;
+        other.incarnation += 1;
+        boats
+            .handle(
+                &acquire(other, world.body.position().unwrap()),
+                &mut world,
+                out,
+            )
+            .unwrap();
+    });
+    assert_eq!(outcome.sent.len(), 1);
+}

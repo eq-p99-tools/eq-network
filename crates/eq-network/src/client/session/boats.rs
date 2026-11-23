@@ -79,14 +79,29 @@ impl Boats {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        // A take for the incarnation already being taken goes again, as the
+        // program's does (6.533, inferred from read R35 in combination: the
+        // take sets nothing before its echo, 0x4a7356's held-boat test
+        // [0x905cf8] fails while it waits, and gate 0x494c09 passes on a
+        // race-141 carrier before its busy checks). Stock EQEmu echoes each.
+        let resend = self.control.as_ref().is_some_and(|control| {
+            control.state()
+                == ControlState::Acquiring {
+                    vessel: Vessel {
+                        spawn_id: sample.spawn_id,
+                        incarnation: sample.incarnation,
+                    },
+                }
+        });
         let check = || -> Result<Vessel> {
             ensure!(
-                self.control.as_ref().is_none_or(|control| !matches!(
-                    control.state(),
-                    ControlState::Acquiring { .. }
-                        | ControlState::Acquired(_)
-                        | ControlState::Releasing(_)
-                )),
+                resend
+                    || self.control.as_ref().is_none_or(|control| !matches!(
+                        control.state(),
+                        ControlState::Acquiring { .. }
+                            | ControlState::Acquired(_)
+                            | ControlState::Releasing(_)
+                    )),
                 "a boat control request is already active"
             );
             let report = world
@@ -125,14 +140,22 @@ impl Boats {
                 incarnation: sample.incarnation,
             };
             ensure!(
-                self.control
-                    .as_ref()
-                    .is_none_or(|control| control.may_acquire(vessel)),
+                resend
+                    || self
+                        .control
+                        .as_ref()
+                        .is_none_or(|control| control.may_acquire(vessel)),
                 "the earlier boat acquire is unresolved; release and observe its echo before retrying"
             );
             Ok(vessel)
         };
         match check() {
+            // The same take once more: its pending entry, deadline and
+            // fence stay the first one's, so clicks never extend the wait.
+            Ok(vessel) if resend => out.request(&Request::ControlBoat {
+                spawn_id: vessel.spawn_id,
+                intent: Intent::Acquire,
+            }),
             Ok(vessel) => self.send(vessel, Intent::Acquire, Instant::now(), world, out),
             Err(error) => out
                 .log

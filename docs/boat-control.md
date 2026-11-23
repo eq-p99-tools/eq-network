@@ -33,7 +33,12 @@ or permission. The generic in-use line lacks request/vessel identity and is
 not treated as a correlated result. Timeout, release, cancellation and spawn
 retirement prevent a late acquire echo from restoring local control. The wire has no nonce, so an unresolved same-ID acquire cannot be retried
 until a release echo fences the older exchange. That boundary is explicitly
-refused before sending. A completed reliable, ordered release permits ordinary
+refused before sending. The one exception is the same take asked again while
+it is still `Acquiring` the same incarnation, as the program's second
+interaction sends one (6.533, inferred from read R35 in combination): the
+same 8-byte take goes again with no new pending entry, deadline or fence, so
+repeated takes never extend the five-second wait, and the first matching
+echo grants while later ones find nothing pending. A completed reliable, ordered release permits ordinary
 release/reacquire cycles. EQEmu uses default reliable stream 0 for the echo,
 processes received applications in order, and this client's modern transport
 delivers only the next reliable sequence while discarding past duplicates.

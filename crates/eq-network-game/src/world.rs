@@ -856,6 +856,8 @@ pub enum WorldEvent {
     },
     /// A server-owned slot replacement or fade for an entity.
     Buff(crate::buffs::BuffUpdate),
+    /// A spawn's buff icons, as `RoF2`'s icon messages give them (6.527).
+    BuffIcons(crate::buffs::BuffIcons),
     /// Progress of an exact, admission-scoped buff cancellation selection.
     BuffCancellation(crate::buffs::cancel::Update),
     /// A name suggestion, or no suggestion when refused, malformed or timed out.

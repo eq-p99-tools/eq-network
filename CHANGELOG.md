@@ -20,6 +20,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same helper, with the same numbers.
   **Breaking:** a new field on `GameCommand::ClickDoor`.
 
+- A boat take asked again while one is pending goes again (6.533). The
+  program sets nothing before a take's echo, so its held-boat test
+  (`[0x905cf8]` in 0x4a7356) fails while the take waits and a second
+  interaction sends a second take; gate 0x494c09 passes on a race-141 carrier
+  before its busy checks. That is inferred from read R35's pieces in
+  combination, not read as one path. The session now sends the same 8-byte
+  `OP_ControlBoat` take for the same incarnation, leaving the pending entry,
+  its 5 s deadline and the fence as the first take set them, so repeated
+  clicks never extend the wait; stock `EQEmu` echoes each take, one echo
+  grants and later ones change nothing. A take for another vessel while one
+  is pending stays refused.
+- Read RoF2's buffs as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.527). The new `rof2_buffs` module reads `OP_Buff` (0x659c, 100
+  bytes) into Titanium's `BuffUpdate`: fade word 1 is `FadeBySpell` and 2
+  `BySpell` (inferred as Titanium's readings of the server's 1 and 0), the
+  float bard modifier reads back as the server's byte, and the counters
+  read 0, since the encoder sends none. `OP_BuffCreate` (0x3377) and
+  `OP_TargetBuffs` (0x4f4b) give the new `WorldEvent::BuffIcons` (the
+  spawn, the window, whole list or one slot, the tick timer and each
+  slot's spell, ticks, hits and caster), and `OP_PetBuffWindow` (0x5882)
+  gives Titanium's `PetBuffs`, refusing a body whose count and entries
+  differ. Coverage lists the four. An admitted RoF2 session hands the host
+  each and still sends and offers nothing.
 - Pace all chat a host asks for (6.523). Every `SendChat`,
   `SendChatInAdmission` and `ChatChannel` goes through one pace that spans
   zones: at most 10 lines in any 5 s, and at most 12 shout, auction,
