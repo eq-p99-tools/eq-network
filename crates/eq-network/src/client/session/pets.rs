@@ -17,6 +17,20 @@ use eq_network_game::{
 pub(super) enum PetOrderSet {
     Classic,
     Expanded,
+    /// TAKP's and Quarm's: every command their handlers know
+    /// ([`PetCommand::on_eqmac`]; 6.595).
+    EqMac,
+}
+
+impl PetOrderSet {
+    /// Whether the server type takes the command.
+    const fn allows(&self, order: PetCommand) -> bool {
+        match self {
+            Self::Classic => order.in_classic_order_set(),
+            Self::Expanded => true,
+            Self::EqMac => order.on_eqmac(),
+        }
+    }
 }
 
 /// Projects the entity table's commandable pet and sends its orders.
@@ -118,7 +132,7 @@ impl Feature for Pets {
         else {
             return Ok(());
         };
-        if matches!(self.orders, PetOrderSet::Classic) && !order.in_classic_order_set() {
+        if !self.orders.allows(order) {
             return actions::refuse(
                 command,
                 "That pet command is unavailable on this server",

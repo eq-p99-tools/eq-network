@@ -1525,6 +1525,18 @@ Quarm and TAKP offer `Corpses` the same way (6.591), from Quarm fc75fcf and TAKP
   refuses it.
 - **Refusals.** The local refusals of a consent cite no string numbers here.
 
+Quarm and TAKP offer `Pets` the same way (6.595), from both servers' identical
+`Handle_OP_PetCommands` and `zone/pets.h` at Quarm fc75fcf and TAKP 44afcbf.
+- **Commands.** Each is the 8-byte command and target on 0x4542, with
+  Titanium's numbers. Taunt on (13), no cast (18) and focus (19) fall to the
+  servers' default and are refused locally. Hold and feign go as asked, and
+  the server decides by the player's AAs.
+- **Ownership.** A spawn's owner comes from its record's `petOwnerId` (+18)
+  in the zone's spawn list and in a new spawn, and from charm.
+- **Quarm alone** refuses every command but get lost while the player is
+  invisible or hidden, in the pet's own words.
+- **Pace.** None (open row 6.595a).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs
