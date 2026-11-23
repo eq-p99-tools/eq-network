@@ -97,12 +97,13 @@ pub struct PlayerState {
     /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
     pub languages: Option<Vec<u8>>,
     /// How drunk the player is, by the profile's `intoxication`
-    /// (`common/patches/titanium_structs.h`'s u32 at 128; TAKP's `EQMac`
-    /// `PlayerProfile_Struct` byte at 4968), when decoded. Read R49-4 takes
-    /// the value the program shifts right by two and takes off a spoken
-    /// tongue's skill as this one (inferred: the program reads it from its
-    /// own copy of the profile). No later change of it is decoded, so it
-    /// holds until the next zone-in.
+    /// (`common/patches/titanium_structs.h`'s u32 at 128; the `EQMac`
+    /// profile's byte at 4968, TAKP 44afcbf and Quarm fc75fcf), when
+    /// decoded. Read R49-4 takes the value the program shifts right by two
+    /// and takes off a spoken tongue's skill as this one (inferred: the
+    /// program reads it from its own copy of the profile). The servers raise
+    /// it on a drink without telling the client, so it holds until the next
+    /// zone-in; a drink after zoning leaves it low (known shortfall).
     pub intoxication: Option<u32>,
     /// The disciplines the player knows, by spell ID, in the list's slots
     /// (100, and `RoF2`'s 300), 0 for an empty one, when decoded: Titanium's

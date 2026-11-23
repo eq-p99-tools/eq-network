@@ -531,8 +531,9 @@ fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
     Ok(crate::group::profile_members(&data[PROFILE_GROUP], &player))
 }
 
-/// Where the profile keeps the player's intoxication, one byte (TAKP's
-/// `PlayerProfile_Struct` `intoxication`).
+/// Where the profile keeps the player's intoxication, one byte (`intoxication`
+/// at 4968 in TAKP's `PlayerProfile_Struct` at 44afcbf and Quarm's
+/// `common/patches/mac_structs.h` at fc75fcf).
 const PROFILE_INTOXICATION: usize = 4968;
 /// Where the profile lists the player's languages: the 26 TAKP and Quarm
 /// fill (`MAX_PP_LANGUAGE`; `common/patches/mac.cpp` copies 26) of the
