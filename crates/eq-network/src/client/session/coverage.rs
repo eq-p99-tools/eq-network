@@ -313,6 +313,13 @@ const BAZAAR_SEARCH: &[Part] = &[Part(
     ),
 )];
 
+/// What `OP_TraderShop`'s reader leaves (6.558): the admission to browse
+/// a trader is read.
+const TRADER_SHOP: &[Part] = &[Part(
+    "the buy's echo (a TraderBuy_Struct on the same opcode)",
+    Reason::Planned(Step::Bazaar),
+)];
+
 /// What `OP_TaskDescription`'s reader leaves (gap list section 5, 6.546).
 const TASK_DESCRIPTION: &[Part] = &[
     Part(
@@ -981,10 +988,17 @@ mod tests {
         let mut log = Events::new(&config, &mut handler);
         log.begin_stage(GapStage::Zone).unwrap();
         let mut unheard = Unheard::new(Stage::Zone);
-        // A trader's sign, still planned, and the search's unknown kind and
-        // unreadable rows.
+        // The trader messages, still planned; a trader's sign that could
+        // not be read; and the search's unknown kind and unreadable rows.
         unheard
-            .tell(&Titanium, 0x2844, &[1, 2, 3], &mut log)
+            .tell(&Titanium, 0x524e, &[1, 2, 3], &mut log)
+            .unwrap();
+        let sign = Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error: "trader sign of another length".into(),
+        };
+        unheard
+            .sift(&Titanium, (0x2844, &[1, 2, 3]), vec![sign], &mut log)
             .unwrap();
         let unreadable = Message::Unreadable {
             part: eq_network_game::message::Part::World,
@@ -1008,7 +1022,12 @@ mod tests {
             .collect();
         assert_eq!(
             told,
-            [(0x2844, 3, true), (0x1ee9, 95, true), (0x1ee9, 95, true)]
+            [
+                (0x524e, 3, true),
+                (0x2844, 3, true),
+                (0x1ee9, 95, true),
+                (0x1ee9, 95, true)
+            ]
         );
     }
 

@@ -127,6 +127,9 @@ impl Features {
         for feature in &mut self.provided {
             feature.explain(message, world);
         }
+        // Where no feature keeps the inventory, a merchant's item is still
+        // the merchant's.
+        super::inventory::merchant_view(message);
     }
 
     /// Lets every feature record a message from before the zone admitted the
@@ -944,7 +947,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 137;
+    const KINDS: usize = 139;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1025,6 +1028,8 @@ mod tests {
             ClientCommand::TrainAlternateAdvancement { .. } => 134,
             ClientCommand::ActivateAlternateAdvancement { .. } => 135,
             ClientCommand::SetAlternateAdvancementSplit { .. } => 136,
+            ClientCommand::BrowseTrader { .. } => 137,
+            ClientCommand::EndBrowse { .. } => 138,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1664,6 +1669,11 @@ mod tests {
                 criteria: eq_network_game::bazaar::BazaarCriteria::default(),
             },
             ClientCommand::BazaarWelcome { session_id },
+            ClientCommand::BrowseTrader {
+                session_id,
+                trader: 40,
+            },
+            ClientCommand::EndBrowse { session_id },
             ClientCommand::Emote {
                 session_id,
                 text: "waves.".into(),
@@ -2108,31 +2118,21 @@ mod tests {
                     .contains(&crate::world::Capability::ServerFilters)));
                 continue;
             }
-            if matches!(command, ClientCommand::SendFeedback { .. }) {
-                // Built and tested, and listed by no server type until its
-                // own live check (6.511f).
-                assert!(!servers.iter().any(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::SendingFeedback)));
-                continue;
-            }
-            if command.capability() == Some(crate::world::Capability::AlternateAdvancement) {
-                // Built and tested, and listed by no server type until its
-                // own local EQEmu live row (6.556).
-                assert!(!servers.iter().any(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::AlternateAdvancement)));
-                continue;
-            }
-            if matches!(
-                command,
-                ClientCommand::BazaarSearch { .. } | ClientCommand::BazaarWelcome { .. }
-            ) {
-                // Built and tested, and listed by no server type until its
-                // local live row (6.550a).
-                assert!(!servers.iter().any(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::BazaarSearching)));
+            // Built and tested, and listed by no server type until each
+            // one's own live check: feedback (6.511f), AAs (6.556), the
+            // Bazaar's search (6.550a) and browsing a trader (6.558a).
+            if let Some(unlisted) = command.capability().filter(|capability| {
+                [
+                    crate::world::Capability::SendingFeedback,
+                    crate::world::Capability::AlternateAdvancement,
+                    crate::world::Capability::BazaarSearching,
+                    crate::world::Capability::BazaarBrowsing,
+                ]
+                .contains(capability)
+            }) {
+                assert!(!servers
+                    .iter()
+                    .any(|features| features.capabilities().contains(&unlisted)));
                 continue;
             }
             if Features::is_departure(&command) {

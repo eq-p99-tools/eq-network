@@ -518,6 +518,15 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Browsing a trader's wares in the Bazaar, read only. It comes before
+    /// the inventory, which takes a merchant's list from the same packets.
+    /// Stock `EQEmu` alone has it on Titanium, as [`ServerType::bazaar`].
+    /// No server offers it until the local live row passes (6.558a); then
+    /// stock `EQEmu` offers `offer(Box::<Browsing>::default())`.
+    fn trader_browsing(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -612,6 +621,7 @@ pub(super) trait ServerType: Sync {
             self.casting(setup),
             self.buff_cancellation(setup),
             self.spellbook(setup),
+            self.trader_browsing(setup),
             self.inventory(setup),
             self.motion(setup),
             self.posture(setup),
@@ -2817,6 +2827,28 @@ mod tests {
         assert_eq!(
             super::super::bazaar::Bazaar::default().capabilities(),
             [Capability::BazaarSearching]
+        );
+    }
+
+    #[test]
+    fn no_server_offers_trader_browsing_before_its_live_row() {
+        // Built and tested from source (6.558); stock EQEmu offers it once
+        // the local live row passes.
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::BazaarBrowsing),
+                "{protocol:?}"
+            );
+        }
+        assert_eq!(
+            super::super::bazaar::Browsing::default().capabilities(),
+            [Capability::BazaarBrowsing]
         );
     }
 

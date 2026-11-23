@@ -10,7 +10,7 @@ use super::{
     BAZAAR_SEARCH, BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK,
     MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
     RENAME, REWARD, SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
-    TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
+    TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRADER_SHOP, TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -156,7 +156,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x267c => sent("OP_MoneyUpdate", EQEMU, Read(&[Zone])),
         0x26ab => sent("OP_PlayMP3", EQEMU, Read(&[Zone])),
         0x27b3 => sent("OP_TributeMoney", EQEMU, unasked(LaterSystems)),
-        0x2844 => sent_private("OP_BecomeTrader", EQEMU, planned(Bazaar)),
+        // Other players' trader signs (6.558); P99 has no Bazaar.
+        0x2844 => sent_private("OP_BecomeTrader", EQEMU, Read(&[Zone])),
         0x28aa => sent("OP_DzCompass", EQEMU, planned(LaterSystems)),
         0x28e1 => sent("OP_RequestDuel", EQEMU, Partly(&[Zone], DUEL_REQUEST)),
         0x2acf => sent("OP_Animation", EQEMU, Read(&[Zone])),
@@ -188,7 +189,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         ),
         0x34c1 => sent("OP_TradeCoins", EQEMU, Read(&[Zone])),
         0x358e => sent("OP_LevelAppearance", EQEMU, Read(&[Zone])),
-        0x35e8 => sent_private("OP_TraderShop", EQEMU, planned(Bazaar)),
+        // The admission to browse a trader (6.558).
+        0x35e8 => sent_private("OP_TraderShop", EQEMU, Partly(&[Zone], TRADER_SHOP)),
         // Read on a local session; off one, dropped until the AA offer lifts
         // (6.547 follow-up row).
         0x367d => sent("OP_SendAATable", EQEMU, Read(&[Zone])),
@@ -386,7 +388,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // Nothing in EQEmu sends it today.
         0x7c59 => sent("OP_GuildMemberRename", EQEMU, Read(&[Zone])),
         0x7cba => sent("OP_EnterWorld", EQEMU, Read(&[World])),
-        0x7e03 => sent("OP_ShopEnd", EQEMU, planned(Bazaar)),
+        // The trader being browsed left trader mode (6.558).
+        0x7e03 => sent("OP_ShopEnd", EQEMU, Read(&[Zone])),
         0x7fe4 => sent("OP_MoneyOnCorpse", EQEMU, Read(&[Zone])),
         0x8258 => sent("OP_Translocate", EQEMU, Partly(&[Zone], TRANSLOCATE)),
         0xb4ab => sent("OP_GuildBank", EQEMU, planned(LaterSystems)),

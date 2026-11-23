@@ -1916,6 +1916,57 @@ gaps keep no sample, only opcode and length. The parcel delivery costs
 `EQEmu` sends after results (action 29) are read and dropped: only RoF and
 later have parcels.
 
+## Browsing a trader
+
+`Capability::BazaarBrowsing` is built and tested from stock `EQEmu`'s
+source and offered by no server type until its local live row passes
+(6.558a). Nothing is bought.
+
+`GameCommand::BrowseTrader { trader }` sends `OP_TraderShop` (0x35e8) as
+Titanium's `TraderClick_Struct` `{trader, 0, 0, 0}`, 16 bytes. It is
+refused with `WorldEvent::BazaarRefused`, nothing sent, outside the Bazaar;
+for a spawn that is not a player the session saw turn their trader sign on
+(`OP_BecomeTrader`) or a search answer named as a trader since the zone-in,
+and has not seen leave; beyond the generation's merchant reach, or 20 in
+3-D where that is unread (inferred, R49-42 d; `EQEmu` checks no distance);
+while a browse or a merchant's window is open, or a merchant's opening
+waits for its answer; while another click waits (10 s); and within 1 s of
+the last click (ours, inferred). A merchant may
+not open while a browse is open or a click waits. `EQEmu` does not check
+that the spawn clicked is a trader, and records the player as their one
+customer until the browse ends, which is why the session clicks only known
+traders and ends every browse it closes.
+
+The server's admission comes as `BazaarEvent::Admitted { trader, approved }`
+(a refusal's line is chat). After an approval, the trader's items come as
+`BazaarEvent::Listed(TraderListing)`: the trader, the item's serial number
+(the seventh field of the merchant item header), the price in copper, the
+count and the item. A listing of a serial already listed replaces it (a
+price cut or a re-list). `BazaarEvent::Delisted { trader, serial }` takes
+one out (`OP_TraderDelItem`, or a price of 0). Outside a browse these
+packets stay the merchant's, unchanged. `GameCommand::EndBrowse` sends
+`OP_Trader` (0x524e) action 4 as `Trader_ShowItems_Struct`, 20 bytes, which
+the server does not answer, and `BazaarEvent::BrowseEnded { trader }`
+follows at once. A zone offer, answer or handoff also ends an open browse
+with our end, sent while this zone's connection still carries it, since a
+refused zone change keeps the player as the trader's customer; a click in
+flight then stops waiting. A browse ends without our end when the server's
+`OP_ShopEnd` says the trader left trader mode (our end would free the
+trader's next customer), when their sign goes off or they despawn, and at a
+new admission (the server forgets the customer with the zone, inferred). A
+list past 80 items or an item that cannot be read is a gap and ends the
+browse with our end, so no half list is kept. An admission no click asked
+for is withheld and a gap; an approval that comes after its click stopped
+waiting is ended at once. After either approval, the run of merchant item
+packets that follows is that trader's list: it is withheld, and told once
+as a gap.
+
+Other players' signs come as `BazaarEvent::TraderSign { spawn, on }`; their
+name is not read. Titanium's spawn records carry no trader flag, so a
+trader who began before the player zoned in is known only from a search
+answer until their sign changes (inferred; how the program knows them is
+owed to R49-42 d). The trader rows' gaps keep no sample.
+
 ## Task journal
 
 Stock `EQEmu` sessions (Titanium) read the task journal the zone sends

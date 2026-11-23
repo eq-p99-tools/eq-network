@@ -1,6 +1,7 @@
-//! The Bazaar's search on stock `EQEmu`, Titanium generation: the player's
-//! search for traders' items and the server's answers, read only. No buy,
-//! no browsing of a trader and no trader mode is sent from here (6.550).
+//! The Bazaar on stock `EQEmu`, Titanium generation: the player's search
+//! for traders' items and the server's answers (6.550), and the player's
+//! browse of one trader's wares (6.558), read only. No buy and no trader
+//! mode is sent from here.
 //!
 //! Stock `EQEmu` answers a search (`Client::Handle_OP_BazaarSearch`,
 //! `Client::DoBazaarSearch`, `zone/trading.cpp`) with one `OP_BazaarSearch`
@@ -25,7 +26,7 @@
 //! `BazaarReturnDone_Struct`, `BazaarWelcome_Struct` and
 //! `BazaarDeliveryCost_Struct` (`common/eq_packet_structs.h`), packed.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 
 /// Titanium's `OP_BazaarSearch`: the player's search and welcome request,
@@ -216,8 +217,25 @@ pub struct BazaarListing {
     pub stat: u32,
 }
 
-/// What the server says of a Bazaar search.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+/// One item on the trader's list while the player browses them, as the
+/// server listed it: the price a later buy must send exactly.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TraderListing {
+    /// The trader's spawn in the zone.
+    pub trader: u16,
+    /// The item's serial number, which names this one item of the trader's.
+    pub serial: u32,
+    /// The trader's price for one, in copper.
+    pub price: u32,
+    /// How many: the stack's count, or 1.
+    pub count: u32,
+    /// The item, as the server sent it.
+    pub item: crate::inventory::InventoryItem,
+}
+
+/// What the server says of the Bazaar: a search's answers, and a browse
+/// of one trader.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum BazaarEvent {
     /// Items a search found, in the server's order.
     Results(Vec<BazaarListing>),
@@ -232,10 +250,48 @@ pub enum BazaarEvent {
         /// Items for sale.
         items: u32,
     },
+    /// The server's answer to the player's click on a trader
+    /// ([`browse`]): whether it lets the player browse them. A refusal's
+    /// own line comes as chat.
+    Admitted {
+        /// The trader clicked.
+        trader: u16,
+        /// Whether the browse is open.
+        approved: bool,
+    },
+    /// Another player's trader sign went on or off
+    /// (`OP_BecomeTrader`). Their name is not read: the host has the
+    /// spawn's.
+    TraderSign {
+        /// The player's spawn.
+        spawn: u16,
+        /// Whether they are a trader now.
+        on: bool,
+    },
+    /// The server's `OP_ShopEnd`: the trader being browsed left trader
+    /// mode (`Client::TraderEndTrader`). The session tells the host
+    /// [`BazaarEvent::BrowseEnded`] in its place.
+    ShopEnded,
+    /// An item on the list of the trader being browsed, new or changed: a
+    /// price cut or a re-list replaces the entry of the same serial.
+    Listed(Box<TraderListing>),
+    /// An item left the list of the trader being browsed: sold, withdrawn
+    /// or priced at 0.
+    Delisted {
+        /// The trader.
+        trader: u16,
+        /// The item's serial number.
+        serial: u32,
+    },
+    /// The browse of a trader is over, and their list is forgotten.
+    BrowseEnded {
+        /// The trader.
+        trader: u16,
+    },
 }
 
 /// What a server's `OP_BazaarSearch` says.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Answer {
     /// Something for the host.
     Event(BazaarEvent),
@@ -333,6 +389,102 @@ fn counted(text: &str) -> (String, Option<u32>) {
                 .flatten()
         })
         .unwrap_or_else(|| (text.to_owned(), None))
+}
+
+/// Titanium's `OP_TraderShop`: the player's click on a trader, and the
+/// server's admission.
+pub const BROWSE_OPCODE: u16 = 0x35e8;
+/// Titanium's `OP_Trader`: here, the player's end of a browse.
+pub const TRADER_OPCODE: u16 = 0x524e;
+/// Titanium's `OP_BecomeTrader`: a player's trader sign going on or off.
+pub const SIGN_OPCODE: u16 = 0x2844;
+/// Titanium's `OP_ShopEnd`: from the server, the trader being browsed left
+/// trader mode.
+pub const SHOP_END_OPCODE: u16 = crate::merchant::END_OPCODE;
+
+/// The length of the click and its answer (`TraderClick_Struct`).
+pub const BROWSE_LENGTH: usize = 16;
+/// The length of a browse's end (`Trader_ShowItems_Struct`).
+pub const END_BROWSE_LENGTH: usize = 20;
+/// The length of a trader sign (`BecomeTrader_Struct`): the spawn, the
+/// action and the 64-byte name.
+pub const SIGN_LENGTH: usize = 4 + 4 + 64;
+/// `OP_Trader`'s action that ends a browse (`EndTransaction`).
+const END_TRANSACTION: u32 = 4;
+/// The most items a trader lists (`EQEmu`'s `BAZAAR_SIZE`).
+pub const MOST_LISTED: usize = 80;
+
+/// Builds the click on a trader (`OP_TraderShop`, Titanium's
+/// `TraderClick_Struct`): the trader's spawn, action 0, a word 0 and no
+/// approval. Titanium's decoder reads every body as a click
+/// (`DECODE(OP_TraderShop)`), and the server does not check that the
+/// spawn is a trader (`Client::Handle_OP_TraderShop`), so only a spawn
+/// whose sign is on may be sent.
+#[must_use]
+pub fn browse(trader: u16) -> [u8; BROWSE_LENGTH] {
+    let mut body = [0; BROWSE_LENGTH];
+    body[..4].copy_from_slice(&u32::from(trader).to_le_bytes());
+    body
+}
+
+/// Builds the end of a browse (`OP_Trader` action 4, Titanium's
+/// `Trader_ShowItems_Struct`): the action, the trader's spawn and three
+/// words 0. The server frees the trader (`WithCustomer(0)`) and answers
+/// nothing a Titanium client reads; it refuses another customer while
+/// one is recorded, the same one too, so every browse must end with it.
+#[must_use]
+pub fn end_browse(trader: u16) -> [u8; END_BROWSE_LENGTH] {
+    let mut body = [0; END_BROWSE_LENGTH];
+    body[..4].copy_from_slice(&END_TRANSACTION.to_le_bytes());
+    body[4..8].copy_from_slice(&u32::from(trader).to_le_bytes());
+    body
+}
+
+/// Reads the server's `OP_TraderShop`: the admission to browse a trader.
+/// Titanium's encoder writes the trader, action 0 and the approval, 0 or
+/// 1 (`ENCODE(OP_TraderShop)`).
+///
+/// # Errors
+/// Rejects another length (a buy's echo, which is not read yet), another
+/// action, a trader past a spawn id and an approval other than 0 or 1.
+pub fn admission(body: &[u8]) -> Result<BazaarEvent> {
+    ensure!(
+        body.len() == BROWSE_LENGTH,
+        "trader shop answer of another length"
+    );
+    ensure!(word(body, 4) == 0, "trader shop answer of another action");
+    let trader = u16::try_from(word(body, 0)).context("trader past a spawn id")?;
+    let approved = match word(body, 12) {
+        0 => false,
+        1 => true,
+        _ => bail!("trader shop approval past 1"),
+    };
+    Ok(BazaarEvent::Admitted { trader, approved })
+}
+
+/// Reads `OP_BecomeTrader`: action 1 is a sign going on, 0 going off
+/// (Titanium's `ENCODE(OP_BecomeTrader)`). The name is not read.
+///
+/// # Errors
+/// Rejects another length, another action and a spawn past 16 bits.
+pub fn sign(body: &[u8]) -> Result<BazaarEvent> {
+    ensure!(body.len() == SIGN_LENGTH, "trader sign of another length");
+    let spawn = u16::try_from(word(body, 0)).context("trader sign past a spawn id")?;
+    let on = match word(body, 4) {
+        0 => false,
+        1 => true,
+        _ => bail!("trader sign of another action"),
+    };
+    Ok(BazaarEvent::TraderSign { spawn, on })
+}
+
+/// Reads the server's `OP_ShopEnd`, which is empty.
+///
+/// # Errors
+/// Rejects a body.
+pub fn shop_end(body: &[u8]) -> Result<BazaarEvent> {
+    ensure!(body.is_empty(), "shop end with a body");
+    Ok(BazaarEvent::ShopEnded)
 }
 
 fn word(body: &[u8], at: usize) -> u32 {
@@ -525,5 +677,87 @@ mod tests {
         assert_eq!(answer(&costs).unwrap(), Answer::DeliveryCosts);
         assert!(answer(&costs[..13]).is_err());
         assert_eq!(answer(&22_u32.to_le_bytes()).unwrap(), Answer::Other(22));
+    }
+
+    #[test]
+    fn the_click_and_the_end_have_the_servers_layouts() {
+        assert_eq!(
+            (BROWSE_LENGTH, END_BROWSE_LENGTH, SIGN_LENGTH),
+            (16, 20, 72)
+        );
+        let click = browse(312);
+        assert_eq!(
+            [
+                word(&click, 0),
+                word(&click, 4),
+                word(&click, 8),
+                word(&click, 12)
+            ],
+            [312, 0, 0, 0]
+        );
+        let end = end_browse(312);
+        assert_eq!(word(&end, 0), 4);
+        assert_eq!(word(&end, 4), 312);
+        assert!(end[8..].iter().all(|byte| *byte == 0));
+    }
+
+    fn answered(trader: u32, action: u32, approval: u32) -> Vec<u8> {
+        [trader, action, 0, approval]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn an_admission_is_read_by_its_length_action_and_approval() {
+        assert_eq!(
+            admission(&answered(312, 0, 1)).unwrap(),
+            BazaarEvent::Admitted {
+                trader: 312,
+                approved: true
+            }
+        );
+        assert_eq!(
+            admission(&answered(312, 0, 0)).unwrap(),
+            BazaarEvent::Admitted {
+                trader: 312,
+                approved: false
+            }
+        );
+        assert!(admission(&answered(312, 0, 2)).is_err());
+        assert!(admission(&answered(312, 7, 1)).is_err());
+        assert!(admission(&answered(70_000, 0, 1)).is_err());
+        assert!(admission(&answered(312, 0, 1)[..12]).is_err());
+        // A buy's echo is another record, not read here.
+        assert!(admission(&[0; 32]).is_err());
+    }
+
+    #[test]
+    fn a_sign_is_read_without_its_name() {
+        let mut body = vec![0; SIGN_LENGTH];
+        body[..4].copy_from_slice(&40_u32.to_le_bytes());
+        body[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        // A name with no end is not read, so it is no fault.
+        body[8..].fill(b'a');
+        assert_eq!(
+            sign(&body).unwrap(),
+            BazaarEvent::TraderSign {
+                spawn: 40,
+                on: true
+            }
+        );
+        body[4..8].copy_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(
+            sign(&body).unwrap(),
+            BazaarEvent::TraderSign {
+                spawn: 40,
+                on: false
+            }
+        );
+        body[4..8].copy_from_slice(&22_u32.to_le_bytes());
+        assert!(sign(&body).is_err());
+        assert!(sign(&body[..71]).is_err());
+        assert_eq!(shop_end(&[]).unwrap(), BazaarEvent::ShopEnded);
+        assert!(shop_end(&[0]).is_err());
     }
 }

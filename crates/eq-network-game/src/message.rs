@@ -35,6 +35,21 @@ pub enum Message {
     /// feature keeping the merchant window tells the host the places that
     /// left and each item listed.
     MerchantList(Vec<crate::merchant::MerchantItem>),
+    /// A Titanium merchant item packet (`ItemPacketMerchant`), with the
+    /// serial number its header carries: a trader's item while the player
+    /// browses them, a merchant's otherwise. The feature keeping the browse
+    /// takes it as the trader's; else the merchant's feature takes it as
+    /// `WorldEvent::Merchant`, or as unreadable.
+    MerchantView {
+        /// The serial number, where the header carries one
+        /// ([`crate::merchant::view_serial`]).
+        serial: Option<u32>,
+        /// The packet's length, for a gap.
+        length: usize,
+        /// The item as the merchant's list reads it, or why it could not
+        /// be read.
+        item: Result<Box<crate::merchant::MerchantItem>, String>,
+    },
     /// Titanium merchant update whose wire entity must be checked against
     /// the open catalog or an outstanding transaction before publication.
     MerchantScoped {
@@ -373,6 +388,9 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
         crate::bazaar::SEARCH_OPCODE => return bazaar(body, messages),
+        crate::bazaar::BROWSE_OPCODE => bazaar_event(crate::bazaar::admission(body)),
+        crate::bazaar::SIGN_OPCODE => bazaar_event(crate::bazaar::sign(body)),
+        crate::bazaar::SHOP_END_OPCODE => bazaar_event(crate::bazaar::shop_end(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
@@ -402,8 +420,24 @@ fn titanium_other(opcode: u16, body: &[u8]) -> Option<Message> {
         Ok(Some(update)) => Some(Message::Event(WorldEvent::Inventory(update))),
         Err(error) => Some(unreadable(Part::Inventory, &error)),
         Ok(None) => match crate::world::titanium_update(opcode, body) {
+            Ok(Some(WorldEvent::Merchant(crate::merchant::MerchantUpdate::Item(item)))) => {
+                Some(Message::MerchantView {
+                    serial: crate::merchant::view_serial(body),
+                    length: body.len(),
+                    item: Ok(item),
+                })
+            }
             Ok(Some(event)) => Some(Message::Event(event)),
             Ok(None) => None,
+            // Every reader before the merchant's leaves a merchant item
+            // packet alone, so its fault is the merchant's.
+            Err(error) if crate::merchant::is_item_packet(opcode, body) => {
+                Some(Message::MerchantView {
+                    serial: crate::merchant::view_serial(body),
+                    length: body.len(),
+                    item: Err(error.to_string()),
+                })
+            }
             Err(error) => Some(unreadable(Part::World, &error)),
         },
     }
@@ -700,6 +734,14 @@ fn bazaar(body: &[u8], mut messages: Vec<Message>) -> Vec<Message> {
     messages
 }
 
+/// A Bazaar event, or why its record could not be read.
+fn bazaar_event(event: anyhow::Result<crate::bazaar::BazaarEvent>) -> Message {
+    event.map_or_else(
+        |error| unreadable(Part::World, &error),
+        |event| Message::Event(WorldEvent::Bazaar(event)),
+    )
+}
+
 /// What an action says: a spell's, the spin, or a kind no server is known
 /// to send.
 fn action(action: anyhow::Result<crate::buffs::Action>) -> Message {
@@ -799,6 +841,81 @@ mod tests {
             event,
             WorldEvent::BuffSnapshot(_)
         )));
+    }
+
+    #[test]
+    fn a_merchant_item_packet_carries_its_serial() {
+        let mut fields = vec!["0".to_owned(); 159];
+        fields[1] = "Test ration".into();
+        fields[4] = "13005".into();
+        fields[5] = "25".into();
+        fields[11] = "500".into();
+        fields[154] = "-1".into();
+        let mut text = format!("1|0|30|1250|1|0|90210|0|0|0|0|\"{}\"", fields.join("|"));
+        text.push_str(&"|".repeat(10));
+        text.push('\0');
+        let mut body = crate::merchant::ITEM_PACKET_KIND.to_le_bytes().to_vec();
+        body.extend_from_slice(text.as_bytes());
+        let [Message::MerchantView {
+            serial: Some(90_210),
+            length,
+            item: Ok(item),
+        }] = &titanium(0x3397, &body)[..]
+        else {
+            panic!("a merchant view");
+        };
+        assert_eq!((item.slot, item.price, item.quantity), (30, 1250, 1));
+        assert_eq!(*length, body.len());
+        // A merchant item the merchant's reader refuses is still the
+        // merchant's view, so a browse can end on it.
+        let broken = &body[..20];
+        assert!(matches!(
+            titanium(0x3397, broken)[..],
+            [Message::MerchantView {
+                serial: None,
+                length: 20,
+                item: Err(_),
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_trader_click_sign_and_shop_end_are_bazaar_events() {
+        let answer: Vec<u8> = [312_u32, 0, 0, 1]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert!(matches!(
+            titanium(crate::bazaar::BROWSE_OPCODE, &answer)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::Admitted {
+                    trader: 312,
+                    approved: true
+                }
+            ))]
+        ));
+        assert!(matches!(
+            titanium(crate::bazaar::BROWSE_OPCODE, &answer[..8])[..],
+            [Message::Unreadable { .. }]
+        ));
+        let mut sign = vec![0; crate::bazaar::SIGN_LENGTH];
+        sign[0] = 40;
+        sign[4] = 1;
+        assert!(matches!(
+            titanium(crate::bazaar::SIGN_OPCODE, &sign)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::TraderSign {
+                    spawn: 40,
+                    on: true
+                }
+            ))]
+        ));
+        assert!(matches!(
+            titanium(crate::bazaar::SHOP_END_OPCODE, &[])[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::ShopEnded
+            ))]
+        ));
     }
 
     #[test]

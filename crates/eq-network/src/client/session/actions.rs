@@ -63,6 +63,9 @@ pub(super) enum Resource {
     CursorAndStation,
     /// Another request to pick an item up from the ground.
     GroundPickup,
+    /// A merchant's or a trader's window, whose lists come in the same
+    /// packets: one at a time.
+    Shopping,
 }
 
 /// Resources held right now, each with the reason shown to a refused command.
@@ -122,8 +125,9 @@ fn touches_cursor_or_station(command: &ClientCommand) -> bool {
 /// a decision here.
 #[allow(clippy::too_many_lines)] // Keep the exhaustive resource table together.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
-    use Resource::{Casting, GroundPickup, Inventory, Spellbook};
+    use Resource::{Casting, GroundPickup, Inventory, Shopping, Spellbook};
     match command {
+        ClientCommand::Shop { open: true, .. } => &[Shopping],
         ClientCommand::CastSpell { .. }
         | ClientCommand::UseKnightAbility { .. }
         | ClientCommand::UseDiscipline { .. } => &[Casting],
@@ -252,6 +256,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ActivateAlternateAdvancement { .. }
         | ClientCommand::BazaarSearch { .. }
         | ClientCommand::BazaarWelcome { .. }
+        | ClientCommand::BrowseTrader { .. }
+        | ClientCommand::EndBrowse { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -449,6 +455,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SetAlternateAdvancementSplit { session_id, .. }
         | ClientCommand::BazaarSearch { session_id, .. }
         | ClientCommand::BazaarWelcome { session_id }
+        | ClientCommand::BrowseTrader { session_id, .. }
+        | ClientCommand::EndBrowse { session_id }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
         | ClientCommand::AcceptTask { session_id, .. }
@@ -724,9 +732,10 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
                 refusal: None,
             }
         }
-        ClientCommand::BazaarSearch { .. } | ClientCommand::BazaarWelcome { .. } => {
-            WorldEvent::BazaarRefused { session_id, reason }
-        }
+        ClientCommand::BazaarSearch { .. }
+        | ClientCommand::BazaarWelcome { .. }
+        | ClientCommand::BrowseTrader { .. }
+        | ClientCommand::EndBrowse { .. } => WorldEvent::BazaarRefused { session_id, reason },
         ClientCommand::AcceptTask { .. }
         | ClientCommand::DeclineTasks { .. }
         | ClientCommand::CancelTask { .. }

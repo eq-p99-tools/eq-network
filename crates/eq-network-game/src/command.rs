@@ -944,6 +944,24 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Browse a trader's wares in the Bazaar: the server answers with
+    /// [`crate::bazaar::BazaarEvent::Admitted`] and, when approved, their
+    /// list as [`crate::bazaar::BazaarEvent::Listed`]. Only a player whose
+    /// trader sign is on, within reach, with no merchant or browse open,
+    /// one click at a time.
+    BrowseTrader {
+        /// Current zone admission.
+        session_id: u64,
+        /// The trader's spawn.
+        trader: u16,
+    },
+    /// End the browse of a trader; the session tells
+    /// [`crate::bazaar::BazaarEvent::BrowseEnded`] at once, as the server
+    /// answers nothing.
+    EndBrowse {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Emote, in the player's own words: `/emote`.
     Emote {
         /// Current zone admission.
@@ -1406,6 +1424,8 @@ impl GameCommand {
             Self::SetAlternateAdvancementSplit { .. } => "SetAlternateAdvancementSplit",
             Self::BazaarSearch { .. } => "BazaarSearch",
             Self::BazaarWelcome { .. } => "BazaarWelcome",
+            Self::BrowseTrader { .. } => "BrowseTrader",
+            Self::EndBrowse { .. } => "EndBrowse",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1552,6 +1572,8 @@ impl GameCommand {
             | Self::SetAlternateAdvancementSplit { session_id, .. }
             | Self::BazaarSearch { session_id, .. }
             | Self::BazaarWelcome { session_id }
+            | Self::BrowseTrader { session_id, .. }
+            | Self::EndBrowse { session_id }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1723,6 +1745,7 @@ impl GameCommand {
             | Self::ActivateAlternateAdvancement { .. }
             | Self::SetAlternateAdvancementSplit { .. } => Capability::AlternateAdvancement,
             Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
+            Self::BrowseTrader { .. } | Self::EndBrowse { .. } => Capability::BazaarBrowsing,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1799,6 +1822,8 @@ impl GameCommand {
             | Self::SetAlternateAdvancementSplit { .. }
             | Self::BazaarSearch { .. }
             | Self::BazaarWelcome { .. }
+            | Self::BrowseTrader { .. }
+            | Self::EndBrowse { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -2138,6 +2163,8 @@ pub fn encode(
         | GameCommand::SetAlternateAdvancementSplit { .. }
         | GameCommand::BazaarSearch { .. }
         | GameCommand::BazaarWelcome { .. }
+        | GameCommand::BrowseTrader { .. }
+        | GameCommand::EndBrowse { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }

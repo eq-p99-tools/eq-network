@@ -5,6 +5,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Browse a trader's wares in the Bazaar on stock `EQEmu`, read only
+  (6.558, slice 3), from source and not yet checked live. New
+  `GameCommand::BrowseTrader` and `EndBrowse` under the new
+  `Capability::BazaarBrowsing`, which no server type offers until its live
+  row passes. New `BazaarEvent` variants: `Admitted`, `TraderSign`,
+  `ShopEnded`, `Listed(TraderListing)`, `Delisted` and `BrowseEnded`. The
+  session clicks only a player whose trader sign it saw go on or a search
+  named, within reach, one click at a time, and ends every browse it closes
+  and every late approval, since `EQEmu` records the player as the trader's
+  one customer until then. Titanium's merchant item packets now come to
+  the session as the new `Message::MerchantView` with their serial; the
+  merchant window is unchanged. **Breaking:** the new `GameCommand`,
+  `Request`, `Message`, `BazaarEvent` and `Capability` variants, and
+  `BazaarEvent` is no longer `Eq`.
 - Encode the AA requests for `EQMac` too, listed by no server type until
   a local TAKP live row (6.562): TAKP's 256-byte text on `OP_AAAction`
   (0x1442), `buy N`, `activate N`, `on N` and `off`, from fixed words and
