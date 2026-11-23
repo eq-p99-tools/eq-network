@@ -1609,6 +1609,19 @@ pending a read of the program (checklist 6.492b). The server says its own
 line when the other player is considering another duel or the player has
 already accepted one.
 
+## Shielding
+
+Where the server type takes `/shield` (`Capability::Shielding`: stock
+`EQEmu` so far, from its source and not yet checked live), send
+`GameCommand::Shield` with the spawn id of the player to shield. The server
+checks the level (30), the class (Warrior), its rule, the 3-minute recast,
+the target (no NPC, not oneself) and the distance (15), and answers each
+refusal, the start and the end with a line of its own; nothing answers on
+`OP_Shielding`. The session refuses only spawn id 0 and a shield within
+500 ms of the last one (`WorldEvent::SocialRefused`, nothing sent). Checks
+the original makes before it sends (oneself, the class, the level) are the
+host's: they may only be stricter than the server's.
+
 ## Surnames
 
 Where the server type takes `/surname` (`Capability::Surnaming`: stock
