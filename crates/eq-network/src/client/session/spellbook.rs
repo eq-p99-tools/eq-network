@@ -27,9 +27,25 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// How long the player sits before a scribe or memorization goes out; not yet
-/// measured against a live client.
+/// How long the player sits before a memorization goes out, and a scribe on
+/// a session whose program's scribe wait isn't read; not yet measured
+/// against a live client.
 const SITTING: Duration = Duration::from_secs(5);
+
+/// Titanium's scribe gauge (0x55721c's worker, read R49-34 b): it starts at
+/// 92 and loses 3 at each draw of the gauge more than 1 ms after the last,
+/// so the scribe goes out at the 31st draw, the first to take it to 0 or
+/// below ([I]: the end test as read, ≤ 0).
+const SCRIBE_GAUGE: u32 = 92;
+const SCRIBE_STEP: u32 = 3;
+/// [I] The draws at 60 a second, the frame clock the program's frame pacing
+/// keeps (reviewer Q1: a 60-step clock, not this host's frame rate).
+const SCRIBE_DRAWS_PER_SECOND: u32 = 60;
+
+/// Titanium's scribe wait: 31 draws at 60 a second, about 0.52 s.
+fn titanium_scribe_wait() -> Duration {
+    Duration::from_secs(u64::from(SCRIBE_GAUGE.div_ceil(SCRIBE_STEP))) / SCRIBE_DRAWS_PER_SECOND
+}
 
 /// What a scribe or memorization will ask for once the player has sat.
 enum BookIntent {
@@ -161,10 +177,19 @@ impl Spellbook {
             BookIntent::Scribe { .. } => ("scribing is unavailable", "Scribing scroll", "scribing"),
         };
         let fast = self.memorize_without_sitting && matches!(intent, BookIntent::Memorize { .. });
+        let delay = match intent {
+            _ if fast => Duration::ZERO,
+            BookIntent::Scribe { .. }
+                if out.wire.dialect() == eq_network_game::GameDialect::Titanium =>
+            {
+                titanium_scribe_wait()
+            }
+            BookIntent::Scribe { .. } | BookIntent::Memorize { .. } => SITTING,
+        };
         let pending = PendingBookAction {
             started: Instant::now(),
             requires_sitting: !fast,
-            delay: if fast { Duration::ZERO } else { SITTING },
+            delay,
             intent,
         };
         let checked = self
@@ -1363,6 +1388,45 @@ mod tests {
             output.sent,
             [eq_network_game::command::titanium_posture(7, Posture::Sitting).unwrap()]
         );
+        assert_eq!(
+            spellbook.pending.as_ref().unwrap().delay,
+            titanium_scribe_wait()
+        );
+    }
+
+    #[test]
+    fn a_titanium_scribe_goes_out_at_the_gauges_31st_draw_at_60_a_second() {
+        assert_eq!(titanium_scribe_wait(), Duration::from_secs(31) / 60);
+        let (mut spellbook, mut world) = admitted(None);
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        let scribe = ClientCommand::ScribeSpell {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        testing::run(|out| spellbook.handle(&scribe, &mut world, out))
+            .result
+            .unwrap();
+        let started = spellbook.pending.as_ref().unwrap().started;
+        // The 30th draw leaves 2 on the gauge: nothing yet.
+        let early = started + Duration::from_secs(30) / 60;
+        let output = testing::run(|out| spellbook.tick(early, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent, []);
+        let output =
+            testing::run(|out| spellbook.tick(started + titanium_scribe_wait(), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        // The Mac-era program's wait isn't read: it keeps this library's.
+        let (mut spellbook, mut world) = admitted(None);
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        testing::run_on(&super::super::wire::EqMac, |out| {
+            spellbook.handle(&scribe, &mut world, out)
+        })
+        .result
+        .unwrap();
         assert_eq!(spellbook.pending.as_ref().unwrap().delay, SITTING);
     }
 
