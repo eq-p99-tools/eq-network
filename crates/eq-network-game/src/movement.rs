@@ -487,7 +487,14 @@ pub struct PostureOptions {
     /// program lies the player down for
     /// ([`crate::GameDialect::spell_feign_lies`]) likewise sends nothing and
     /// owes the stand. A lying posture the server reports is as before.
-    /// Recording checklist 6.454.
+    /// Recording checklist 6.454. While such a feign is held the session
+    /// reports [`crate::world::WorldEvent::FeignHeld`], and a host's jump goes
+    /// without its crouch's posture reports, so the jump keeps the feign
+    /// (Adam 11-23, 6.599): the jump request alone clears no feign on the
+    /// servers whose handlers are read (`EQEmu` `Client::Handle_OP_Jump`
+    /// at 1d9cb5c charges endurance only; Quarm's `EQMacEmu` at fc75fcf and
+    /// TAKP's server at 44afcbf add fatigue and recalculate bonuses only;
+    /// P99's server is unread).
     pub feign_standing: bool,
     /// A hit or submitted local environmental-damage report leaves a sitting
     /// or looting player as they are, where the generation's program stands them

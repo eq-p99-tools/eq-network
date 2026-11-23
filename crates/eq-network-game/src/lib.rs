@@ -334,6 +334,18 @@ impl GameDialect {
         }
     }
 
+    /// Which postures this generation's program lets the player jump from
+    /// ([`feign::JumpGate`]).
+    #[must_use]
+    pub const fn jump_gate(self) -> feign::JumpGate {
+        match self {
+            Self::Titanium => feign::TITANIUM_JUMP,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.jump_gate(),
+            Self::EqMac => feign::EQMAC_JUMP,
+        }
+    }
+
     /// How this generation's sit/stand toggle chooses
     /// ([`feign::SitToggle`]).
     #[must_use]

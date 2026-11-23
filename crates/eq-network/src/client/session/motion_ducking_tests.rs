@@ -308,3 +308,51 @@ fn a_refused_jump_stands_no_one() {
     assert!(output.sent.is_empty(), "{:?}", output.sent);
     assert_eq!(world.posture.current(), Some(PostureState::Ducking));
 }
+
+/// A seated player's or a looter's jump goes nowhere and stands no one, on
+/// both generations: Titanium's jump waits on the can-move flag (read R19 c),
+/// and the Mac-era client's is inferred the same (6.599).
+#[test]
+fn a_seated_or_kneeling_player_does_not_jump_or_stand() {
+    for wire in [TITANIUM, EQMAC] {
+        for posture in [PostureState::Sitting, PostureState::Looting] {
+            let (mut world, mut motion) = admitted(wire, posture);
+            let output = testing::run_on(wire, |out| motion.handle(&jump(), &mut world, out));
+            output.result.unwrap();
+            assert!(output.sent.is_empty(), "{posture:?}: {:?}", output.sent);
+            assert_eq!(world.posture.current(), Some(posture));
+            assert!(
+                !output
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, ClientEvent::World(WorldEvent::Posture { .. }))),
+                "{posture:?}: {:?}",
+                output.events
+            );
+        }
+    }
+}
+
+/// Once the player stands, the same press jumps.
+#[test]
+fn a_player_who_stood_up_jumps_again() {
+    let (mut world, mut motion) = admitted(TITANIUM, PostureState::Sitting);
+    world.posture.observed(PostureState::Standing);
+    let output = testing::run(|out| motion.handle(&jump(), &mut world, out));
+    output.result.unwrap();
+    assert_eq!(output.sent, [titanium_jump()]);
+}
+
+/// A jump while a feign is held standing (6.454) sends the jump alone and
+/// keeps the feign: no posture goes, and the next stand is still owed.
+#[test]
+fn a_jump_keeps_a_feign_held_standing() {
+    let (mut world, mut motion) = admitted(TITANIUM, PostureState::Standing);
+    testing::run(|out| world.posture.hold_feign(out.log))
+        .result
+        .unwrap();
+    let output = testing::run(|out| motion.handle(&jump(), &mut world, out));
+    output.result.unwrap();
+    assert_eq!(output.sent, [titanium_jump()]);
+    assert!(world.posture.feign_held() && world.posture.stand_owed());
+}

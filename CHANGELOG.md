@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A jump never stands a seated player or ends a feign held standing (6.599,
+  Adam 11-23).
+  - **Seated jump:** a sitting or looting player's `Jump` is refused with a
+    diagnostic, and nothing is sent or stood, as Titanium's jump waits on
+    the can-move flag (read R19 c, 0x4a1d74). The Mac-era client is inferred
+    the same, and a read is requested. New: `feign::{JumpGate, TITANIUM_JUMP,
+    EQMAC_JUMP}` and `GameDialect::jump_gate()`.
+  - **Feign held standing:** with Move While Feigned (6.454), the press or a
+    feign spell's landing reports the new `WorldEvent::FeignHeld(true)`. Any
+    posture sent or reported, or death, reports `FeignHeld(false)`, before
+    that posture's own report. A camp's owed stand reports none. Hosts drop
+    the jump's crouch posture reports while a feign is held. The jump
+    request alone clears no feign on EQEmu (1d9cb5c), Quarm (fc75fcf) or
+    TAKP (44afcbf).
+  - **Breaking:** `WorldEvent` gains `FeignHeld(bool)`.
+
 - Offer `Training` on Quarm and TAKP (6.597), from their own handlers (Quarm
   fc75fcf, TAKP 44afcbf).
   - New: `training::{EQMAC_OFFER_OPCODE, EQMAC_TRAIN_OPCODE, EQMAC_END_OPCODE,

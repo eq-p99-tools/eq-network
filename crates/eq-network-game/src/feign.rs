@@ -170,6 +170,32 @@ pub const EQMAC_DUCK: DuckRules = DuckRules {
     jump_stands: false,
 };
 
+/// Which postures a client generation's program lets the player jump from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct JumpGate {
+    /// Only a standing or ducking player jumps: the jump waits on the
+    /// can-move flag, which is off unless the posture is 100 or 0x6f
+    /// (Titanium read R19 c, 0x4a1d74). A seated player's or a looter's press
+    /// does nothing and stands no one; auto-stand stands a seated player for
+    /// forward only (option 0x9254f7). Lying has its own rule
+    /// ([`LyingRules::holds_still`]). Off, any posture jumps.
+    pub only_standing_or_ducking: bool,
+}
+
+/// Titanium's jump gate (program read R19 c).
+pub const TITANIUM_JUMP: JumpGate = JumpGate {
+    only_standing_or_ducking: true,
+};
+
+/// The Mac-era client's jump gate: unread, so inferred from Titanium's and
+/// the owner's word that a jump never stands a seated player (Adam 11-23,
+/// recording checklist 6.599). A read of the Mac program's jump start is
+/// requested.
+pub const EQMAC_JUMP: JumpGate = JumpGate {
+    only_standing_or_ducking: true,
+};
+
 /// Titanium's lying posture report, which the press sends before the feign
 /// request (R19 a): `OP_SpawnAppearance` {u16 spawn id, u16 type 14, u32
 /// 115}.

@@ -978,6 +978,18 @@ impl Motion {
         if lies_still(world, out) {
             return out.log.diagnostic("Rejected jump: the player lies".into());
         }
+        // Nor does a seated player or a looter jump, and nothing stands them
+        // for it (read R19 c); auto-stand is for forward only.
+        if out.wire.dialect().jump_gate().only_standing_or_ducking
+            && matches!(
+                world.posture.current(),
+                Some(PostureState::Sitting | PostureState::Looting)
+            )
+        {
+            return out
+                .log
+                .diagnostic("Rejected jump: the player sits or kneels".into());
+        }
         let jump = world
             .body
             .motion
