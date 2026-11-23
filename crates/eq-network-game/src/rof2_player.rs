@@ -611,7 +611,9 @@ fn flagged(read: &mut Cursor<'_>, present: bool) -> Result<String> {
 /// heading 12 bits in quarters of the 512-unit turn: `Mob::FillSpawnStruct`
 /// (`zone/mob.cpp`) fills them with `FloatToEQ19` and `FloatToEQ12`, whose
 /// inverses are `EQ19toFloat` and `EQ12toFloat` (`common/misc_functions.cpp`).
-/// From integers no value can be non-finite. The angle, the deltas and the
+/// The struct declares the heading signed, but `FloatToEQ12` never writes
+/// past 2047, so it is read as unsigned 12 bits, as Titanium's is. From
+/// integers no value can be non-finite. The angle, the deltas and the
 /// animation are not read: stock `EQEmu` sends a spawn's deltas and
 /// animation as zero (`EntityList::SendZoneSpawnsBulk` clears the record
 /// and `FillSpawnStruct` sets neither), and how the `RoF2` program takes

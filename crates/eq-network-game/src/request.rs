@@ -186,6 +186,8 @@ pub enum Request {
         /// The highest.
         high: u32,
     },
+    /// Ask for this last name: `/surname` ([`crate::names::surname_request`]).
+    Surname(String),
     /// Emote, in the player's own words.
     Emote(String),
     /// A social emote's text, sent as the program builds it.
@@ -566,6 +568,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             socials::titanium_emote_animation(sender.spawn(), *animation)?
         }
         Request::Random { low, high } => socials::random(*low, *high),
+        Request::Surname(surname) => EncodedCommand {
+            opcode: crate::names::SURNAME_OPCODE,
+            body: crate::names::surname_request(sender.name, surname)?,
+        },
         Request::Emote(text) => socials::emote(text)?,
         Request::SocialEmote(text) => socials::social_emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
@@ -790,6 +796,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerTrade { asker, busy: true } => exchange::eqmac::busy(sender.spawn(), *asker),
         Request::AcceptTrade { with } => exchange::eqmac::accept(*with),
         Request::CancelTrade { with } => exchange::eqmac::cancel(sender.spawn(), *with),
+        Request::Surname(surname) => Ok(EncodedCommand {
+            opcode: crate::names::EQMAC_SURNAME_OPCODE,
+            body: crate::names::surname_request(sender.name, surname)?,
+        }),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -926,6 +936,23 @@ mod tests {
         };
         assert!(eqmac(&Request::BledOut { level: 34 }, unspawned).is_err());
         assert!(titanium(&Request::BledOut { level: 34 }, PLAYER).is_err());
+    }
+
+    #[test]
+    fn each_generation_asks_for_a_surname_in_the_same_record_under_its_own_opcode() {
+        let body = crate::names::surname_request(PLAYER.name, "Exemplum").unwrap();
+        for (packet, opcode) in [
+            (
+                titanium(&Request::Surname("Exemplum".into()), PLAYER),
+                0x4668,
+            ),
+            (eqmac(&Request::Surname("Exemplum".into()), PLAYER), 0xc441),
+        ] {
+            let packet = packet.unwrap();
+            assert_eq!((packet.opcode, &packet.body), (opcode, &body));
+        }
+        assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
+        assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
     }
 
     #[test]

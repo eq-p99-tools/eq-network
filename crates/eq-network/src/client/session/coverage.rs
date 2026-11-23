@@ -200,8 +200,8 @@ pub(super) enum Step {
     PlayerState,
     /// Social, guild, title and GM messages: what is left of them answers
     /// requests eq-network does not send yet, for an inspection, the
-    /// guild's message of the day and list, the titles, a surname, and a
-    /// game master's zone requests, finds, petition checkouts and soul
+    /// guild's message of the day and list, the titles, and a game
+    /// master's zone requests, finds, petition checkouts and soul
     /// marks.
     Social,
     /// `EQMac`'s catch-up on the world: what Titanium's decoders already
