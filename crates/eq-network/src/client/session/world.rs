@@ -9,7 +9,7 @@ use super::{
 use crate::{
     assets::Assets,
     chat,
-    client::{ClientEvent, ClientIdentity, ConnectionStage, Events, RecordEvent},
+    client::{ClientEvent, ClientIdentity, ConnectionStage, Events, GapKind, RecordEvent},
     transport::Session,
     world::WorldEvent,
 };
@@ -117,15 +117,45 @@ pub(super) fn decode_destination(
     Ok((host, port, file_response(assets, &manifest, log)?))
 }
 
-/// Reads a world's character list, keeping what it says beyond names and
-/// Titanium's levels and zones only where the server type's list is checked
-/// to carry it.
-pub(super) fn character_list(
+/// [`character_list`], with nowhere to tell of a gap, for tests of what it
+/// keeps.
+#[cfg(test)]
+pub(super) fn character_list_unheard(
     server: &dyn servers::ServerType,
     dialect: eq_network_game::GameDialect,
     body: &[u8],
 ) -> Result<Vec<eq_network_game::characters::CharacterChoice>> {
-    let entries = eq_network_game::characters::decode(dialect, body)?;
+    let config = crate::client::ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+    let mut handler = |_| Ok(());
+    let mut log = Events::new(&config, &mut handler);
+    character_list(server, dialect, (0x4513, body), &mut log)
+}
+
+/// Reads a world's character list, keeping what it says beyond names and
+/// Titanium's levels and zones only where the server type's list is checked
+/// to carry it. A list that cannot be read leaves a gap before it ends the
+/// attempt; the decoders' errors are their own fixed words, never a name.
+pub(super) fn character_list(
+    server: &dyn servers::ServerType,
+    dialect: eq_network_game::GameDialect,
+    (opcode, body): (u16, &[u8]),
+    log: &mut Events<'_>,
+) -> Result<Vec<eq_network_game::characters::CharacterChoice>> {
+    let entries = match eq_network_game::characters::decode(dialect, body) {
+        Ok(entries) => entries,
+        Err(error) => {
+            log.gap(
+                opcode,
+                Some("the character list"),
+                body,
+                GapKind::Unreadable {
+                    part: "character list".to_owned(),
+                    error: error.to_string(),
+                },
+            )?;
+            return Err(error);
+        }
+    };
     Ok(if server.character_preview() {
         entries
     } else {
@@ -227,12 +257,46 @@ fn enter_character(
 }
 
 /// Tells the host what the world says of itself as the player logs in, or
-/// why `what` could not be read.
-fn tell(read: Result<WorldEvent>, what: &str, log: &mut Events<'_>) -> Result<()> {
+/// why `what` could not be read, which leaves a gap. Says the message was
+/// the world's news, read or not.
+///
+/// The gap's error is the decoder's own words, without the body: the
+/// world's news names the world and its chat server's host, never the
+/// account; the character a chat server offer names stays out of the error
+/// too ("invalid chat server world or character").
+fn tell(
+    read: Result<WorldEvent>,
+    what: &str,
+    (opcode, body): (u16, &[u8]),
+    log: &mut Events<'_>,
+) -> Result<bool> {
     match read {
-        Ok(event) => log.send(ClientEvent::World(event)),
-        Err(error) => log.diagnostic(format!("{what} unreadable: {error}")),
+        Ok(event) => log.send(ClientEvent::World(event))?,
+        Err(error) => {
+            log.gap(
+                opcode,
+                None,
+                body,
+                GapKind::Unreadable {
+                    part: what.to_owned(),
+                    error: error.to_string(),
+                },
+            )?;
+            log.diagnostic(format!("{what} unreadable: {error}"))?;
+        }
     }
+    Ok(true)
+}
+
+/// Counts a world message nothing in the world stage read.
+fn unheard(
+    wire: &dyn super::wire::Wire,
+    opcode: u16,
+    body: &[u8],
+    log: &mut Events<'_>,
+) -> Result<()> {
+    let (name, gap) = super::coverage::world_gap(wire, opcode, body.len());
+    log.gap(opcode, name, body, gap)
 }
 
 /// Tells the host what the world says of itself, as `EQEmu`'s and P99's
@@ -241,7 +305,7 @@ fn tell(read: Result<WorldEvent>, what: &str, log: &mut Events<'_>) -> Result<()
 ///
 /// # Errors
 /// Returns an error when the host's event handler fails.
-fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<()> {
+fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<bool> {
     match opcode {
         // Consumers name per-character files after the world, as the
         // official client does.
@@ -250,22 +314,30 @@ fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<()> {
             tell(
                 name.map(|short_name| WorldEvent::WorldName { short_name }),
                 "World short name",
+                (opcode, body),
                 log,
             )?;
             tell(
                 rules::titanium_rules(body).map(WorldEvent::Rules),
                 "World rules",
+                (opcode, body),
                 log,
             )
         }
         rules::TITANIUM_EXPANSIONS_OPCODE => tell(
             rules::expansions(body).map(WorldEvent::Expansions),
             "Expansion mask",
+            (opcode, body),
             log,
         ),
         _ => match channels::titanium(opcode, body).transpose() {
-            Some(offer) => tell(offer.map(WorldEvent::ChatServer), "Chat server offer", log),
-            None => Ok(()),
+            Some(offer) => tell(
+                offer.map(WorldEvent::ChatServer),
+                "Chat server offer",
+                (opcode, body),
+                log,
+            ),
+            None => Ok(false),
         },
     }
 }
@@ -451,9 +523,13 @@ fn titanium_owned(
         )? {
             continue;
         }
-        if let Some(event) = chat::parse(packet.opcode, &packet.body, config.include_raw)? {
-            log.record("", RecordEvent::Chat(event))?;
-        }
+        let chatted = match chat::parse(packet.opcode, &packet.body, config.include_raw)? {
+            Some(event) => {
+                log.record("", RecordEvent::Chat(event))?;
+                true
+            }
+            None => false,
+        };
         log.diagnostic(format!(
             "World received 0x{:04x} ({} bytes)",
             packet.opcode,
@@ -489,7 +565,9 @@ fn titanium_owned(
                     session.send(0x7752, &0u32.to_le_bytes())?;
                     session.send(0x5e99, &[])?;
                     if let Some(body) = early_list.take() {
-                        let entries = character_list(server, config.protocol.into(), &body)?;
+                        // The list kept from before the validation came as 0x4513.
+                        let entries =
+                            character_list(server, config.protocol.into(), (0x4513, &body), log)?;
                         let (list, automatic) = crate::client::selection::Selection::new(
                             entries,
                             &config.character,
@@ -544,7 +622,12 @@ fn titanium_owned(
             WorldOpcode::CharacterList
                 if accepted && !entered && creating.as_ref().is_some_and(Creating::requested) =>
             {
-                let entries = character_list(server, config.protocol.into(), &packet.body)?;
+                let entries = character_list(
+                    server,
+                    config.protocol.into(),
+                    (packet.opcode, &packet.body),
+                    log,
+                )?;
                 if let Some(attempt) = creating.take() {
                     start_choice.created(server.start_choice(), attempt.start_choice());
                     attempt.created(&entries, log)?;
@@ -565,7 +648,12 @@ fn titanium_owned(
                 early_list = Some(packet.body.clone());
             }
             WorldOpcode::CharacterList if accepted && !entered && creating.is_none() => {
-                let entries = character_list(server, config.protocol.into(), &packet.body)?;
+                let entries = character_list(
+                    server,
+                    config.protocol.into(),
+                    (packet.opcode, &packet.body),
+                    log,
+                )?;
                 let (list, automatic) = crate::client::selection::Selection::new(
                     entries,
                     if selection.is_none() {
@@ -603,7 +691,11 @@ fn titanium_owned(
                     shield,
                 }));
             }
-            _ => news(packet.opcode, &packet.body, log)?,
+            _ => {
+                if !news(packet.opcode, &packet.body, log)? && !chatted {
+                    unheard(server.wire(), packet.opcode, &packet.body, log)?;
+                }
+            }
         }
         // Stock EQEmu accepts the client without the V62 validation reply.
         if world_only && accepted {
@@ -889,9 +981,51 @@ pub(super) mod tests {
             Ok(())
         };
         let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(crate::client::GapStage::World).unwrap();
         run(&mut log);
         drop(log);
         received
+    }
+
+    /// Whether `gap` is the world's, unsampled, for `opcode`, and could not
+    /// be read for this reason.
+    pub(super) fn unreadable_at_world(gap: &crate::client::Gap, opcode: u16, error: &str) -> bool {
+        gap.stage == crate::client::GapStage::World
+            && gap.opcode == opcode
+            && gap.count == 1
+            && gap.sample.is_none()
+            && matches!(&gap.kind, crate::client::GapKind::Unreadable { error: said, .. } if said == error)
+    }
+
+    #[test]
+    fn an_unreadable_character_list_leaves_a_gap_without_a_name() {
+        let mut body = vec![0; 1700];
+        body[..7].copy_from_slice(b"Example");
+        let mut failed = None;
+        let events = heard(|log| {
+            failed = Some(
+                character_list(
+                    servers::server_type(crate::client::ServerProtocol::EqEmu),
+                    eq_network_game::GameDialect::Titanium,
+                    (0x4513, &body),
+                    log,
+                )
+                .unwrap_err()
+                .to_string(),
+            );
+        });
+        assert_eq!(
+            failed.as_deref(),
+            Some("invalid Titanium character list length")
+        );
+        assert!(matches!(
+            &events[..],
+            [ClientEvent::Gap(gap)]
+                if unreadable_at_world(gap, 0x4513, "invalid Titanium character list length")
+                    && gap.name == Some("the character list")
+        ));
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(!json.contains("Example") && !json.contains("Tester"));
     }
 
     #[test]
@@ -913,9 +1047,9 @@ pub(super) mod tests {
                 log,
             )
             .unwrap();
-            news(0x00d7, b"garbled\0", log).unwrap();
+            assert!(news(0x00d7, b"garbled\0", log).unwrap());
             // Anything else says nothing of the world.
-            news(0x4513, &[0; 8], log).unwrap();
+            assert!(!news(0x4513, &[0; 8], log).unwrap());
         });
         assert!(matches!(
             &events[..],
@@ -928,8 +1062,10 @@ pub(super) mod tests {
                     port: 7778,
                     ..
                 })),
+                ClientEvent::Gap(gap),
                 ClientEvent::Diagnostic(unreadable),
             ] if short_name == "testworld"
+                && unreadable_at_world(gap, 0x00d7, "incomplete chat server offer")
                 && rules.no_drop_trades
                 && rules.language_zero_selector == Some(eq_network_game::rules::LanguageZeroSelector(0x8000_0000))
                 && unreadable == "Chat server offer unreadable: incomplete chat server offer"

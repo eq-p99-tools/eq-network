@@ -81,10 +81,21 @@ impl Replies {
                     self.due = Some(now + Duration::from_secs(wait));
                 }
             }
-            None => log.diagnostic(format!(
-                "Unrecognized /list message ({} bytes); no reply scheduled.",
-                body.len()
-            ))?,
+            None => {
+                log.gap(
+                    opcode,
+                    Some("a /list message"),
+                    body,
+                    crate::client::GapKind::Unreadable {
+                        part: "/list message".to_owned(),
+                        error: "unrecognized".to_owned(),
+                    },
+                )?;
+                log.diagnostic(format!(
+                    "Unrecognized /list message ({} bytes); no reply scheduled.",
+                    body.len()
+                ))?;
+            }
             Some(_) => {}
         }
         Ok(true)

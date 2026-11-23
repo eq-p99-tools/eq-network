@@ -22,7 +22,7 @@ mod titanium;
 pub(super) use eqmac::eqmac;
 pub(super) use titanium::titanium;
 
-use super::{wire::Wire, Events, ServerProtocol};
+use super::{wire::Wire, Events, GapKind, ServerProtocol};
 use anyhow::Result;
 use eq_network_game::message::Message;
 use std::{collections::HashSet, fmt};
@@ -94,25 +94,24 @@ pub(super) enum Reading {
     /// These parts of the session read it.
     Read(&'static [Reader]),
     /// These parts of the session read it, all but the parts named.
-    Partly(
-        &'static [Reader],
-        #[allow(
-            dead_code,
-            reason = "a record for readers, which the session does not consult"
-        )]
-        &'static [Part],
-    ),
+    Partly(&'static [Reader], &'static [Part]),
     /// The session leaves it unread.
     Unread(Reason),
 }
 
 /// A part of a message the session leaves unread, and why.
 #[derive(Clone, Copy, Debug)]
-#[allow(
-    dead_code,
-    reason = "a record for readers, which the session does not consult"
-)]
 pub(super) struct Part(pub(super) &'static str, pub(super) Reason);
+
+impl Part {
+    /// Whether leaving it unread is a gap: work still to come reads it.
+    const fn is_gap(&self) -> bool {
+        match self.1 {
+            Reason::Needless(_) => false,
+            Reason::Planned(_) | Reason::Unasked(_) | Reason::Unmapped => true,
+        }
+    }
+}
 
 /// A part of the session that reads the servers' messages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -598,26 +597,40 @@ impl Unheard {
     /// Drops each of a packet's messages of a kind no server is known to
     /// send ([`Message::UnknownKind`]), telling of it, by its opcode and kind
     /// alone, the first time they arrive in the session; passes on the rest.
+    /// Each such message, and each the generation's decoders could not read
+    /// ([`Message::Unreadable`]), is counted as a gap.
     ///
     /// # Errors
     /// Returns an error when the host's event handler fails.
     pub(super) fn sift(
         &mut self,
         wire: &dyn Wire,
-        opcode: u16,
+        (opcode, body): (u16, &[u8]),
         messages: Vec<Message>,
         log: &mut Events<'_>,
     ) -> Result<Vec<Message>> {
+        let name = wire.coverage(opcode).map(|message| message.name);
         let mut kept = Vec::with_capacity(messages.len());
         for message in messages {
-            let Message::UnknownKind(kind) = message else {
-                kept.push(message);
-                continue;
+            let kind = match message {
+                Message::UnknownKind(kind) => kind,
+                Message::Unreadable { part, ref error } => {
+                    let gap = GapKind::Unreadable {
+                        part: part.to_string(),
+                        error: error.clone(),
+                    };
+                    log.gap(opcode, name, body, gap)?;
+                    kept.push(message);
+                    continue;
+                }
+                message => {
+                    kept.push(message);
+                    continue;
+                }
             };
+            log.gap(opcode, name, body, GapKind::UnknownKind { kind })?;
             if self.kinds.insert((opcode, kind)) {
-                let name = wire
-                    .coverage(opcode)
-                    .map_or("an unlisted message", |message| message.name);
+                let name = name.unwrap_or("an unlisted message");
                 log.diagnostic(format!(
                     "{} sent {name} (0x{opcode:04x}) of kind {kind}, left unread: no server is \
                      known to send that kind",
@@ -630,7 +643,9 @@ impl Unheard {
 
     /// Tells, the first time one arrives in the session, of a message the
     /// generation lists but this stage leaves unread, unless nothing in it is
-    /// worth reading, and of one it does not list.
+    /// worth reading, and of one it does not list. Every arrival of such a
+    /// message, of one with nothing worth reading, and of one read all but
+    /// parts still to come, is counted as a gap.
     ///
     /// # Errors
     /// Returns an error when the host's event handler fails.
@@ -638,10 +653,14 @@ impl Unheard {
         &mut self,
         wire: &dyn Wire,
         opcode: u16,
-        length: usize,
+        body: &[u8],
         log: &mut Events<'_>,
     ) -> Result<()> {
+        let length = body.len();
         let message = wire.coverage(opcode);
+        if let Some(gap) = gap_at(message.as_ref(), self.stage, length) {
+            log.gap(opcode, message.map(|message| message.name), body, gap)?;
+        }
         if message.is_some_and(|message| !message.told_at(self.stage, length))
             || !self.told.insert(opcode)
         {
@@ -661,6 +680,64 @@ impl Unheard {
             self.stage
         ))
     }
+}
+
+/// What a message of this table row, arriving at `stage` with a body of
+/// this length, leaves unread: nothing when the stage reads it whole.
+fn gap_at(message: Option<&ServerMessage>, stage: Stage, length: usize) -> Option<GapKind> {
+    let Some(message) = message else {
+        return Some(GapKind::Unlisted);
+    };
+    match message.reading {
+        Reading::Unread(Reason::Needless(why)) => Some(GapKind::Skipped {
+            reason: why.to_owned(),
+        }),
+        Reading::Unread(Reason::Unmapped) if length == 0 => Some(GapKind::Skipped {
+            reason: "an empty message under opcode 0 carries nothing".to_owned(),
+        }),
+        Reading::Unread(reason) => Some(GapKind::Unread {
+            reason: reason.to_string(),
+        }),
+        Reading::Read(readers) | Reading::Partly(readers, _)
+            if !readers.iter().any(|reader| reader.at(stage)) =>
+        {
+            Some(GapKind::ReadElsewhere)
+        }
+        Reading::Read(_) => None,
+        Reading::Partly(_, parts) => {
+            let parts: Vec<_> = parts
+                .iter()
+                .filter(|part| part.is_gap())
+                .map(|part| part.0)
+                .collect();
+            (!parts.is_empty()).then_some(GapKind::PartlyRead { parts })
+        }
+    }
+}
+
+/// What the generation's table says of the world's message `opcode`, which
+/// nothing in the world stage read: the gap it leaves.
+pub(super) fn world_gap(
+    wire: &dyn Wire,
+    opcode: u16,
+    length: usize,
+) -> (Option<&'static str>, GapKind) {
+    let message = wire.coverage(opcode);
+    let gap = match message.map(|message| message.reading) {
+        None => GapKind::Unlisted,
+        Some(Reading::Unread(Reason::Needless(why))) => GapKind::Skipped {
+            reason: why.to_owned(),
+        },
+        Some(Reading::Unread(Reason::Unmapped)) if length == 0 => GapKind::Skipped {
+            reason: "an empty message under opcode 0 carries nothing".to_owned(),
+        },
+        Some(Reading::Unread(reason)) => GapKind::Unread {
+            reason: reason.to_string(),
+        },
+        // Listed as read, but not at the world, which read nothing of it.
+        Some(Reading::Read(_) | Reading::Partly(..)) => GapKind::ReadElsewhere,
+    };
+    (message.map(|message| message.name), gap)
 }
 
 #[cfg(test)]
@@ -692,6 +769,110 @@ mod tests {
     }
 
     #[test]
+    fn every_arrival_the_zone_leaves_unread_is_counted_as_a_gap_of_its_kind() {
+        use crate::client::{Gap, GapStage};
+        let find = |test: &dyn Fn(&ServerMessage) -> bool| {
+            (0..=u16::MAX)
+                .find(|&opcode| titanium(opcode).is_some_and(|message| test(&message)))
+                .unwrap()
+        };
+        let planned =
+            find(&|message| matches!(message.reading, Reading::Unread(Reason::Planned(_))));
+        let needless =
+            find(&|message| matches!(message.reading, Reading::Unread(Reason::Needless(_))));
+        let partly = find(&|message| {
+            matches!(message.reading, Reading::Partly(readers, parts)
+                if readers.iter().any(|reader| reader.at(Stage::Zone))
+                    && parts.iter().any(Part::is_gap))
+        });
+        let login_only = find(
+            &|message| matches!(message.reading, Reading::Read(readers) if readers == [Reader::Login]),
+        );
+        let read = find(
+            &|message| matches!(message.reading, Reading::Read(readers) if readers.contains(&Reader::Zone)),
+        );
+        let unlisted = (1..=u16::MAX)
+            .find(|&opcode| titanium(opcode).is_none())
+            .unwrap();
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        let opcodes = [planned, needless, partly, login_only, read, unlisted];
+        for _ in 0..2 {
+            for opcode in opcodes {
+                unheard
+                    .tell(&Titanium, opcode, &[1, 2, 3], &mut log)
+                    .unwrap();
+            }
+        }
+        let unreadable = Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error: "too short".into(),
+        };
+        let kept = unheard
+            .sift(
+                &Titanium,
+                (0x497c, &[9]),
+                vec![Message::UnknownKind(8), unreadable],
+                &mut log,
+            )
+            .unwrap();
+        assert!(matches!(kept[..], [Message::Unreadable { .. }]));
+        log.end_stage().unwrap();
+        drop(log);
+        let first: Vec<_> = gaps
+            .iter()
+            .filter(|gap| gap.sample.is_some())
+            .map(|gap| (gap.opcode, gap.kind.key()))
+            .collect();
+        assert_eq!(
+            first,
+            [
+                (planned, "unread".to_owned()),
+                (needless, "skipped".to_owned()),
+                (partly, "partly_read".to_owned()),
+                (login_only, "read_elsewhere".to_owned()),
+                (unlisted, "unlisted".to_owned()),
+                (0x497c, "unknown_kind:8".to_owned()),
+                (
+                    0x497c,
+                    format!("unreadable:{}", eq_network_game::message::Part::World)
+                ),
+            ]
+        );
+        assert!(gaps.iter().all(|gap| gap.opcode != read));
+        for opcode in [planned, needless, partly, login_only, unlisted] {
+            let counted: u64 = gaps
+                .iter()
+                .filter(|gap| gap.opcode == opcode)
+                .map(|gap| gap.count)
+                .sum();
+            assert_eq!(counted, 2, "0x{opcode:04x}");
+        }
+        assert!(gaps
+            .iter()
+            .filter(|gap| gap.sample.is_some())
+            .all(|gap| gap.sample.as_deref()
+                == Some(if gap.opcode == 0x497c { "09" } else { "010203" })));
+        assert!(gaps
+            .iter()
+            .all(|gap| gap.stage == GapStage::Zone && gap.server == ServerProtocol::Project1999));
+        let parts = gaps.iter().find_map(|gap| match &gap.kind {
+            GapKind::PartlyRead { parts } => Some(parts.clone()),
+            _ => None,
+        });
+        assert!(parts.is_some_and(|parts| !parts.is_empty()));
+    }
+
+    #[test]
     fn the_login_tells_once_of_each_message_it_leaves_unread() {
         use crate::client::session::wire::EqMac;
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
@@ -710,7 +891,7 @@ mod tests {
         for opcode in [
             0x5900, 0x5200, 0xf340, 0x0001, 0x5900, 0x5200, 0xf340, 0x0001,
         ] {
-            unheard.tell(&EqMac, opcode, 4, &mut log).unwrap();
+            unheard.tell(&EqMac, opcode, &[0; 4], &mut log).unwrap();
         }
         drop(log);
         assert_eq!(
@@ -741,7 +922,7 @@ mod tests {
             let kept = unheard
                 .sift(
                     &Titanium,
-                    0x497c,
+                    (0x497c, &[]),
                     vec![Message::UnknownKind(kind)],
                     &mut log,
                 )
@@ -749,7 +930,9 @@ mod tests {
             assert!(kept.is_empty());
         }
         let spun = vec![Message::Event(eq_network_game::world::WorldEvent::Spun)];
-        let kept = unheard.sift(&Titanium, 0x497c, spun, &mut log).unwrap();
+        let kept = unheard
+            .sift(&Titanium, (0x497c, &[]), spun, &mut log)
+            .unwrap();
         assert!(matches!(
             kept[..],
             [Message::Event(eq_network_game::world::WorldEvent::Spun)]
@@ -785,7 +968,7 @@ mod tests {
         for opcode in [
             0x14cb, 0x0097, 0x4513, 0x0001, 0x5996, 0x14cb, 0x0097, 0x4513, 0x0001, 0x5996,
         ] {
-            unheard.tell(&Titanium, opcode, 8, &mut log).unwrap();
+            unheard.tell(&Titanium, opcode, &[0; 8], &mut log).unwrap();
         }
         drop(log);
         assert_eq!(
@@ -816,7 +999,9 @@ mod tests {
         // The empty OP_FinishWindow pair after a container closes, then an
         // unmapped message with a body, twice, then the pair again.
         for length in [0, 0, 5, 5, 0, 0] {
-            unheard.tell(&Titanium, 0x0000, length, &mut log).unwrap();
+            unheard
+                .tell(&Titanium, 0x0000, &vec![0; length], &mut log)
+                .unwrap();
         }
         drop(log);
         assert_eq!(

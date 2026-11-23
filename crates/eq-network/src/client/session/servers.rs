@@ -2372,7 +2372,7 @@ mod tests {
         body[640] = 30;
         body[660..662].copy_from_slice(&330u16.to_le_bytes());
         for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
-            let entries = super::super::world::character_list(
+            let entries = super::super::world::character_list_unheard(
                 server_type(protocol),
                 GameDialect::EqMac,
                 &body,
@@ -2433,7 +2433,7 @@ mod tests {
             body[primary + slot * 4..primary + (slot + 1) * 4]
                 .copy_from_slice(&240u32.to_le_bytes());
             let read = |body: &[u8]| {
-                super::super::world::character_list(server_type(protocol), dialect, body)
+                super::super::world::character_list_unheard(server_type(protocol), dialect, body)
             };
             let entries = read(&body).unwrap();
             assert_eq!(entries.len(), 1);
