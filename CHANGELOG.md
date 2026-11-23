@@ -10,6 +10,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`Hazard::Freezing`) with its damage record, on the lava's feet tick, and
   `Capability::ColdWater`, offered on every Titanium session. **Breaking:**
   both enums are exhaustive, and `Capability::ALL` grows to 91.
+  - `ItemBonuses::cold_resistance`, from field 16 of the Titanium item
+    record (`None` on `EQMac`), and
+    `TitaniumEnvironment::base_cold_resistance`, `None` until read R49-3c
+    names the profile dword behind char info +0x34. **Breaking:** both
+    structs gain a public field.
 - Slower water's own set in the swim grant, as read R49-26 reads the Titanium
   region classifier (0x435ec9; checklist 6.483).
   - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for

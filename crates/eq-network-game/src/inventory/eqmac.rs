@@ -510,6 +510,7 @@ fn definition(record: &Record<'_>) -> Result<ItemDetails> {
             strength: middle.signed(228),
             stamina: middle.signed(229),
             fire_resistance: None,
+            cold_resistance: None,
             agility: middle.signed(233),
             dexterity: middle.signed(231),
             charisma: middle.signed(230),

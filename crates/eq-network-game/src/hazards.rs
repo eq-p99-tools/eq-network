@@ -66,6 +66,11 @@ pub struct TitaniumEnvironment {
     ///
     /// [encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
     pub base_fire_resistance: i32,
+    /// Profile cold resistance before racial, class and active modifiers,
+    /// which the program keeps at char info +0x34 (read R49-3 b). Which
+    /// profile dword it copies there is unread (read R49-3c), so this is
+    /// `None` and the client reports no cold until it is read.
+    pub base_cold_resistance: Option<i32>,
     /// A rank is present in the profile's alternate advancement array.
     pub has_alternate_advancement: bool,
 }
@@ -103,6 +108,7 @@ pub(crate) fn titanium_environment(profile: &[u8]) -> TitaniumEnvironment {
     TitaniumEnvironment {
         zone_id: u16::from_le_bytes([profile[13276], profile[13277]]),
         base_fire_resistance: i32::from_le_bytes(profile[12876..12880].try_into().unwrap()),
+        base_cold_resistance: None,
         has_alternate_advancement: profile[304..2224]
             .as_chunks::<8>()
             .0
@@ -365,6 +371,8 @@ mod tests {
             TitaniumEnvironment {
                 zone_id: 27,
                 base_fire_resistance: 25,
+                // Unread (R49-3c), so not taken from any dword yet.
+                base_cold_resistance: None,
                 has_alternate_advancement: false,
             }
         );
