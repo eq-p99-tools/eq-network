@@ -839,6 +839,7 @@ impl Script {
             .chain(rof2_socials())
             .chain(rof2_answers())
             .chain(rof2_notices())
+            .chain(rof2_loot_titles())
         {
             script.packet(opcode, body);
         }
@@ -1204,6 +1205,38 @@ fn rof2_notices() -> Vec<(u16, Vec<u8>)> {
         (0x2c57, rename),
         (0x0d32, Vec::new()),
         (0x791e, words(&[1, 2, 3, 4, 10, 20, 30, 40])),
+    ]
+}
+
+/// Corpse money, the Loot All marker after it, the loot close, a surname
+/// answer, a title list and a title change, as stock `EQEmu` sends them to
+/// `RoF2` (6.552).
+fn rof2_loot_titles() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let money = |response: u8, platinum: u32| {
+        let mut body = vec![response, 0x42, 0xef, 0];
+        body.extend(words(&[platinum, 0, 0, 0]));
+        body
+    };
+    let mut surname = vec![0; 100];
+    surname[..10].copy_from_slice(b"Testplayer");
+    surname[64..68].copy_from_slice(&1u32.to_le_bytes());
+    surname[68..79].copy_from_slice(b"Testsurname");
+    let mut titles = words(&[1, 3]);
+    titles.extend(b"Testprefix\0\0");
+    let mut title = words(&[1]);
+    let mut field = vec![0; 32];
+    field[..10].copy_from_slice(b"Testsuffix");
+    title.extend(field);
+    title.extend(words(&[77]));
+    vec![
+        (0x5f44, money(1, 12)),
+        (0x5f44, money(6, 0)),
+        (0x55c4, Vec::new()),
+        (0x0423, surname),
+        (0x2d08, titles),
+        (0x4c21, title),
     ]
 }
 
@@ -1915,6 +1948,56 @@ fn an_admitted_rof2_session_hands_the_host_its_rewards_renames_titles_and_change
     }
     // The spawn names reach the host in the event only.
     assert!(!diagnostics.iter().any(|line| line.contains("Testmob")));
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_loot_titles_and_surname() {
+    use eq_network_game::{
+        loot::{LootResponse, LootUpdate},
+        names::TitleChange,
+    };
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Loot(LootUpdate::Opened {
+                response: LootResponse::Normal,
+                coins,
+            }) if coins.platinum == 12 => Some("money"),
+            WorldEvent::Loot(LootUpdate::Opened { .. }) => Some("another opening"),
+            WorldEvent::Loot(LootUpdate::Closed) => Some("close"),
+            WorldEvent::SurnameAnswer {
+                accepted: true,
+                last_name,
+            } if last_name == "Testsurname" => Some("surname"),
+            WorldEvent::TitleList(titles)
+                if titles.len() == 1 && titles[0].id == 3 && titles[0].prefix == "Testprefix" =>
+            {
+                Some("titles")
+            }
+            WorldEvent::TitleChanged {
+                spawn_id: 77,
+                change: TitleChange::Suffix(suffix),
+            } if suffix == "Testsuffix" => Some("title"),
+            _ => None,
+        })
+        .collect();
+    // The Loot All marker gives no event.
+    assert_eq!(read, ["money", "close", "surname", "titles", "title"]);
+    for opcode in ["0x55c4", "0x0423", "0x2d08", "0x4c21"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The last name and the titles reach the host in the event only.
+    for text in ["Testplayer", "Testsurname", "Testprefix", "Testsuffix"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(text)),
+            "{text}"
+        );
+    }
 }
 
 #[test]
