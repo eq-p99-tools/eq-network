@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Record every server message the session drops or cannot read (6.500).
+  `ClientEvent::Gap(Box<Gap>)` tells of each one, beside the diagnostic
+  line it always wrote: a message no table row lists, one listed but left
+  unread (with the row's reason), one read only at another stage, one read
+  all but parts still to come, a kind no server is known to send, and one
+  the decoders could not read, at the login, the world or the zone, plus
+  chat decode errors, unreadable world news, character lists and login
+  replies. Messages holding nothing worth reading are counted as
+  `GapKind::Skipped`, which `GapKind::is_gap` keeps out of a gap list. The
+  first of each gap in a stage is told at once; repeats are counted and
+  told at most every 10 s and when the stage ends, with their count and
+  shortest and longest body. Only the zone's first record of each gap in
+  an attempt carries a sample, its first 256 bytes in hex; the login and
+  world never do. No record names a host, an address, the account or a
+  character. **Breaking:** a new variant on the exhaustive `ClientEvent`.
+
 - Build RoF2's login stage, character list and world login info from
   `EQEmu`'s public source, labelled inferred for RoF2 (6.497). The login is
   Titanium's exchange read through the login server's opcodes for clients

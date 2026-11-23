@@ -1550,3 +1550,31 @@ When a received profile names a vehicle, the session publishes
 
 Moves sent while an arrival is held are refused. See
 [boat riding](docs/boat-riding.md) for the wire and the inferred bounds.
+
+## Server message gaps
+
+`ClientEvent::Gap(Box<Gap>)` tells of a server message the session dropped
+or could not read. `Gap` names its `stage` (login, world or zone), the
+configured `server`, its `dialect`, the current short `zone` (empty before
+one), the `opcode`, the generation's table `name` where one lists it, and
+the `kind`:
+
+- `Unlisted`: no table row lists the opcode.
+- `Unread { reason }`: listed, and left unread for the row's reason.
+- `ReadElsewhere`: listed as read only at another stage.
+- `PartlyRead { parts }`: read all but these parts, which work to come reads.
+- `UnknownKind { kind }`: a kind of the message no server is known to send.
+- `Unreadable { part, error }`: the decoders could not read it.
+- `Skipped { reason }`: listed as holding nothing worth reading. Counted, but
+  `GapKind::is_gap` is false.
+
+Each record counts arrivals (`count`, `min_length`, `max_length`). The first
+arrival of a gap (stage, opcode and `GapKind::key`) in a stage is told at once;
+repeats are counted in the session and told at most every `GAP_INTERVAL`
+(10 s) and when the stage ends. A host sums the counts. The first record of a
+gap in an attempt carries `sample`, the first `SAMPLE_BYTES` (256) of the body
+in hex, at the zone only; login and world records never carry one, and their
+`Unreadable` errors are the decoders' fixed words. A zone sample may hold what
+other players said or their names, so a host keeps it local. No record names
+a host, an address, the account or a character. The diagnostic lines the
+session wrote before are unchanged.

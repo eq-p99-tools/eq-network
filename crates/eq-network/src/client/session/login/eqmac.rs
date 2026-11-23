@@ -75,7 +75,12 @@ pub(in crate::client::session) fn login(
                 sent_login = true;
             }
             LOGIN_ACCEPTED if account.is_none() => {
-                account = Some(login_account(&packet.body)?);
+                account = Some(super::read_reply(
+                    "login reply",
+                    &packet,
+                    login_account(&packet.body),
+                    log,
+                )?);
                 session.send(LOGIN_COMPLETE, &[])?;
                 sent_complete = true;
                 log.diagnostic("TAKP login server authenticated the account".into())?;
@@ -86,7 +91,12 @@ pub(in crate::client::session) fn login(
                 requested_list = true;
             }
             LOGIN_SERVER_LIST if requested_list && !choice.listed() => {
-                let servers = parse_server_list(&packet.body)?;
+                let servers = super::read_reply(
+                    "server list",
+                    &packet,
+                    parse_server_list(&packet.body),
+                    log,
+                )?;
                 if let Some(world) = choice.list(servers, config, log)? {
                     play(&mut session, world)?;
                 }
@@ -121,7 +131,7 @@ pub(in crate::client::session) fn login(
                 }
                 choice.refused(ServerRefusal::Text(message), log)?;
             }
-            _ => unheard.tell(&EqMac, packet.opcode, packet.body.len(), log)?,
+            _ => unheard.tell(&EqMac, packet.opcode, &packet.body, log)?,
         }
     }
 }

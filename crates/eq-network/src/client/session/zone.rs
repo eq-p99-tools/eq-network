@@ -427,6 +427,8 @@ fn run_connected(
                 };
             }
         };
+        // Repeats of what the zone leaves unread are told when due.
+        log.tick_gaps()?;
         let Some(mut packet) = received else {
             continue;
         };
@@ -469,7 +471,7 @@ fn run_connected(
             ))?;
         }
         // What the zone leaves unread still leaves a trace, once a session.
-        unheard.tell(server.wire(), packet.opcode, packet.body.len(), log)?;
+        unheard.tell(server.wire(), packet.opcode, &packet.body, log)?;
         if let Some(HandshakeComplete { player, zone }) = admission.read(
             &mut packet,
             &mut world,
@@ -521,7 +523,7 @@ fn run_connected(
         // a kind no server is known to send leaves a trace, once a session.
         let messages = unheard.sift(
             server.wire(),
-            packet.opcode,
+            (packet.opcode, &packet.body),
             read_messages(
                 server.wire(),
                 packet.opcode,
@@ -584,15 +586,23 @@ fn run_connected(
         {
             Ok(Some(event)) => log.record(&zone, RecordEvent::Chat(event))?,
             Ok(None) => (),
-            Err(error) => log.record(
-                &zone,
-                RecordEvent::DecodeError(DecodeError {
-                    kind: "decode_error",
-                    opcode: packet.opcode,
-                    payload_hex: hex::encode(&packet.body),
-                    error: error.to_string(),
-                }),
-            )?,
+            Err(error) => {
+                log.gap(
+                    packet.opcode,
+                    None,
+                    &packet.body,
+                    super::chat_unreadable(&error),
+                )?;
+                log.record(
+                    &zone,
+                    RecordEvent::DecodeError(DecodeError {
+                        kind: "decode_error",
+                        opcode: packet.opcode,
+                        payload_hex: hex::encode(&packet.body),
+                        error: error.to_string(),
+                    }),
+                )?;
+            }
         }
     }
 }

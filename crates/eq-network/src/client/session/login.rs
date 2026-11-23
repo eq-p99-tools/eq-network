@@ -14,7 +14,7 @@ use crate::{
     client::{
         selection::{configured_world, Worlds},
         CancellationToken, ClientCommand, ClientConfig, ClientEvent, ConnectionStage, Events,
-        LoginError,
+        GapKind, LoginError,
     },
     transport::{Application, Session},
 };
@@ -191,7 +191,12 @@ fn exchange(
                 sent_credentials = true;
             }
             LoginOpcode::Accepted => {
-                credentials = Some(login_credentials(&packet.body)?);
+                credentials = Some(read_reply(
+                    "login reply",
+                    &packet,
+                    login_credentials(&packet.body),
+                    log,
+                )?);
                 log.send(ClientEvent::Progress(ConnectionStage::SelectingServer))?;
                 let mut request = vec![0; 10];
                 request[0] = 4;
@@ -199,12 +204,15 @@ fn exchange(
                 log.diagnostic("Login server authenticated the account".into())?;
             }
             LoginOpcode::ServerList if !choice.listed() => {
-                ensure!(packet.body.len() >= 20, "truncated server list");
-                // The list reader takes the body behind a two-byte opcode,
-                // which it skips.
-                let mut body = 0x18u16.to_le_bytes().to_vec();
-                body.extend(packet.body);
-                let (servers, _) = parse_server_list(&body).context("invalid server list")?;
+                let read = (|| {
+                    ensure!(packet.body.len() >= 20, "truncated server list");
+                    // The list reader takes the body behind a two-byte
+                    // opcode, which it skips.
+                    let mut body = 0x18u16.to_le_bytes().to_vec();
+                    body.extend(&packet.body);
+                    Ok(parse_server_list(&body).context("invalid server list")?.0)
+                })();
+                let servers = read_reply("server list", &packet, read, log)?;
                 let servers = servers
                     .into_iter()
                     .map(|server| {
@@ -235,7 +243,40 @@ fn exchange(
                 packet.opcode,
                 packet.body.len()
             ))?,
-            _ => unheard.tell(wire, packet.opcode, packet.body.len(), log)?,
+            _ => unheard.tell(wire, packet.opcode, &packet.body, log)?,
+        }
+    }
+}
+
+/// What the login server answered, or, when it could not be read, the
+/// error that ends the attempt, counted first as a gap. A refused account
+/// is no gap: the session reads that answer. The error is the reader's own
+/// fixed words, which name no account, password, key or world, and the
+/// gap holds no body (the login stage is never sampled).
+///
+/// # Errors
+/// Returns the reader's error, or an error when the host's event handler
+/// fails.
+pub(super) fn read_reply<T>(
+    part: &str,
+    packet: &Application,
+    read: Result<T>,
+    log: &mut Events<'_>,
+) -> Result<T> {
+    match read {
+        Ok(read) => Ok(read),
+        Err(error) if error.downcast_ref::<LoginError>().is_some() => Err(error),
+        Err(error) => {
+            log.gap(
+                packet.opcode,
+                None,
+                &packet.body,
+                GapKind::Unreadable {
+                    part: part.to_owned(),
+                    error: error.to_string(),
+                },
+            )?;
+            Err(error)
         }
     }
 }
@@ -476,6 +517,65 @@ fn login_credentials(body: &[u8]) -> Result<Credentials> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_login_reply_leaves_a_gap_in_the_reader_s_own_words() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(crate::client::GapStage::Login).unwrap();
+        let reply = Application {
+            opcode: 0x0017,
+            body: b"ACCOUNT PASSWORD".to_vec(),
+        };
+        let Err(error) = read_reply(
+            "login reply",
+            &reply,
+            login_credentials(&reply.body),
+            &mut log,
+        ) else {
+            panic!("the reply was read");
+        };
+        assert_eq!(error.to_string(), "invalid login response");
+        let list = Application {
+            opcode: 0x0018,
+            body: vec![0; 4],
+        };
+        let read = Err(anyhow::anyhow!("truncated server list"));
+        read_reply::<()>("server list", &list, read, &mut log).unwrap_err();
+        // A refused account is an answer the session reads, not a gap.
+        let refused = Err(LoginError::InvalidCredentials.into());
+        read_reply::<()>("login reply", &reply, refused, &mut log).unwrap_err();
+        drop(log);
+        let said: Vec<_> = gaps
+            .iter()
+            .map(|gap| match &gap.kind {
+                GapKind::Unreadable { part, error } => {
+                    assert_eq!(gap.stage, crate::client::GapStage::Login);
+                    assert_eq!(gap.sample, None);
+                    (gap.opcode, part.as_str(), error.as_str())
+                }
+                kind => panic!("{kind:?}"),
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                (0x0017, "login reply", "invalid login response"),
+                (0x0018, "server list", "truncated server list"),
+            ]
+        );
+        let json = serde_json::to_string(&gaps).unwrap();
+        assert!(
+            !json.contains("ACCOUNT") && !json.contains("PASSWORD") && !json.contains("Tester")
+        );
+    }
     use crate::world::WorldEvent;
     use eq_network_login::crypto::des_encrypt;
 
