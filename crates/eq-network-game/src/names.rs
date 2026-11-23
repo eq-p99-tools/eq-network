@@ -245,7 +245,7 @@ pub(crate) fn title_list(body: &[u8]) -> Result<WorldEvent> {
     Ok(WorldEvent::TitleList(titles))
 }
 
-/// The length of the list's record, as [`title_list`] reads it.
+/// The length of the list's record, as `title_list` reads it.
 #[must_use]
 pub fn title_list_length(titles: &[TitleChoice]) -> usize {
     4 + titles
