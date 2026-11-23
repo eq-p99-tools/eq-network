@@ -216,7 +216,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd140 => sent("OP_TradeRequest", EQMAC, Read(&[Zone])),
         0xd341 => sent("OP_SpellTextMessage", EQMAC, Read(&[Chat])),
         0xd440 => sent("OP_SetTitle", EQMAC, Partly(&[Zone], EQMAC_TITLE)),
-        0xd540 => sent("OP_ConsentResponse", EQMAC, planned(EqMacExchanges)),
+        0xd540 => sent("OP_ConsentResponse", EQMAC, Read(&[Zone])),
         0xd640 => sent("OP_TradeRefused", EQMAC, Read(&[Zone])),
         0xd740 => sent("OP_ClickObjectAction", EQMAC, planned(EqMacWorld)),
         0xd840 => sent("OP_SendExpZonein", EQMAC, Read(&[Admission])),

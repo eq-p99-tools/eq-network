@@ -33,6 +33,19 @@ pub const SUMMON_OPCODE: u16 = 0x1edc;
 pub const BECOME_CORPSE_OPCODE: u16 = 0x4dbc;
 /// `OP_CorpsePosition`: a corpse moved (`EQMac`).
 pub const EQMAC_POSITION_OPCODE: u16 = 0x2140;
+/// `OP_Consent` on TAKP and Quarm (Mac 0x40b7). It toggles: a name already
+/// consented is taken back.
+pub const EQMAC_CONSENT_OPCODE: u16 = 0xb740;
+/// `OP_ConsentResponse` on TAKP and Quarm (Mac 0x40d5), the same 161 bytes,
+/// sent only to the player consented.
+pub const EQMAC_CONSENT_RESPONSE_OPCODE: u16 = 0xd540;
+/// `OP_GMSummon` on TAKP and Quarm (Mac 0x40c5).
+pub const EQMAC_SUMMON_OPCODE: u16 = 0xc540;
+/// `OP_CorpseDrag` on TAKP and Quarm (Mac 0x4114).
+pub const EQMAC_DRAG_OPCODE: u16 = 0x1441;
+/// `OP_CorpseDrop` on Quarm alone (0x1337 on its wire): Quarm's own
+/// addition, which TAKP neither lists nor handles.
+pub const QUARM_DROP_OPCODE: u16 = 0x3713;
 /// The longest name a consent carries: `EQEmu` takes fewer than 64 bytes
 /// with the NUL.
 pub const MAX_NAME: usize = 62;
@@ -140,6 +153,62 @@ pub fn summon(corpse: &str, player: &str) -> Result<EncodedCommand> {
     body.resize(152, 0);
     Ok(EncodedCommand {
         opcode: SUMMON_OPCODE,
+        body,
+    })
+}
+
+/// Consents a player on TAKP or Quarm: the name and its NUL on the `EQMac`
+/// opcode, which both servers' `Handle_OP_Consent` read at 1 to 63 bytes
+/// (Quarm fc75fcf, TAKP 44afcbf). Consenting a name already consented takes
+/// it back; neither server has a separate deny.
+///
+/// # Errors
+/// Rejects an empty name, one longer than [`MAX_NAME`] bytes, or one holding
+/// a NUL.
+pub fn eqmac_consent(name: &str) -> Result<EncodedCommand> {
+    let mut command = consent(name, true)?;
+    command.opcode = EQMAC_CONSENT_OPCODE;
+    Ok(command)
+}
+
+/// Summons a corpse on TAKP or Quarm: the same 152-byte `GMSummon_Struct`
+/// on the `EQMac` opcode. Both servers summon a corpse it names for anyone,
+/// under `Corpse::Summon`'s consent, lock and range checks, and drop any
+/// other name below GM status.
+///
+/// # Errors
+/// Rejects names that do not fit their fields.
+pub fn eqmac_summon(corpse: &str, player: &str) -> Result<EncodedCommand> {
+    let mut command = summon(corpse, player)?;
+    command.opcode = EQMAC_SUMMON_OPCODE;
+    Ok(command)
+}
+
+/// Starts dragging a corpse on TAKP or Quarm: the same 152-byte
+/// `CorpseDrag_Struct` on the `EQMac` opcode, the only size both servers
+/// read.
+///
+/// # Errors
+/// Rejects names that do not fit their fields.
+pub fn eqmac_drag(corpse: &str, dragger: &str) -> Result<EncodedCommand> {
+    let mut command = drag(corpse, dragger)?;
+    command.opcode = EQMAC_DRAG_OPCODE;
+    Ok(command)
+}
+
+/// Stops dragging on Quarm: one byte stops every corpse, and one corpse
+/// takes the whole 152-byte `CorpseDrag_Struct` (Quarm's
+/// `Handle_OP_CorpseDrop`), the dragger named too.
+///
+/// # Errors
+/// Rejects names that do not fit their fields.
+pub fn quarm_drop(corpse: Option<&str>, dragger: &str) -> Result<EncodedCommand> {
+    let body = match corpse {
+        Some(name) => drag(name, dragger)?.body,
+        None => vec![0],
+    };
+    Ok(EncodedCommand {
+        opcode: QUARM_DROP_OPCODE,
         body,
     })
 }
@@ -296,5 +365,32 @@ mod tests {
         assert_eq!(summon.body.len(), 152);
         assert_eq!(&summon.body[64..70], b"Owner\0");
         assert!(super::drag("", "Helper").is_err());
+    }
+
+    #[test]
+    fn eqmac_corpse_requests_use_the_mac_opcodes_and_sizes() {
+        let consent = eqmac_consent("Helper").unwrap();
+        assert_eq!(consent.opcode, 0xb740);
+        assert_eq!(consent.body, b"Helper\0");
+        assert!(eqmac_consent(&"a".repeat(MAX_NAME + 1)).is_err());
+        assert_eq!(eqmac_consent(&"a".repeat(MAX_NAME)).unwrap().body.len(), 63);
+        let summon = eqmac_summon("Owner's corpse0", "Owner").unwrap();
+        assert_eq!(summon.opcode, 0xc540);
+        assert_eq!(
+            summon.body,
+            super::summon("Owner's corpse0", "Owner").unwrap().body
+        );
+        assert_eq!(summon.body.len(), 152);
+        let drag = eqmac_drag("Owner's corpse0", "Helper").unwrap();
+        assert_eq!(drag.opcode, 0x1441);
+        assert_eq!(drag.body.len(), 152);
+        assert_eq!(&drag.body[..16], b"Owner's corpse0\0");
+        assert_eq!(&drag.body[64..71], b"Helper\0");
+        let all = quarm_drop(None, "Helper").unwrap();
+        assert_eq!(all.opcode, 0x3713);
+        assert_eq!(all.body, [0]);
+        let one = quarm_drop(Some("Owner's corpse0"), "Helper").unwrap();
+        assert_eq!(one.body, drag.body);
+        assert!(quarm_drop(Some(""), "Helper").is_err());
     }
 }

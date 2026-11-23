@@ -616,16 +616,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             .into_iter()
             .chain([described(crate::zones::eqmac_description(body))])
             .collect(),
-        crate::socials::EQMAC_ROLL_OPCODE => vec![crate::socials::roll(body).map_or_else(
-            |error| unreadable(Part::World, &error),
-            |roll| Message::Event(WorldEvent::Roll(roll)),
-        )],
-        crate::socials::EQMAC_ASSIST_OPCODE => {
-            vec![crate::socials::eqmac_assist_answer(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |answer| Message::Event(WorldEvent::Assisted(answer)),
-            )]
-        }
+        _ if let Some(message) = eqmac_people(opcode, body) => vec![message],
         crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
@@ -664,6 +655,25 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             ),
         },
     }
+}
+
+/// What TAKP and Quarm say of other players: a die rolled near the player,
+/// the answer to an assist, and a consent given to the player (6.585,
+/// 6.591); None for other messages.
+fn eqmac_people(opcode: u16, body: &[u8]) -> Option<Message> {
+    let read = |result: anyhow::Result<WorldEvent>| {
+        result.map_or_else(|error| unreadable(Part::World, &error), Message::Event)
+    };
+    Some(match opcode {
+        crate::corpses::EQMAC_CONSENT_RESPONSE_OPCODE => {
+            read(crate::corpses::decode_consent(body).map(WorldEvent::Consent))
+        }
+        crate::socials::EQMAC_ROLL_OPCODE => read(crate::socials::roll(body).map(WorldEvent::Roll)),
+        crate::socials::EQMAC_ASSIST_OPCODE => {
+            read(crate::socials::eqmac_assist_answer(body).map(WorldEvent::Assisted))
+        }
+        _ => return None,
+    })
 }
 
 /// Corpse views are decoded before inventory packets, so their places can
@@ -1530,6 +1540,29 @@ mod tests {
                 }]
             ));
         }
+        // A consent given to the player, as only the one consented hears it
+        // on these servers (6.591).
+        let mut consent = [0; 161];
+        consent[..6].copy_from_slice(b"Helper");
+        consent[64..69].copy_from_slice(b"Owner");
+        consent[128] = 1;
+        consent[129..138].copy_from_slice(b"all zones");
+        assert!(matches!(
+            &eqmac(crate::corpses::EQMAC_CONSENT_RESPONSE_OPCODE, &consent)[..],
+            [Message::Event(WorldEvent::Consent(given))]
+                if given.granted == "Helper" && given.owner == "Owner" && given.given
+                    && given.zone == "all zones"
+        ));
+        assert!(matches!(
+            eqmac(
+                crate::corpses::EQMAC_CONSENT_RESPONSE_OPCODE,
+                &consent[..160]
+            )[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
         // A split refused, as the line's number says; the line itself goes
         // as chat.
         let mut refused = vec![0, 0];

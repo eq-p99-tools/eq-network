@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Corpses` on Quarm and TAKP (6.591), from their own handlers (Quarm
+  fc75fcf, TAKP 44afcbf).
+  - New functions: `corpses::{eqmac_consent, eqmac_summon, eqmac_drag,
+    quarm_drop}`. The consent answer is read into `WorldEvent::Consent`.
+  - `/deny` is refused, because a consent toggles there.
+  - `/corpsedrop` works on Quarm only, on Quarm's own opcode.
+  - `/corpse` names only a player's corpse in the zone, at most every 250 ms.
+  - Source-derived, not live.
+
 - Offer `Rolling`, `Assisting` and `Splitting` on Quarm and TAKP (6.585), each
   from its own handlers (Quarm fc75fcf, TAKP 44afcbf).
   - New functions: `socials::{eqmac_random, eqmac_assist}`,
