@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's quest rewards and their sound, renames, the new titles
+  notice and the banker's change as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`
+  (0x1a30, both the reward and the ding record), `OP_MobRename` (0x2c57),
+  `OP_NewTitlesAvailable` (0x0d32) and `OP_BankerChange` (0x791e), which
+  have no encoder for either generation, through Titanium's readers into
+  Titanium's events, with Titanium's refusals. The rename's names reach the
+  host in the event only. Coverage rows for all four; `OP_Sound` and
+  `OP_MobRename` share Titanium's parts. Validate still refuses RoF2.
 - Take an item's song as the class's when the host's installed spell data
   says so (gap 3.5, checklist 6.542, part 2). The new
   `ItemUse::installed_class_spell: Option<bool>` is the host's word; with

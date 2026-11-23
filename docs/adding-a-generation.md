@@ -177,6 +177,10 @@ unreachable because validation refuses the generation:
   messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
   numbers. Whether the program reads the pick pocket answer's skill word and the begging
   answer's first words is a read still owed.
+- Its quest rewards, renames, new titles notice and banker's change (`rof2_notices`, 6.549):
+  four messages with no encoder for either generation, read by Titanium's readers under
+  `RoF2`'s numbers. Whether the program reads the reward's faction words and the rename's two
+  words is a read still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.
