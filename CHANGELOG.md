@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Every Titanium door is a wall, as the program's collision move filter
+  0x42cdb1 has it (portcullis follow-up read, correcting R1): a shut
+  portcullis of open types 60-77 now stops the player like a hinged door.
+  `Solidity::of` gives `wall: true` for every open type; its floor rule is
+  unchanged. No API change.
+
 - Read the Apply Poison wait from effect 234 as the program does (read
   R49-1f, 6.493b): the host reports the total with the new
   `GameCommand::PoisonWait { session_id, total_ms }`, and each tick waits
