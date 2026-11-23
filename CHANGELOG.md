@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Bound a walking strafe by the walking strafe rate (checklist 6.540).
+  `MovementMode::Strafe` carries the new `movement::Pace` (`Run`, the
+  default, or `Walk`), as a diagonal already says Walk or Run. The session
+  bounds a `Strafe(Pace::Walk)` by `StrafeCalibration::walk_units_per_second`
+  where the grant has one, and by the one strafe rate where it has none
+  (`EQMac`), so the guard only gets stricter; a running strafe and every
+  other mode keep their bounds. Each grant's span in a sample takes the
+  pace too. The wire is unchanged: the same move walking or running
+  encodes the same packet.
+  **Breaking:** `MovementMode::Strafe` is now `MovementMode::Strafe(Pace)`.
+
 - Read RoF2's mana and endurance pools as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.538). The new `rof2_pools` module reads
   `OP_ManaUpdate` (0x3791) and `OP_EnduranceUpdate` (0x5f42), the server's

@@ -167,8 +167,10 @@ pub enum MovementMode {
     Backward,
     /// Walking with its own measured speed and animation.
     Walk,
-    /// Sideways movement preserving character facing.
-    Strafe,
+    /// Sideways movement preserving character facing, at the pace selected:
+    /// the Titanium program strafes on whichever base speed is selected
+    /// (recording checklist 6.540).
+    Strafe(Pace),
     /// Concurrent longitudinal and lateral movement along one ground heading.
     GroundedDiagonal(GroundedDiagonal),
     /// Airborne descent after leaving a ledge: forward speed and animation, while
@@ -178,6 +180,16 @@ pub enum MovementMode {
     Swim,
     /// One bounded Titanium shoreline arc, using ordinary position updates.
     Shoreline(ShorelineTrace),
+}
+
+/// Whether Run or Walk is selected: the base speed a strafe takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pace {
+    /// Running, the default.
+    #[default]
+    Run,
+    /// Walking selected.
+    Walk,
 }
 
 impl MovementMode {

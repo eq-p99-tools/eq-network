@@ -146,7 +146,7 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
         let now = start + Duration::from_millis(100);
         let mut session = setup(start);
         let mut motion = request(now, direction * 0.3);
-        motion.mode = MovementMode::Strafe;
+        motion.mode = MovementMode::Strafe(crate::movement::Pace::Run);
         assert!(session
             .send_move(&motion, now, |_| panic!("uncalibrated strafe"))
             .is_err());
@@ -189,6 +189,102 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
             ))
             .is_err());
     }
+}
+
+/// A session granted a strafe of 4 a second running and 2 walking, or with
+/// no walking rate (`EQMac`'s), and a strafe of `x` over 0.1 s at `pace`.
+fn strafe_at(walk: Option<f32>, pace: crate::movement::Pace, x: f32) -> bool {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut session = setup(start);
+    session
+        .calibrate(
+            MotionCalibration {
+                swim_backward_units_per_second: None,
+                swim: None,
+                diagonal: DiagonalRates::default(),
+                units_per_second: 6.0,
+                velocity_scale: 0.05,
+                animation: 12,
+                backward: None,
+                walk: None,
+                strafe: Some(StrafeCalibration {
+                    units_per_second: 4.0,
+                    velocity_scale: 0.1,
+                    animation: 8,
+                    walk_units_per_second: walk,
+                }),
+            },
+            start,
+        )
+        .unwrap();
+    let mut motion = request(now, x);
+    motion.mode = MovementMode::Strafe(pace);
+    session.send_move(&motion, now, |_| Ok(())).is_ok()
+}
+
+#[test]
+fn a_walking_strafe_is_bounded_by_the_walking_strafe_rate() {
+    use crate::movement::Pace;
+    // The guard allows every mode the same 0.01 for rounding in the
+    // distance and the stamps, and no more: just inside it is sent, just
+    // past it refused.
+    let edges = |walk, pace, rate: f32| {
+        let budget = rate * 0.1;
+        strafe_at(walk, pace, budget + 0.009) && !strafe_at(walk, pace, budget + 0.011)
+    };
+    // Walking: 2 a second, 0.2 in 0.1 s.
+    assert!(edges(Some(2.0), Pace::Walk, 2.0));
+    // Running: 4 a second, 0.4, as before.
+    assert!(edges(Some(2.0), Pace::Run, 4.0));
+    // No walking rate (EQMac's grant): a walking strafe takes the one rate.
+    assert!(edges(None, Pace::Walk, 4.0));
+}
+
+#[test]
+fn a_strafes_pace_changes_nothing_on_the_wire() {
+    use crate::movement::Pace;
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let packet = |pace| {
+        let mut session = setup(start);
+        session
+            .calibrate(
+                MotionCalibration {
+                    swim_backward_units_per_second: None,
+                    swim: None,
+                    diagonal: DiagonalRates::default(),
+                    units_per_second: 6.0,
+                    velocity_scale: 0.05,
+                    animation: 12,
+                    backward: None,
+                    walk: None,
+                    strafe: Some(StrafeCalibration {
+                        units_per_second: 4.0,
+                        velocity_scale: 0.1,
+                        animation: 8,
+                        walk_units_per_second: Some(2.0),
+                    }),
+                },
+                start,
+            )
+            .unwrap();
+        let mut motion = request(now, 0.15);
+        motion.mode = MovementMode::Strafe(pace);
+        let mut sent = Vec::new();
+        session
+            .send_move(&motion, now, |packet| {
+                sent.clone_from(&packet.body);
+                Ok(())
+            })
+            .unwrap();
+        sent
+    };
+    // The same move walking or running encodes the same packet: the velocity
+    // scale and animation are the strafe's either way.
+    let walking = packet(Pace::Walk);
+    assert_ne!(walking, Vec::<u8>::new());
+    assert_eq!(walking, packet(Pace::Run));
 }
 
 #[test]
@@ -2427,7 +2523,7 @@ fn titanium_flag_sends_strafing_and_a_jump_more_often_than_the_tick() {
     #[allow(clippy::cast_precision_loss)]
     let sent = titanium_passes(&mut session, start, 1..=12, |step, now| {
         Some(MovementRequest::new(
-            MovementMode::Strafe,
+            MovementMode::Strafe(crate::movement::Pace::Run),
             11,
             Position {
                 y: step as f32 * 0.5,
