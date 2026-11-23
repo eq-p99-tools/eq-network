@@ -45,8 +45,8 @@ server's rules, not copy them.
 2. **The wire.** Implement `Wire` for the generation (`wire.rs`). Every stage has a default that
    reads nothing or refuses ("this client generation cannot log in yet"). So a generation can be
    built one stage at a time: login, world, zone connection, admission, then messages, chat,
-   coverage and encoding. The generation's reach and how it closes a trade window have no default:
-   it states its own.
+   coverage and encoding. The generation's reach, how it closes a trade window and how it numbers
+   the player's own updates have no default: it states its own.
 3. **Opcodes and codecs.** A coverage table next to `coverage/titanium.rs` and `coverage/eqmac.rs`
    (what the session does with each message the generation's servers send). A message decoder
    next to `message::titanium` and `message::eqmac_with`, and a request encoder next to
@@ -58,6 +58,8 @@ server's rules, not copy them.
    `ServerType` implementation
    whose `wire()` returns the new wire. It offers no features until each one is checked on a live
    server of that type, as every server type starts. Server-software rules are shared, as above.
+   `ServerType::item_rules()` keeps its default: it only says how the shared `EQMac` inventory
+   records are read, and is inert for any other generation's wire.
 6. **eq-client.** Repin, then follow the compiler there too. See eq-client's ARCHITECTURE.md,
    "Client generations".
 

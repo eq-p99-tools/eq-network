@@ -102,9 +102,7 @@ pub(super) trait Wire: Sync {
     /// How the generation's client numbers the player's own updates. A
     /// per-generation constant today; a client-supplied frame count
     /// replaces Titanium's fixed rate when a history sender comes.
-    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
-        eq_network_game::movement::UpdateCounter::PerUpdate
-    }
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter;
 
     /// How long the generation's client waits after its logout before it
     /// closes the zone connection itself, reply or not; none where unread.
@@ -380,6 +378,10 @@ impl Wire for EqMac {
         })
     }
 
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        eq_network_game::movement::UpdateCounter::PerUpdate
+    }
+
     fn speeds(&self) -> Option<SpeedRule> {
         Some(eq_network_game::movement::eqmac_speeds)
     }
@@ -458,6 +460,11 @@ impl Wire for Rof2 {
     fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
         // Titanium's, inferred for RoF2 (6.489).
         &eq_network_game::reach::TITANIUM
+    }
+
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_network_game::movement::TITANIUM_UPDATE_COUNTER
     }
 }
 

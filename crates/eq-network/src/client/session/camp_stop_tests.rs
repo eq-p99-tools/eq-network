@@ -330,6 +330,9 @@ impl Wire for RefusePosition {
     fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
         EqMac.reaches()
     }
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        EqMac.update_counter()
+    }
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         if matches!(request, Request::Position(_)) {
             anyhow::bail!("synthetic position codec refusal");
@@ -347,6 +350,9 @@ impl Wire for RefuseCamp {
     }
     fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
         EqMac.reaches()
+    }
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        EqMac.update_counter()
     }
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         if matches!(request, Request::Camp) {
@@ -702,6 +708,9 @@ impl Wire for RefuseTitaniumPosition {
     }
     fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
         Titanium.reaches()
+    }
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        Titanium.update_counter()
     }
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         if matches!(request, Request::Position(_)) {

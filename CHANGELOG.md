@@ -15,8 +15,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   choose it. Every packet layout refuses it ("not built for RoF2 yet"). Each
   program rule without a read is absent (`None`), or Titanium's value on an
   arm of its own marked `inferred for RoF2 (6.489)`; grep that token for the
-  owed reads. `Wire::reaches()` and `Wire::window_closes()` lose their
-  Titanium defaults, so each generation states its own. Titanium and `EQMac`
+  owed reads. `Wire::reaches()`, `Wire::window_closes()` and
+  `Wire::update_counter()` lose their defaults, so each generation states
+  its own. Titanium and `EQMac`
   answer as before. **Breaking:** the new variants on both exhaustive enums.
 
 - Place the cursor item as the Titanium program's `/autoinventory` does
