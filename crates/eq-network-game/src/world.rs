@@ -701,12 +701,15 @@ pub enum Capability {
     /// and items there are ([`crate::command::GameCommand::BazaarSearch`],
     /// [`crate::command::GameCommand::BazaarWelcome`]). No money moves.
     BazaarSearching,
+    /// Taking offered tasks, cancelling journal entries, a finished task's
+    /// steps and `/tasktimers` ([`crate::tasks::offers`]).
+    Tasks,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 81] = [
+    pub const ALL: [Self; 82] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -788,6 +791,7 @@ impl Capability {
         Self::Shielding,
         Self::Titling,
         Self::BazaarSearching,
+        Self::Tasks,
     ];
 }
 
@@ -1699,6 +1703,29 @@ pub enum WorldEvent {
         session_id: u64,
         /// The list, oldest first, as sent.
         list: Vec<crate::tasks::CompletedTask>,
+    },
+    /// An NPC offers the player tasks, replacing any earlier offer. The
+    /// offer stands until the player takes one or declines, the next offer,
+    /// or the zone's end.
+    TasksOffered {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The offer, as sent.
+        offers: crate::tasks::offers::TaskOffers,
+    },
+    /// A finished task's done steps, as asked for.
+    TaskHistory {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The steps.
+        history: crate::tasks::offers::TaskHistory,
+    },
+    /// A task request was not sent, and why.
+    TaskRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
     },
     /// A chat line was not sent, and is not kept for later: the session's
     /// pace for all chat held it (recording checklist 6.523).
@@ -2759,6 +2786,7 @@ mod tests {
             Capability::Shielding => 78,
             Capability::Titling => 79,
             Capability::BazaarSearching => 80,
+            Capability::Tasks => 81,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

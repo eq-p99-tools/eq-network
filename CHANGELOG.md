@@ -11,6 +11,33 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorldEvent::Bandoliers` and `WorldEvent::PotionBelt`, on every Titanium
   server. A bad field withdraws only these two events. Nothing is sent.
   **Breaking:** new `WorldEvent` variants.
+- Read an NPC's task offer and a finished task's steps, and send the
+  player's task requests (checklist 6.555), from stock `EQEmu`'s source
+  and not yet checked live. The new `tasks::offers` module reads
+  `OP_TaskSelectWindow` (0x5e7c) and `OP_TaskHistoryReply` (0x397d), and
+  encodes `OP_AcceptNewTask` (0x207f, 12 bytes), `OP_CancelTask` (0x3ba8),
+  `OP_TaskHistoryRequest` (0x5df4) and `/tasktimers` (0x6a1d, empty body,
+  inferred). New events for the client's ignore arms: `WorldEvent::TasksOffered`,
+  `TaskHistory` and `TaskRefused`. New commands `GameCommand::AcceptTask`,
+  `DeclineTasks`, `CancelTask`, `AskTaskHistory` and `ListTaskTimers` under
+  the new `Capability::Tasks`, which only a local stock `EQEmu` session
+  offers until the live row passes. The session accepts only a task in the
+  current offer while its giver is an NPC it holds, and sends one cancel
+  per held slot until the removal, against two faults in `EQEmu`'s
+  handlers; declining sends nothing (inferred). Both new coverage rows keep
+  no sample. **Breaking:** the new `News`, `Request`, `GameCommand`,
+  `WorldEvent` and `Capability` variants.
+- Read RoF2's corpse money and loot close, the surname answer, the title
+  list and title changes as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.552). The new `rof2_loot_titles` module reads `OP_MoneyOnCorpse`
+  (0x5f44), `OP_LootComplete` (0x55c4), `OP_Surname` (0x0423),
+  `OP_SendTitleList` (0x2d08) and `OP_SetTitleReply` (0x4c21), which have no
+  encoder for either generation, through Titanium's readers into Titanium's
+  events, with Titanium's refusals. The corpse money record that ends a SoD
+  and later listing (response 6, Loot All) gives no event: its coverage row
+  is `Partly` with a part naming it, so the gap log tells each arrival, and
+  lifting validate waits on the loot listing batch that decides its event.
+  The last name and the titles reach the host in the event only.
 - Search the Bazaar on stock `EQEmu`, read only (6.550, slice 1). The new
   `bazaar` module builds `OP_BazaarSearch` (0x1ee9) searches and welcome
   requests and reads the results, the search's end and the welcome.

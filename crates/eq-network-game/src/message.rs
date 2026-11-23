@@ -136,7 +136,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 62] = [
+pub const ROF2_READS: [u16; 67] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -199,6 +199,11 @@ pub const ROF2_READS: [u16; 62] = [
     crate::rof2_notices::RENAME_OPCODE,
     crate::rof2_notices::NEW_TITLES_OPCODE,
     crate::rof2_notices::BANKER_CHANGE_OPCODE,
+    crate::rof2_loot_titles::MONEY_OPCODE,
+    crate::rof2_loot_titles::LOOT_COMPLETE_OPCODE,
+    crate::rof2_loot_titles::SURNAME_OPCODE,
+    crate::rof2_loot_titles::TITLE_LIST_OPCODE,
+    crate::rof2_loot_titles::TITLE_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
@@ -208,7 +213,8 @@ pub const ROF2_READS: [u16; 62] = [
 /// gems (6.532), the mana and endurance pools (6.538), doors, ground objects
 /// and the weather (6.539), rolls, assists, yells and effects (6.541), and
 /// targets, charms, rewards, reuse and skill answers (6.544), and quest
-/// rewards, renames, new titles and the banker's change (6.549) are read
+/// rewards, renames, new titles and the banker's change (6.549), and corpse
+/// money and the loot close, the surname answer and titles (6.552) are read
 /// yet; a body a reader refuses is unreadable, told by its opcode and length
 /// only.
 #[must_use]
@@ -251,6 +257,7 @@ fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
         .or_else(|| one(crate::rof2_socials::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_answers::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_notices::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_loot_titles::read(opcode, body), Part::World))
         .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
         .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
 }

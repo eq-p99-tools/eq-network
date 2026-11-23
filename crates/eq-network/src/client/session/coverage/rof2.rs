@@ -7,7 +7,7 @@
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
 //! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538, 6.539, 6.541,
-//! 6.544, 6.549), and the chat rows from the chat parser (6.521).
+//! 6.544, 6.549, 6.552), and the chat rows from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -30,6 +30,14 @@ const DESCRIPTION: &[Part] = &[
         Needless("the session has it from its entry"),
     ),
 ];
+/// What the zone decoder leaves unread of `RoF2`'s corpse money (6.552):
+/// the record that ends a `SoD` and later listing, which gives no event until
+/// the loot listing is read.
+const LOOT_ALL: &[Part] = &[Part(
+    "the Loot All marker, a response of 6 that ends the listing (zone/corpse.cpp \
+     Corpse::MakeLootRequestPackets)",
+    Planned(Rof2),
+)];
 /// What the entry leaves unread of `RoF2`'s profile (6.502).
 const PROFILE: &[Part] = &[Part(
     "gems 9 to 12, the spellbook, coins, buffs, alternate advancement, the 20 bandoliers and \
@@ -241,6 +249,15 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x2c57 => sent("OP_MobRename", ROF2, Partly(&[Zone], RENAME)),
         0x0d32 => sent("OP_NewTitlesAvailable", ROF2, Read(&[Zone])),
         0x791e => sent("OP_BankerChange", ROF2, Read(&[Zone])),
+        // Corpse money and the loot close, the surname answer and titles
+        // (6.552), unencoded for both generations, the bytes Titanium gets.
+        // The corpse money's Loot All marker, which only SoD and later get,
+        // gives no event yet.
+        0x5f44 => sent("OP_MoneyOnCorpse", ROF2, Partly(&[Zone], LOOT_ALL)),
+        0x55c4 => sent("OP_LootComplete", ROF2, Read(&[Zone])),
+        0x0423 => sent("OP_Surname", ROF2, Read(&[Zone])),
+        0x2d08 => sent("OP_SendTitleList", ROF2, Read(&[Zone])),
+        0x4c21 => sent("OP_SetTitleReply", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the
@@ -289,5 +306,20 @@ mod tests {
             })
             .collect();
         assert_eq!(unread, skipped.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_corpse_money_leaves_the_loot_all_marker_as_a_gap() {
+        // Each arrival of RoF2's corpse money is a gap until the loot
+        // listing batch reads the Loot All marker (6.552).
+        let gap = super::super::gap_at(rof2(0x5f44).as_ref(), super::super::Stage::Zone, 20);
+        assert!(
+            matches!(
+                &gap,
+                Some(super::super::GapKind::PartlyRead { parts })
+                    if parts.len() == 1 && parts[0].starts_with("the Loot All marker")
+            ),
+            "{gap:?}"
+        );
     }
 }

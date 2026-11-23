@@ -341,6 +341,18 @@ const TASK_ACTIVITY: &[Part] = &[
     ),
 ];
 
+/// What `OP_TaskSelectWindow`'s reader leaves (6.555).
+const TASK_OFFERS: &[Part] = &[Part(
+    "each offered step's request-type word",
+    Reason::Needless("EQEmu writes 0, \"no longer in live\""),
+)];
+
+/// What `OP_TaskHistoryReply`'s reader leaves (6.555).
+const TASK_HISTORY: &[Part] = &[Part(
+    "each done step's two marks and last word",
+    Reason::Needless("EQEmu writes 0xffffffff, 0xffffffff and 0"),
+)];
+
 /// What the session leaves unread of a rename.
 const RENAME: &[Part] = &[
     Part(
