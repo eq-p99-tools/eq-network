@@ -176,6 +176,62 @@ impl CoinTransfer {
     }
 }
 
+/// Coins of one kind destroyed from the cursor: a move to the servers'
+/// slot -1, which `EQEmu`'s and TAKP's `Client::OPMoveCoin` take from the
+/// source and add nowhere. That the Titanium program sends it this way, from
+/// the cursor with the same kind on both sides, is inferred (checklist
+/// 6.512, read R49-11).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct CoinDestroy {
+    /// Their kind.
+    pub coin: Coin,
+    /// How many.
+    pub amount: u32,
+}
+
+impl CoinDestroy {
+    /// The servers' slot for destroyed coins.
+    const DESTROYED: i32 = -1;
+
+    /// The packet for it.
+    ///
+    /// # Errors
+    /// Rejects nothing destroyed and amounts the signed field cannot carry.
+    pub fn encode(&self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: MOVE_OPCODE,
+            body: self.body()?,
+        })
+    }
+
+    /// `EQMac`'s packet for it: the same five signed words.
+    ///
+    /// # Errors
+    /// Rejects what [`CoinDestroy::encode`] does.
+    pub fn encode_eqmac(&self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: EQMAC_MOVE_OPCODE,
+            body: self.body()?,
+        })
+    }
+
+    fn body(self) -> Result<Vec<u8>> {
+        ensure!(self.amount > 0, "destroy at least one coin");
+        let amount = i32::try_from(self.amount)?;
+        let mut body = Vec::with_capacity(20);
+        for value in [
+            CoinPlace::Cursor.wire().cast_signed(),
+            Self::DESTROYED,
+            self.coin.wire().cast_signed(),
+            self.coin.wire().cast_signed(),
+            amount,
+        ] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        Ok(body)
+    }
+}
+
 /// Where the player's coins are. Servers answer no coin move, so whoever
 /// sends the moves keeps this, as the Titanium client does; a money update
 /// replaces the purse.
@@ -212,6 +268,26 @@ impl Wallet {
             CoinPlace::Bank => self.bank.as_mut(),
             CoinPlace::Trade => Some(&mut self.given),
         }
+    }
+
+    /// Destroys coins from the cursor, as the servers take them.
+    ///
+    /// # Errors
+    /// Refuses nothing, more than the cursor holds, and amounts the servers'
+    /// signed count cannot carry.
+    pub fn destroy(&mut self, destroy: CoinDestroy) -> Result<(), &'static str> {
+        if destroy.amount == 0 {
+            return Err("Destroy at least one coin");
+        }
+        if i32::try_from(destroy.amount).is_err() {
+            return Err("Too many coins for one move");
+        }
+        let held = self.cursor.of_mut(destroy.coin);
+        if *held < destroy.amount {
+            return Err("You do not have that many coins there");
+        }
+        *held -= destroy.amount;
+        Ok(())
     }
 
     /// Moves coins as servers count them ([`CoinTransfer::amounts`]).
@@ -521,6 +597,73 @@ mod tests {
         assert!(eqmac_purse_addition(&notice(0, 4, 12)).is_err());
         assert!(eqmac_purse_addition(&notice(0, 3, -1)).is_err());
         assert!(eqmac_purse_addition(&notice(0, 3, 12)[..7]).is_err());
+    }
+
+    #[test]
+    fn a_destroy_moves_one_kind_from_the_cursor_to_the_servers_slot_minus_one() {
+        let destroy = CoinDestroy {
+            coin: Coin::Platinum,
+            amount: 25,
+        };
+        let titanium = destroy.encode().unwrap();
+        assert_eq!(titanium.opcode, MOVE_OPCODE);
+        let mut expected = Vec::new();
+        for word in [0i32, -1, 3, 3, 25] {
+            expected.extend_from_slice(&word.to_le_bytes());
+        }
+        assert_eq!(titanium.body, expected);
+        assert_eq!(&titanium.body[4..8], &[0xff; 4]);
+        let eqmac = destroy.encode_eqmac().unwrap();
+        assert_eq!(eqmac.opcode, EQMAC_MOVE_OPCODE);
+        assert_eq!(eqmac.body, expected);
+        // Nothing destroyed, or more than the signed count carries.
+        for amount in [0, u32::MAX] {
+            let refused = CoinDestroy { amount, ..destroy };
+            assert!(refused.encode().is_err());
+            assert!(refused.encode_eqmac().is_err());
+        }
+    }
+
+    #[test]
+    fn a_wallet_destroys_from_the_cursor_only() {
+        let coins = |platinum, gold| Coins {
+            platinum,
+            gold,
+            silver: 0,
+            copper: 0,
+        };
+        let mut wallet = Wallet {
+            purse: Some(coins(9, 9)),
+            cursor: coins(4, 2),
+            bank: Some(coins(1, 1)),
+            given: coins(0, 0),
+            offered: coins(0, 0),
+        };
+        let gold = |amount| CoinDestroy {
+            coin: Coin::Gold,
+            amount,
+        };
+        let before = wallet;
+        assert!(wallet.destroy(gold(0)).is_err());
+        assert!(wallet.destroy(gold(3)).is_err());
+        assert!(wallet
+            .destroy(CoinDestroy {
+                coin: Coin::Silver,
+                amount: 1
+            })
+            .is_err());
+        assert_eq!(wallet, before);
+        wallet.destroy(gold(2)).unwrap();
+        assert_eq!(wallet.cursor, coins(4, 0));
+        assert_eq!(wallet.purse, before.purse);
+        assert_eq!(wallet.bank, before.bank);
+        wallet
+            .destroy(CoinDestroy {
+                coin: Coin::Platinum,
+                amount: 4,
+            })
+            .unwrap();
+        assert!(wallet.cursor.is_empty());
     }
 
     #[test]
