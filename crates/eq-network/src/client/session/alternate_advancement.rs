@@ -1,4 +1,4 @@
-//! Admission-scoped, read-only AA environmental observations for local `EQEmu`.
+//! Admission-scoped, read-only AA environmental observations for Titanium servers.
 use super::{
     feature::{Feature, Out, World},
     ClientEvent,

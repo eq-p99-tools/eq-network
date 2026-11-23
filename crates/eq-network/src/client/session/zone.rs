@@ -1626,19 +1626,20 @@ mod tests {
     }
 
     #[test]
-    fn public_and_remote_providers_cannot_send_liquid_damage() {
+    fn every_titanium_server_takes_liquid_damage_and_the_mac_era_ones_do_not() {
         use super::super::feature::testing;
         use crate::client::{ClientConfig, ServerProtocol};
-        use eq_network_game::hazards::{LiquidHazard, LiquidObservation};
+        use eq_network_game::hazards::{self, Hazard, LiquidHazard, LiquidObservation};
         use eq_network_game::world::Capability;
 
-        for (protocol, local_only) in [
-            (ServerProtocol::Project1999, false),
-            (ServerProtocol::EqEmu, false),
-            (ServerProtocol::Quarm, false),
-            (ServerProtocol::Takp, false),
-            (ServerProtocol::Quarm, true),
-            (ServerProtocol::Takp, true),
+        for (protocol, local_only, taken) in [
+            (ServerProtocol::Project1999, false, true),
+            (ServerProtocol::EqEmu, false, true),
+            (ServerProtocol::EqEmu, true, true),
+            (ServerProtocol::Quarm, false, false),
+            (ServerProtocol::Takp, false, false),
+            (ServerProtocol::Quarm, true, false),
+            (ServerProtocol::Takp, true, false),
         ] {
             let mut config = ClientConfig::new("Example", "Fixture", "Server", "Tester");
             config.protocol = protocol;
@@ -1656,8 +1657,8 @@ mod tests {
             let server = servers::server_type(protocol);
             let mut features = Features::from_setup(server, &setup);
             let capabilities = features.capabilities();
-            assert!(!capabilities.contains(&Capability::Drowning));
-            assert!(!capabilities.contains(&Capability::LavaHeat));
+            assert_eq!(capabilities.contains(&Capability::Drowning), taken);
+            assert_eq!(capabilities.contains(&Capability::LavaHeat), taken);
             let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
                 out.log.send(ClientEvent::World(WorldEvent::Entered {
                     capabilities,
@@ -1685,7 +1686,14 @@ mod tests {
                 Ok(())
             });
             outcome.result.unwrap();
-            assert!(outcome.sent.is_empty(), "{protocol:?}");
+            let sent: Vec<_> = if taken {
+                [Hazard::Drowning, Hazard::Lava]
+                    .map(|hazard| hazards::titanium_damage(7, hazard, 13).unwrap())
+                    .to_vec()
+            } else {
+                Vec::new()
+            };
+            assert_eq!(outcome.sent, sent, "{protocol:?} local {local_only}");
             assert!(outcome.unreliable.is_empty(), "{protocol:?}");
         }
     }
@@ -2917,8 +2925,8 @@ mod tests {
         .capabilities();
         assert!(local.contains(&Capability::GroundDropping));
         for liquid in [Capability::Drowning, Capability::LavaHeat] {
-            assert!(!p99.contains(&liquid));
-            assert!(!eqemu.contains(&liquid));
+            assert!(p99.contains(&liquid));
+            assert!(eqemu.contains(&liquid));
             assert!(local.contains(&liquid));
         }
         assert!(p99.contains(&Capability::AnsweringListPolls));

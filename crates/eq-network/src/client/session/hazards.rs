@@ -217,7 +217,7 @@ impl Feature for Hazards {
                     LiquidHazard::Drowning => (Hazard::Drowning, 0),
                     LiquidHazard::Lava => (Hazard::Lava, 1),
                 };
-                if !self.taken.contains(&hazard) || !world.local_eqemu() {
+                if !self.taken.contains(&hazard) {
                     return actions::refuse(
                         command,
                         "Liquid reports are unavailable on this session",

@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Report drowning and lava on every Titanium server, as the Titanium
+  program does (read R25: 0x41c905 sends its own damage reports on any
+  server it plays on). **Characters on public EQEmu servers and on P99
+  can now drown and burn with this client**, where before only falls were
+  reported there. The EQEmu and P99 policies take falls, drowning and lava
+  whether or not the session is on the local network, and both read the AA
+  facts the air counter needs. A host withholds every report with its own
+  setting (the client's Take Environmental Damage). Inferred until read:
+  the liquid amounts and timing are the host's calculation, not the
+  program's formula (R49-3), and that P99's server takes them as it takes
+  the official client's (6.491). TAKP and Quarm are unchanged.
+
 - Place the cursor item as the Titanium program's `/autoinventory` does
   (read R46). `Inventory::auto_inventory_destination` tries the worn slots
   first (onto the same item, else the first empty slot the item fits and
