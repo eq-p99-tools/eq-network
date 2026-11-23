@@ -446,11 +446,13 @@ pub(super) fn offered(
 /// the link heard.
 pub(super) struct Channels {
     link: Arc<ChatLink>,
+    /// The character's one pace for all chat (6.523).
+    pace: super::chat_pace::SharedPace,
 }
 
 impl Channels {
-    pub(super) const fn new(link: Arc<ChatLink>) -> Self {
-        Self { link }
+    pub(super) const fn new(link: Arc<ChatLink>, pace: super::chat_pace::SharedPace) -> Self {
+        Self { link, pace }
     }
 }
 
@@ -493,9 +495,17 @@ impl Feature for Channels {
                 out.log,
             );
         }
-        match self.link.send(text) {
-            Ok(()) => Ok(()),
-            Err(reason) => super::actions::refuse(command, reason, out.log),
+        // Only what a host asked for is paced; the link's own login is not,
+        // and a command the link refuses is not counted.
+        match super::chat_pace::paced(
+            &self.pace,
+            super::chat_pace::Kind::of_channel(text),
+            std::time::Instant::now(),
+            || self.link.send(text),
+        ) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(reason)) => super::actions::refuse(command, reason, out.log),
+            Err(paced) => super::actions::refuse(command, &paced.reason(), out.log),
         }
     }
 
@@ -893,7 +903,10 @@ mod tests {
     #[test]
     fn the_gap_log_keeps_an_unread_message_by_opcode_and_length_only() {
         let (link, _, _) = link(Some(Stub::Floods));
-        let mut channels = Channels::new(Arc::clone(&link));
+        let mut channels = Channels::new(
+            Arc::clone(&link),
+            super::super::chat_pace::SharedPace::default(),
+        );
         let mut world = World::new(5);
         link.open(login(), false);
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -942,6 +955,48 @@ mod tests {
         link.close();
     }
 
+    /// Only what a host asked for counts toward the pace for all chat, and
+    /// only what the link took: refusals before the link is up and the
+    /// link's own login do not (6.523, reviewer L2 and L4).
+    #[test]
+    fn the_pace_counts_only_what_a_host_asked_and_the_link_took() {
+        let (link, _, _) = link(Some(Stub::Takes));
+        let pace = super::super::chat_pace::SharedPace::default();
+        let mut channels = Channels::new(Arc::clone(&link), Arc::clone(&pace));
+        let mut world = World::new(5);
+        let mut ask = |text: &str| {
+            let command = ClientCommand::ChatChannel {
+                session_id: 5,
+                text: text.into(),
+                created: Instant::now(),
+            };
+            let outcome = testing::run(|out| channels.handle(&command, &mut world, out));
+            outcome.result.unwrap();
+            outcome.events.into_iter().find_map(|event| match event {
+                ClientEvent::World(WorldEvent::ChatChannelRefused { reason, .. }) => Some(reason),
+                _ => None,
+            })
+        };
+        for _ in 0..20 {
+            assert_eq!(
+                ask("2 early").as_deref(),
+                Some("There is no chat server link")
+            );
+        }
+        link.open(login(), false);
+        until(&link, |news| news.contains(&News::Link(ChannelLink::Up)));
+        for line in 0..super::super::chat_pace::ANY_CHAT {
+            assert_eq!(ask("list"), None, "{line}");
+        }
+        let refused = ask("2 a synthetic private line").expect("paced");
+        assert!(
+            refused.starts_with("You are sending chat too fast."),
+            "{refused}"
+        );
+        assert!(!refused.contains("private"));
+        link.close();
+    }
+
     fn link_slow() -> (Arc<ChatLink>, Sent, Arc<Mutex<usize>>) {
         link(Some(Stub::Slow))
     }
@@ -958,7 +1013,10 @@ mod tests {
             Some(Stub::Floods),
         ] {
             let (link, _, _) = link(stub);
-            let mut channels = Channels::new(Arc::clone(&link));
+            let mut channels = Channels::new(
+                Arc::clone(&link),
+                super::super::chat_pace::SharedPace::default(),
+            );
             let mut world = World::new(5);
             link.open(login(), false);
             let command = ClientCommand::ChatChannel {
@@ -1036,7 +1094,10 @@ mod tests {
     #[test]
     fn the_zone_refuses_commands_without_an_up_link_and_tells_what_it_heard() {
         let (link, _, _) = link(Some(Stub::Takes));
-        let mut channels = Channels::new(Arc::clone(&link));
+        let mut channels = Channels::new(
+            Arc::clone(&link),
+            super::super::chat_pace::SharedPace::default(),
+        );
         let mut world = World::new(5);
         let created = Instant::now();
         let command = |session_id| ClientCommand::ChatChannel {

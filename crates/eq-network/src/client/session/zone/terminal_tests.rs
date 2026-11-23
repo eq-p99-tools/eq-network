@@ -163,6 +163,7 @@ fn the_zone_loop_refuses_queued_work_and_drains_the_final_logout() {
         server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
         chat: std::sync::Arc::default(),
+        chat_pace: std::sync::Arc::default(),
     };
     let mut seen = Vec::new();
     let mut handler = |event| {

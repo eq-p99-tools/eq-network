@@ -86,6 +86,9 @@ pub(super) struct Setup<'a> {
     pub(super) local_only: bool,
     /// The character's chat server link, where the zone session has one.
     pub(super) chat: Option<std::sync::Arc<super::chat_link::ChatLink>>,
+    /// The character's one pace for all chat, kept across zones
+    /// (recording checklist 6.523).
+    pub(super) chat_pace: super::chat_pace::SharedPace,
 }
 
 impl<'a> Setup<'a> {
@@ -96,6 +99,7 @@ impl<'a> Setup<'a> {
             auto_eat,
             local_only: false,
             chat: None,
+            chat_pace: super::chat_pace::SharedPace::default(),
         }
     }
 }
@@ -561,7 +565,12 @@ pub(super) trait ServerType: Sync {
             .chat
             .clone()
             .filter(|_| self.chat_channels())
-            .and_then(|link| offer(Box::new(super::chat_link::Channels::new(link))))
+            .and_then(|link| {
+                offer(Box::new(super::chat_link::Channels::new(
+                    link,
+                    std::sync::Arc::clone(&setup.chat_pace),
+                )))
+            })
     }
 
     /// Asking which of the player's friends are online.
@@ -808,8 +817,8 @@ mod shared {
         Box::new(HideAnswer)
     }
 
-    pub(super) fn talk() -> Box<dyn Feature> {
-        Box::new(Talk)
+    pub(super) fn talk(setup: &Setup<'_>) -> Box<dyn Feature> {
+        Box::new(Talk::new(std::sync::Arc::clone(&setup.chat_pace)))
     }
 
     pub(super) fn camp() -> Box<dyn Feature> {
@@ -1191,8 +1200,8 @@ impl ServerType for Project1999 {
         offer(shared::abilities_with_self_bandage(&Ability::ALL))
     }
 
-    fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::talk())
+    fn talk(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::talk(setup))
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
@@ -1407,8 +1416,8 @@ impl ServerType for EqEmu {
         offer(shared::hide_answer())
     }
 
-    fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::talk())
+    fn talk(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::talk(setup))
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
@@ -1747,8 +1756,8 @@ impl ServerType for Quarm {
         offer(shared::entities(GameDialect::EqMac))
     }
 
-    fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::talk())
+    fn talk(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::talk(setup))
     }
 }
 
@@ -1866,8 +1875,8 @@ impl ServerType for Takp {
         offer(shared::entities(GameDialect::EqMac))
     }
 
-    fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::talk())
+    fn talk(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::talk(setup))
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
