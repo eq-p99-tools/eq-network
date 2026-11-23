@@ -50,8 +50,9 @@ built from these kinds may be one the official options cannot produce.
 `GameCommand::SendFeedback { session_id, text, created }` send a report to
 the server's staff (`eq_network_game::reports`), under
 `Capability::Petitioning`, `Capability::ReportingBugs` and
-`Capability::SendingFeedback`. A person reads each one, so a host sends one
-only when the player types it, never from a script, social or setting.
+`Capability::SendingFeedback`. A person reads each one. A host may send one
+the player types or one from a script, since a script may do whatever the
+player can; the pace below holds either way.
 Stock `EQEmu` lists petitions and bug reports; no server type lists feedback,
 or any of the three on P99, Quarm or TAKP, until its own live check
 (recording checklist 6.511).
@@ -1955,8 +1956,8 @@ action 2. Stock `EQEmu` then moves up to eight items (`SetBandolier`,
 `MoveItemToInventory`) and sends no item update, so the session works out
 every move (`bandolier::swap`) and tells the host the whole result as
 `WorldEvent::Inventory(InventoryUpdate::Prediction(..))`, settled by the
-ordinary refusal window. **A host sends a swap only on the player's own
-click or key, never from a script or a social** (until decided). The swap
+ordinary refusal window. A host may send a swap from a click, a key, a
+social or a script, since a script may do whatever the player can. The swap
 is refused, with nothing sent (`BandolierRefused`), when any move can't be
 worked out exactly: an inventory not known or with a move in flight or
 custody unknown, anything on the cursor, an item record lacking what the
@@ -2203,10 +2204,9 @@ acceptance can bring down a zone other players share. Each refusal is
   program's body is inferred until read R49-38); the server answers in
   chat. Each is paced at one per second, this library's floor (inferred).
 
-A host sends `AcceptTask` and `CancelTask` only on the player's own choice,
-never from a script, social or hotbutton: this library's safeguard, not
-the program's. A cancel loses the entry's progress, so a host confirms it
-first.
+A host may send `AcceptTask` and `CancelTask` from a click, a social, a
+hotbutton or a script, since a script may do whatever the player can. A
+cancel loses the entry's progress, so a host confirms a click first.
 
 ## Resurrection and translocate consent
 
