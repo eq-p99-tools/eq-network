@@ -177,13 +177,15 @@ impl Spellbook {
             BookIntent::Scribe { .. } => ("scribing is unavailable", "Scribing scroll", "scribing"),
         };
         let fast = self.memorize_without_sitting && matches!(intent, BookIntent::Memorize { .. });
+        // Titanium's scribe gauge; the Mac-era and RoF2 programs' scribe
+        // waits aren't read, so they keep this library's.
+        let gauge = match out.wire.dialect() {
+            eq_network_game::GameDialect::Titanium => true,
+            eq_network_game::GameDialect::EqMac | eq_network_game::GameDialect::Rof2 => false,
+        };
         let delay = match intent {
             _ if fast => Duration::ZERO,
-            BookIntent::Scribe { .. }
-                if out.wire.dialect() == eq_network_game::GameDialect::Titanium =>
-            {
-                titanium_scribe_wait()
-            }
+            BookIntent::Scribe { .. } if gauge => titanium_scribe_wait(),
             BookIntent::Scribe { .. } | BookIntent::Memorize { .. } => SITTING,
         };
         let pending = PendingBookAction {
