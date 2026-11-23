@@ -5,6 +5,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Send and hear `/surname` as read R49-10 reads the Titanium program (6.507, the client's #616 follow-up).
+  - A quoted surname's spaces now go as given; only an empty word, a control character, anything outside ASCII or 32 bytes and more are refused, in the encoder and the session alike. The session no longer trims the word.
+  - Any answer word but 0 is taken (`accepted: true`), where 2 and more were refused before.
+  - Every `WorldEvent::SurnameAnswer` reaches the host, asked or not, and nothing holds a second request: the program shows each answer and paces a request by its own question.
 - Every Titanium door is a wall (6.607), as the program's collision move filter
   0x42cdb1 has it (portcullis follow-up read, correcting R1): a shut
   portcullis of open types 60-77 now stops the player like a hinged door.
