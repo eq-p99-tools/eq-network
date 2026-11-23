@@ -1,13 +1,14 @@
 //! Logging in: the login server checks the account, lists the worlds and
 //! hands out the session key the world and its zones check. Each client
-//! generation logs in its own way: Titanium's is here, `EQMac`'s in
-//! [`eqmac`]. Both play on the configured world, or list the worlds for the
-//! player to choose from when none is configured.
+//! generation logs in its own way: Titanium's is here, `RoF2`'s is
+//! Titanium's with its own server opcodes, and `EQMac`'s is in [`eqmac`].
+//! Each plays on the configured world, or lists the worlds for the player
+//! to choose from when none is configured.
 use super::{
     coverage::{Stage, Unheard},
     cstr, le32,
     servers::server_type,
-    wire::Titanium,
+    wire::{Rof2, Titanium, Wire},
 };
 use crate::{
     client::{
@@ -18,7 +19,10 @@ use crate::{
     transport::{Application, Session},
 };
 use anyhow::{bail, ensure, Context, Result};
-use eq_network_game::servers::{ServerChoice, ServerRefusal, ServerStatus};
+use eq_network_game::{
+    servers::{ServerChoice, ServerRefusal, ServerStatus},
+    GameDialect,
+};
 use eq_network_login::{
     crypto::{des_decrypt, DesKeyIv},
     login::{encrypt_login_credentials, is_bad_password_login_result},
@@ -54,17 +58,67 @@ enum LoginOpcode {
     Accepted,
     ServerList,
     PlayResponse,
+    /// The owned-expansion list a login server may send newer clients
+    /// before it accepts them. Nothing the client does depends on it.
+    Expansions,
     Unknown(u16),
 }
 
-impl From<u16> for LoginOpcode {
-    fn from(value: u16) -> Self {
+/// The opcodes a generation's login server answers with. The client's own
+/// (session ready 1, credentials 2, list request 4, play 0x0d, complete 3)
+/// are the same for every generation that logs in this way.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LoginOpcodes {
+    ready: u16,
+    accepted: u16,
+    list: u16,
+    play_response: u16,
+    expansions: Option<u16>,
+}
+
+impl LoginOpcodes {
+    /// The Titanium client's.
+    const TITANIUM: Self = Self {
+        ready: 0x16,
+        accepted: 0x17,
+        list: 0x18,
+        play_response: 0x21,
+        expansions: None,
+    };
+
+    /// The `RoF2` client's: Titanium's exchange, with each of the server's
+    /// four opcodes one higher and the expansion list at 0x31, as `EQEmu`'s
+    /// login server keeps them for every client newer than Titanium
+    /// (`loginserver/login_util/login_opcodes_sod.conf`; `loginserver/client.cpp`,
+    /// `Client::SendExpansionPacketData`), inferred for `RoF2` (6.497).
+    const ROF2: Self = Self {
+        ready: 0x17,
+        accepted: 0x18,
+        list: 0x19,
+        play_response: 0x22,
+        expansions: Some(0x31),
+    };
+
+    /// The opcodes of a generation that logs in this way.
+    ///
+    /// # Errors
+    /// `EQMac`'s login is its own exchange ([`eqmac`]).
+    fn of(dialect: GameDialect) -> Result<Self> {
+        match dialect {
+            GameDialect::Titanium => Ok(Self::TITANIUM),
+            GameDialect::Rof2 => Ok(Self::ROF2),
+            GameDialect::EqMac => bail!("the EQMac client logs in its own way"),
+        }
+    }
+
+    fn read(&self, value: u16) -> LoginOpcode {
         match value {
-            0x16 => Self::Ready,
-            0x17 => Self::Accepted,
-            0x18 => Self::ServerList,
-            0x21 => Self::PlayResponse,
-            value => Self::Unknown(value),
+            value if value == self.ready => LoginOpcode::Ready,
+            value if value == self.accepted => LoginOpcode::Accepted,
+            value if value == self.list => LoginOpcode::ServerList,
+            value if value == self.play_response => LoginOpcode::PlayResponse,
+            value if Some(value) == self.expansions => LoginOpcode::Expansions,
+            value => LoginOpcode::Unknown(value),
         }
     }
 }
@@ -78,6 +132,31 @@ pub(super) fn titanium(
     commands: Option<&Receiver<ClientCommand>>,
     log: &mut Events<'_>,
 ) -> Result<(Credentials, String)> {
+    exchange(&Titanium, config, stop, commands, log)
+}
+
+/// The `RoF2` client's login: Titanium's, with its login server's opcodes
+/// ([`LoginOpcodes::ROF2`]).
+pub(super) fn rof2(
+    config: &ClientConfig,
+    stop: &CancellationToken,
+    commands: Option<&Receiver<ClientCommand>>,
+    log: &mut Events<'_>,
+) -> Result<(Credentials, String)> {
+    exchange(&Rof2, config, stop, commands, log)
+}
+
+/// The login exchange the Titanium client and its successors share, read
+/// through the wire's generation's server opcodes. `wire` also names the
+/// messages it leaves unread.
+fn exchange(
+    wire: &dyn Wire,
+    config: &ClientConfig,
+    stop: &CancellationToken,
+    commands: Option<&Receiver<ClientCommand>>,
+    log: &mut Events<'_>,
+) -> Result<(Credentials, String)> {
+    let opcodes = LoginOpcodes::of(wire.dialect())?;
     let mut session = Session::connect_cancellable(
         crate::client::endpoint(&config.host, config.port, config.local_only)?,
         false,
@@ -97,7 +176,7 @@ pub(super) fn titanium(
             }
             Next::Packet(packet) => packet,
         };
-        match LoginOpcode::from(packet.opcode) {
+        match opcodes.read(packet.opcode) {
             LoginOpcode::Ready if !sent_credentials => {
                 log.send(ClientEvent::Progress(ConnectionStage::Authenticating))?;
                 let mut body = vec![0; 10];
@@ -121,6 +200,8 @@ pub(super) fn titanium(
             }
             LoginOpcode::ServerList if !choice.listed() => {
                 ensure!(packet.body.len() >= 20, "truncated server list");
+                // The list reader takes the body behind a two-byte opcode,
+                // which it skips.
                 let mut body = 0x18u16.to_le_bytes().to_vec();
                 body.extend(packet.body);
                 let (servers, _) = parse_server_list(&body).context("invalid server list")?;
@@ -149,7 +230,12 @@ pub(super) fn titanium(
                 log.send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
                 return Ok((credentials, ip));
             }
-            _ => unheard.tell(&Titanium, packet.opcode, packet.body.len(), log)?,
+            LoginOpcode::Expansions => log.diagnostic(format!(
+                "Login server sent its expansion list (0x{:04x}, {} bytes), which the client doesn't need",
+                packet.opcode,
+                packet.body.len()
+            ))?,
+            _ => unheard.tell(wire, packet.opcode, packet.body.len(), log)?,
         }
     }
 }
@@ -356,6 +442,8 @@ const BAD_CREDENTIALS_STRING: u32 = 105;
 /// `EQEmu`'s own refusal, success 0 with error string 105, also reads as a
 /// wrong account or password, so the player is told so.
 fn login_credentials(body: &[u8]) -> Result<Credentials> {
+    // The SSO crate reads the reply behind Titanium's opcode, whichever
+    // generation's login server sent it: the body is the same.
     let mut application = 0x17u16.to_le_bytes().to_vec();
     application.extend_from_slice(body);
     if is_bad_password_login_result(&application, DesKeyIv::default()) {
@@ -552,5 +640,172 @@ mod tests {
         body.extend(des_encrypt(&clear, DesKeyIv::default()));
         let error = login_credentials(&body).err().unwrap();
         assert!(!error.is::<LoginError>());
+    }
+
+    /// The server's side of the transport, for a login over a real socket.
+    mod peer {
+        use std::net::{SocketAddr, UdpSocket};
+
+        pub(super) fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
+            let mut buffer = [0; 2048];
+            let (length, address) = socket.recv_from(&mut buffer).unwrap();
+            (buffer[..length].to_vec(), address)
+        }
+
+        /// Answers the client's session request with CRC key 1234.
+        pub(super) fn negotiate(socket: &UdpSocket) -> (SocketAddr, Vec<u8>) {
+            let (request, address) = receive(socket);
+            assert_eq!(&request[..6], &[0, 1, 0, 0, 0, 2]);
+            let id = request[6..10].to_vec();
+            let mut response = vec![0, 2];
+            response.extend(&id);
+            response.extend(1234u32.to_be_bytes());
+            response.extend([2, 0, 0]);
+            response.extend(512u32.to_be_bytes());
+            socket.send_to(&response, address).unwrap();
+            (address, id)
+        }
+
+        pub(super) fn application(sequence: u16, opcode: u16, body: &[u8]) -> Vec<u8> {
+            let mut packet = vec![0, 9];
+            packet.extend(sequence.to_be_bytes());
+            packet.extend(opcode.to_le_bytes());
+            packet.extend(body);
+            let mut crc = crc32fast::Hasher::new();
+            crc.update(&1234u32.to_le_bytes());
+            crc.update(&packet);
+            packet.extend(&crc.finalize().to_be_bytes()[2..]);
+            packet
+        }
+
+        /// The client's next packet that starts with `prefix`, skipping
+        /// acknowledgements and retransmissions.
+        pub(super) fn next_starting(socket: &UdpSocket, prefix: &[u8]) -> Vec<u8> {
+            loop {
+                let (packet, _) = receive(socket);
+                if packet.starts_with(prefix) {
+                    return packet;
+                }
+            }
+        }
+    }
+
+    /// `EQEmu`'s accepted reply for account 12345 with key `EXAMPLEKEY`.
+    fn accepted_reply() -> Vec<u8> {
+        let mut clear = vec![0; 32];
+        clear[0] = 1;
+        clear[8..12].copy_from_slice(&12345u32.to_le_bytes());
+        clear[12..22].copy_from_slice(b"EXAMPLEKEY");
+        let mut body = vec![0; 10];
+        body[0] = 3;
+        body[5] = 2;
+        body.extend(des_encrypt(&clear, DesKeyIv::default()));
+        body
+    }
+
+    /// A one-world list as `EQEmu`'s login server writes it.
+    fn one_world() -> Vec<u8> {
+        let mut body = vec![0; 16];
+        body.extend(1u32.to_le_bytes());
+        body.extend(b"127.0.0.1\0");
+        body.extend(1u32.to_le_bytes());
+        body.extend(33u32.to_le_bytes());
+        body.extend(b"Example Up\0us\0en\0");
+        body.extend(0u32.to_le_bytes());
+        body.extend(7u32.to_le_bytes());
+        body
+    }
+
+    #[test]
+    fn rof2_logs_in_through_its_own_login_server_opcodes() {
+        use crate::client::ServerProtocol;
+        use std::{net::UdpSocket, sync::mpsc, thread};
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut config = ClientConfig::for_protocol(
+            ServerProtocol::EqEmuRof2,
+            "ACCOUNT",
+            "PASSWORD",
+            "Example Up",
+            "",
+        );
+        config.host = "127.0.0.1".into();
+        config.port = socket.local_addr().unwrap().port();
+        let (done, result) = mpsc::channel();
+        let client = thread::spawn(move || {
+            let mut diagnostics = Vec::new();
+            let mut handler = |event| {
+                if let ClientEvent::Diagnostic(message) = event {
+                    diagnostics.push(message);
+                }
+                Ok(())
+            };
+            let mut log = Events::new(&config, &mut handler);
+            let outcome = rof2(&config, &CancellationToken::default(), None, &mut log)
+                .map(|(credentials, ip)| (credentials.account.clone(), credentials.key, ip));
+            drop(log);
+            done.send((outcome.map_err(|error| error.to_string()), diagnostics))
+                .unwrap();
+        });
+        let (address, _) = peer::negotiate(&socket);
+        peer::next_starting(&socket, &[0, 9, 0, 0, 1, 0]);
+        let send = |sequence, opcode, body: &[u8]| {
+            socket
+                .send_to(&peer::application(sequence, opcode, body), address)
+                .unwrap();
+        };
+        // Titanium's ready is not RoF2's: the client waits for its own.
+        send(0, 0x16, &[]);
+        send(1, 0x17, &[]);
+        peer::next_starting(&socket, &[0, 9, 0, 1, 2, 0]);
+        send(2, 0x31, &[0; 12]);
+        send(3, 0x18, &accepted_reply());
+        peer::next_starting(&socket, &[0, 9, 0, 2, 4, 0]);
+        send(4, 0x19, &one_world());
+        let play = peer::next_starting(&socket, &[0, 9, 0, 3, 0x0d, 0]);
+        assert_eq!(play[16..20], 33u32.to_le_bytes());
+        let mut accepted = vec![0; 20];
+        accepted[10] = 1;
+        send(5, 0x22, &accepted);
+        peer::next_starting(&socket, &[0, 9, 0, 4, 3, 0]);
+        let (outcome, diagnostics) = result.recv_timeout(Duration::from_secs(3)).unwrap();
+        client.join().unwrap();
+        assert_eq!(
+            outcome.unwrap(),
+            ("12345".to_owned(), *b"EXAMPLEKEY", "127.0.0.1".to_owned())
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|line| line.contains("(0x0016, 0 bytes), left unread")),
+            "{diagnostics:?}"
+        );
+        assert!(
+            diagnostics.iter().any(|line| line
+                == "Login server sent its expansion list (0x0031, 12 bytes), which the client doesn't need"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn titanium_and_rof2_read_each_others_login_opcodes_as_their_own_or_not_at_all() {
+        let titanium = LoginOpcodes::of(GameDialect::Titanium).unwrap();
+        let rof2 = LoginOpcodes::of(GameDialect::Rof2).unwrap();
+        assert!(LoginOpcodes::of(GameDialect::EqMac).is_err());
+        assert_eq!(titanium.read(0x16), LoginOpcode::Ready);
+        assert_eq!(titanium.read(0x17), LoginOpcode::Accepted);
+        assert_eq!(titanium.read(0x18), LoginOpcode::ServerList);
+        assert_eq!(titanium.read(0x21), LoginOpcode::PlayResponse);
+        assert_eq!(titanium.read(0x22), LoginOpcode::Unknown(0x22));
+        assert_eq!(titanium.read(0x31), LoginOpcode::Unknown(0x31));
+        assert_eq!(rof2.read(0x16), LoginOpcode::Unknown(0x16));
+        assert_eq!(rof2.read(0x17), LoginOpcode::Ready);
+        assert_eq!(rof2.read(0x18), LoginOpcode::Accepted);
+        assert_eq!(rof2.read(0x19), LoginOpcode::ServerList);
+        assert_eq!(rof2.read(0x21), LoginOpcode::Unknown(0x21));
+        assert_eq!(rof2.read(0x22), LoginOpcode::PlayResponse);
+        assert_eq!(rof2.read(0x31), LoginOpcode::Expansions);
     }
 }

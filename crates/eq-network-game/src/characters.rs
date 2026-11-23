@@ -53,7 +53,8 @@ impl CharacterChoice {
     pub fn without_look(self, dialect: GameDialect) -> Self {
         let verified = match dialect {
             GameDialect::Titanium => true,
-            // RoF2's character list is not read yet.
+            // RoF2's list is read from `EQEmu`'s source, not checked against
+            // the client (6.497).
             GameDialect::EqMac | GameDialect::Rof2 => false,
         };
         Self {
@@ -79,7 +80,7 @@ pub fn decode(dialect: GameDialect, body: &[u8]) -> Result<Vec<CharacterChoice>>
             ensure!(body.len() >= 1620, "truncated EQMac character list");
             &EQMAC
         }
-        GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
+        GameDialect::Rof2 => return rof2(body),
     };
     let mut choices: Vec<CharacterChoice> = Vec::new();
     for (index, field) in body[layout.name..layout.name + 640]
@@ -123,6 +124,125 @@ pub fn decode(dialect: GameDialect, body: &[u8]) -> Result<Vec<CharacterChoice>>
             look: Some(record.look()),
         });
     }
+    Ok(choices)
+}
+
+/// The opcode of `RoF2`'s character list (`EQEmu`'s
+/// `utils/patches/patch_RoF2.conf`, `OP_SendCharInfo`; inferred, 6.497).
+pub const ROF2_OPCODE: u16 = 0x00d2;
+
+/// The fixed part of a `RoF2` list entry, after its name and the name's NUL.
+const ROF2_ENTRY: usize = 274;
+
+/// Where each field of a `RoF2` entry's fixed part sits.
+mod rof2_at {
+    pub(super) const CLASS: usize = 0;
+    pub(super) const RACE: usize = 1;
+    pub(super) const LEVEL: usize = 5;
+    pub(super) const ZONE: usize = 11;
+    pub(super) const GENDER: usize = 15;
+    pub(super) const FACE: usize = 16;
+    /// Nine 24-byte entries: the material at +0, the tint at +20.
+    pub(super) const EQUIPMENT: usize = 17;
+    pub(super) const DEITY: usize = 243;
+    pub(super) const PRIMARY: usize = 247;
+    pub(super) const SECONDARY: usize = 251;
+    pub(super) const HAIR_COLOR: usize = 255;
+    pub(super) const BEARD_COLOR: usize = 256;
+    pub(super) const EYES: [usize; 2] = [257, 258];
+    pub(super) const HAIR_STYLE: usize = 259;
+    pub(super) const BEARD: usize = 260;
+    pub(super) const GO_HOME: usize = 261;
+    pub(super) const TUTORIAL: usize = 262;
+}
+
+/// `RoF2`'s character list, as `EQEmu` writes it (`common/patches/rof2.cpp`,
+/// `ENCODE(OP_SendCharInfo)`; `common/patches/rof2_structs.h`,
+/// `CharacterSelect_Struct` and `CharacterSelectEntry_Struct`), inferred for
+/// `RoF2` (6.497): a 32-bit count, then that many entries, each a
+/// NUL-terminated name and [`ROF2_ENTRY`] fixed bytes. The list holds only
+/// existing characters, so an entry's slot is its place in the list.
+fn rof2(body: &[u8]) -> Result<Vec<CharacterChoice>> {
+    let count = body.get(..4).context("truncated RoF2 character list")?;
+    let count = usize::try_from(u32::from_le_bytes(count.try_into()?))?;
+    // Each entry takes at least its name's NUL and its fixed part, so a
+    // count the body can't hold is refused before anything is kept.
+    ensure!(
+        count <= (body.len() - 4) / (1 + ROF2_ENTRY),
+        "RoF2 character list counts more entries than it holds"
+    );
+    let mut choices: Vec<CharacterChoice> = Vec::with_capacity(count);
+    let mut at = 4;
+    for index in 0..count {
+        let rest = &body[at..];
+        let end = rest
+            .iter()
+            .position(|byte| *byte == 0)
+            .context("unterminated character name")?;
+        let name = &rest[..end];
+        ensure!(
+            !name.is_empty() && name.iter().all(u8::is_ascii_alphabetic),
+            "invalid character name"
+        );
+        let name = std::str::from_utf8(name)?.to_owned();
+        ensure!(
+            !choices
+                .iter()
+                .any(|choice| choice.name.eq_ignore_ascii_case(&name)),
+            "duplicate character name"
+        );
+        let fixed = rest
+            .get(end + 1..end + 1 + ROF2_ENTRY)
+            .context("truncated RoF2 character entry")?;
+        let word = |offset: usize| {
+            u32::from_le_bytes(fixed[offset..offset + 4].try_into().unwrap_or_default())
+        };
+        let equipment = |slot: usize, field: usize| word(rof2_at::EQUIPMENT + slot * 24 + field);
+        let materials = std::array::from_fn(|slot| match TextureSlot::from_index(slot) {
+            // The held items' model numbers, as spawn records carry them.
+            Some(TextureSlot::Primary) => word(rof2_at::PRIMARY),
+            Some(TextureSlot::Secondary) => word(rof2_at::SECONDARY),
+            _ => equipment(slot, 0),
+        });
+        let tints = std::array::from_fn(|slot| {
+            let [blue, green, red, used] = equipment(slot, 20).to_le_bytes();
+            (used != 0).then_some([red, green, blue])
+        });
+        choices.push(CharacterChoice {
+            slot: u8::try_from(index)?,
+            name,
+            level: Some(fixed[rof2_at::LEVEL]),
+            zone_id: Some(u32::from(u16::from_le_bytes([
+                fixed[rof2_at::ZONE],
+                fixed[rof2_at::ZONE + 1],
+            ]))),
+            look: Some(CharacterLook {
+                race: word(rof2_at::RACE),
+                gender: fixed[rof2_at::GENDER],
+                class: fixed[rof2_at::CLASS],
+                deity: word(rof2_at::DEITY),
+                appearance: Appearance {
+                    materials,
+                    tints,
+                    face: fixed[rof2_at::FACE],
+                    hair_style: fixed[rof2_at::HAIR_STYLE],
+                    hair_color: fixed[rof2_at::HAIR_COLOR],
+                    beard: fixed[rof2_at::BEARD],
+                    beard_color: fixed[rof2_at::BEARD_COLOR],
+                    show_helm: true,
+                    ..Appearance::default()
+                },
+                eye_colors: rof2_at::EYES.map(|offset| fixed[offset]),
+                go_home: fixed[rof2_at::GO_HOME] != 0,
+                tutorial: fixed[rof2_at::TUTORIAL] != 0,
+            }),
+        });
+        at += end + 1 + ROF2_ENTRY;
+    }
+    ensure!(
+        at == body.len(),
+        "trailing bytes after the RoF2 character list"
+    );
     Ok(choices)
 }
 
@@ -279,6 +399,129 @@ impl Record<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `RoF2` entry as `EQEmu` writes it, with every field this reads set
+    /// to its own value and every other byte 0xee.
+    fn rof2_entry(name: &str, level: u8) -> Vec<u8> {
+        let mut entry = name.as_bytes().to_vec();
+        entry.push(0);
+        let mut fixed = vec![0xee; ROF2_ENTRY];
+        let mut put = |offset: usize, bytes: &[u8]| {
+            fixed[offset..offset + bytes.len()].copy_from_slice(bytes);
+        };
+        put(rof2_at::CLASS, &[5]);
+        put(rof2_at::RACE, &330u32.to_le_bytes());
+        put(rof2_at::LEVEL, &[level]);
+        put(rof2_at::ZONE, &202u16.to_le_bytes());
+        put(rof2_at::GENDER, &[1]);
+        put(rof2_at::FACE, &[3]);
+        for slot in 0..9u8 {
+            let at = rof2_at::EQUIPMENT + usize::from(slot) * 24;
+            put(at, &u32::from(10 + slot).to_le_bytes());
+            // Blue, green, red, then whether the tint is used: slot 4 has none.
+            let used = if slot == 4 { 0 } else { 0xff };
+            put(at + 20, &[slot, 2, 3, used]);
+        }
+        put(rof2_at::DEITY, &211u32.to_le_bytes());
+        put(rof2_at::PRIMARY, &27u32.to_le_bytes());
+        put(rof2_at::SECONDARY, &28u32.to_le_bytes());
+        put(rof2_at::HAIR_COLOR, &[6]);
+        put(rof2_at::BEARD_COLOR, &[7]);
+        put(rof2_at::EYES[0], &[8]);
+        put(rof2_at::EYES[1], &[9]);
+        put(rof2_at::HAIR_STYLE, &[2]);
+        put(rof2_at::BEARD, &[4]);
+        put(rof2_at::GO_HOME, &[1]);
+        put(rof2_at::TUTORIAL, &[0]);
+        entry.extend(fixed);
+        entry
+    }
+
+    fn rof2_list(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut body = u32::try_from(entries.len()).unwrap().to_le_bytes().to_vec();
+        for entry in entries {
+            body.extend(entry);
+        }
+        body
+    }
+
+    #[test]
+    fn rof2s_list_reads_every_entry_as_eqemu_writes_it() {
+        assert_eq!(decode(GameDialect::Rof2, &rof2_list(&[])).unwrap(), []);
+        let body = rof2_list(&[
+            rof2_entry("Example", 30),
+            rof2_entry("Ab", 1),
+            rof2_entry("Another", 65),
+        ]);
+        let entries = decode(GameDialect::Rof2, &body).unwrap();
+        let read: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.slot, entry.name.as_str(), entry.level, entry.zone_id))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (0, "Example", Some(30), Some(202)),
+                (1, "Ab", Some(1), Some(202)),
+                (2, "Another", Some(65), Some(202)),
+            ]
+        );
+        let look = entries[1].look.unwrap();
+        assert_eq!(
+            (look.race, look.gender, look.class, look.deity),
+            (330, 1, 5, 211)
+        );
+        assert_eq!(
+            look.appearance.materials,
+            [10, 11, 12, 13, 14, 15, 16, 27, 28]
+        );
+        assert_eq!(look.appearance.tints[0], Some([3, 2, 0]));
+        assert_eq!(look.appearance.tints[4], None);
+        assert_eq!(look.appearance.tints[8], Some([3, 2, 8]));
+        assert_eq!(
+            (
+                look.appearance.face,
+                look.appearance.hair_style,
+                look.appearance.hair_color,
+                look.appearance.beard,
+                look.appearance.beard_color,
+            ),
+            (3, 2, 6, 4, 7)
+        );
+        assert_eq!(look.eye_colors, [8, 9]);
+        assert!(look.go_home && !look.tutorial);
+        // Unchecked against the client, the session keeps only the names.
+        let kept = entries[0].clone().without_look(GameDialect::Rof2);
+        assert_eq!((kept.level, kept.zone_id, kept.look), (None, None, None));
+    }
+
+    #[test]
+    fn rof2s_list_refuses_every_length_it_cannot_trust() {
+        let one = rof2_list(&[rof2_entry("Example", 30)]);
+        for cut in [0, 3, 4, 8, one.len() - 1] {
+            assert!(decode(GameDialect::Rof2, &one[..cut]).is_err(), "{cut}");
+        }
+        let mut trailing = one.clone();
+        trailing.push(0);
+        assert!(decode(GameDialect::Rof2, &trailing).is_err());
+        // A count past what the body holds, however large, is refused
+        // before anything is kept.
+        for count in [2, u32::MAX] {
+            let mut body = one.clone();
+            body[..4].copy_from_slice(&count.to_le_bytes());
+            assert!(decode(GameDialect::Rof2, &body).is_err(), "{count}");
+        }
+        let duplicate = rof2_list(&[rof2_entry("Example", 30), rof2_entry("EXAMPLE", 1)]);
+        assert!(decode(GameDialect::Rof2, &duplicate).is_err());
+        for name in ["", "Ex4mple", "Ex ample"] {
+            let body = rof2_list(&[rof2_entry(name, 1)]);
+            assert!(decode(GameDialect::Rof2, &body).is_err(), "{name:?}");
+        }
+        // A name with no NUL anywhere after it.
+        let mut unterminated = 1u32.to_le_bytes().to_vec();
+        unterminated.extend(vec![b'A'; 1 + ROF2_ENTRY]);
+        assert!(decode(GameDialect::Rof2, &unterminated).is_err());
+    }
     #[test]
     fn names_only_come_from_occupied_slots_and_preserve_server_spelling() {
         let mut body = vec![0; 1704];

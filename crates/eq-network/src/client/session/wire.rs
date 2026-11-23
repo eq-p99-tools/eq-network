@@ -443,13 +443,26 @@ impl Wire for EqMac {
     }
 }
 
-/// The `RoF2` client's packets: a placeholder. Every stage keeps the trait's
-/// refusal, so it logs in, enters, reads and sends nothing.
+/// The `RoF2` client's packets: a placeholder. It logs in the way `EQEmu`'s
+/// login server expects the `RoF2` client to (inferred, 6.497); every later
+/// stage keeps the trait's refusal, so it enters, reads and sends nothing.
+/// Nothing reaches the login either: a configuration for the `RoF2`
+/// generation is refused before a session starts.
 pub(super) struct Rof2;
 
 impl Wire for Rof2 {
     fn dialect(&self) -> GameDialect {
         GameDialect::Rof2
+    }
+
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::rof2(config, stop, commands, log)
     }
 
     fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
@@ -596,16 +609,46 @@ mod tests {
             "Server",
             "",
         );
+        // Its login is built (and tested in `login`), and refused before
+        // it starts: the configuration is.
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "the RoF2 client generation cannot log in yet"
+        );
+        // Past the login, the world still refuses it.
+        let identity = crate::client::ClientIdentity::new("example-device", "example-user");
+        let credentials = Credentials {
+            account: "12345".into(),
+            key: *b"EXAMPLEKEY",
+        };
+        let stop = CancellationToken::default();
+        let context = CharacterSession {
+            config: config.clone(),
+            identity: &identity,
+            credentials: &credentials,
+            stop: &stop,
+            duration: None,
+            commands: None,
+            sysinfo_reported_at: std::cell::Cell::new(0),
+            answer_list_polls: std::cell::Cell::new(false),
+            server_filters: std::cell::RefCell::default(),
+            riding: std::sync::Arc::default(),
+        };
+        let assets = Assets {
+            client: "none".into(),
+            files: std::collections::BTreeMap::new(),
+        };
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
-        let refused = Rof2
-            .login(&config, &CancellationToken::default(), None, &mut log)
+        let world = Rof2
+            .world(&context, &assets, "127.0.0.1", (false, false), &mut log)
             .err()
             .unwrap();
         assert_eq!(
-            refused.to_string(),
-            "this client generation cannot log in yet"
+            world.to_string(),
+            "this client generation cannot enter the world yet"
         );
+        drop(log);
         let stop = AtomicBool::new(false);
         let zone = Rof2
             .connect_zone(SocketAddr::from(([127, 0, 0, 1], 9)), &stop)
