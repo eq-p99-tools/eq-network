@@ -123,6 +123,7 @@ pub mod resurrection;
 pub mod rewards;
 /// `RoF2`'s player profile and own spawn, as stock `EQEmu` writes them.
 pub mod rof2_looks;
+pub mod rof2_news;
 pub mod rof2_player;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;

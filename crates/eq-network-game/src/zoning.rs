@@ -309,6 +309,16 @@ pub struct Death {
 }
 
 /// Decode a Titanium death notification without interpreting NPC death as player death.
+/// `RoF2` reads the same 32 bytes (6.519): stock `EQEmu` sends neither generation an encoded
+/// one.
+///
+/// The bind zone is read at word 20, where both `common/patches/titanium_structs.h` and
+/// `rof2_structs.h` declare it, with the attack skill at 12. Stock `EQEmu` has no encoder for
+/// either generation and sends its own `Death_Struct` (`common/eq_packet_structs.h`), which has
+/// the two the other way round. So on stock `EQEmu` this bind zone carries the killing blow's
+/// damage type, and word 12 the bind zone (`Client::Death` in `zone/attack.cpp` fills
+/// `bindzoneid` from the first bind). That is the server's quirk, the one an original client
+/// meets too. Which word each program reads is a decompile question.
 ///
 /// # Errors
 /// Rejects malformed lengths.

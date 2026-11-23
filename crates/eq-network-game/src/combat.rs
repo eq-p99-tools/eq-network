@@ -391,22 +391,33 @@ pub fn consideration(body: &[u8]) -> Result<Consideration> {
 /// Rejects any length other than the 23-byte Titanium structure.
 pub fn damage(body: &[u8]) -> Result<Damage> {
     ensure!(body.len() == 23, "invalid damage length");
+    Ok(damage_from(
+        body,
+        u16::from_le_bytes([body[5], body[6]]),
+        i32::from_le_bytes(word(body, 7)?.to_le_bytes()),
+        push(body, 11)?,
+    ))
+}
+
+/// The damage a record gives, from the target and source in its first
+/// four bytes and the kind at 4, which every generation `EQEmu` writes
+/// alike, and the spell, damage and push its caller read from where its
+/// generation puts them.
+pub(crate) fn damage_from(body: &[u8], spell_id: u16, raw: i32, push: Option<Push>) -> Damage {
     let kind = body[4];
-    let spell_id = u16::from_le_bytes([body[5], body[6]]);
-    let raw = i32::from_le_bytes(word(body, 7)?.to_le_bytes());
     let spawns = (
         u16::from_le_bytes([body[0], body[1]]),
         u16::from_le_bytes([body[2], body[3]]),
     );
-    Ok(Damage {
+    Damage {
         target_id: spawns.0,
         source_id: spawns.1,
         kind,
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
         outcome: DamageOutcome::read(kind, spawns, raw),
-        push: push(body, 11)?,
-    })
+        push,
+    }
 }
 
 /// Decodes `EQMac`'s damage record: Titanium's fields, the type and the

@@ -2167,17 +2167,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
-        0x6d44 => {
-            ensure!(body.len() == 12, "invalid level update length");
-            let current = u8::try_from(word(body, 0))?;
-            let previous = u8::try_from(word(body, 4))?;
-            ensure!(current != 0 && previous != 0, "invalid zero level");
-            WorldEvent::Level {
-                current,
-                previous,
-                experience: word(body, 8).min(330),
-            }
-        }
+        0x6d44 => level_update(body)?,
         0x6a93 => {
             ensure!(body.len() == 8, "invalid skill update length");
             WorldEvent::Skill {
@@ -2258,12 +2248,38 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 crate::abilities::titanium_answer(opcode, body)?.map(WorldEvent::AskAnswered)
             );
         }
-        0x5ecd => {
-            ensure!(body.len() >= 8, "truncated experience update");
-            WorldEvent::Experience(word(body, 0).min(330))
-        }
+        0x5ecd => experience_update(body)?,
         _ => return Ok(None),
     }))
+}
+
+/// Decodes `LevelUpdate_Struct` (12 bytes): the new level, the old one and
+/// the experience, the same bytes on every generation stock `EQEmu` sends
+/// it unencoded (Titanium and `RoF2`).
+///
+/// # Errors
+/// Rejects any length but 12, and a level that is zero or past 255.
+pub(crate) fn level_update(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 12, "invalid level update length");
+    let current = u8::try_from(word(body, 0))?;
+    let previous = u8::try_from(word(body, 4))?;
+    ensure!(current != 0 && previous != 0, "invalid zero level");
+    Ok(WorldEvent::Level {
+        current,
+        previous,
+        experience: word(body, 8).min(330),
+    })
+}
+
+/// Decodes `ExpUpdate_Struct`: the experience within the level, on the
+/// 0 to 330 scale, the same bytes on every generation stock `EQEmu` sends
+/// it unencoded (Titanium and `RoF2`).
+///
+/// # Errors
+/// Rejects a body shorter than 8 bytes.
+pub(crate) fn experience_update(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() >= 8, "truncated experience update");
+    Ok(WorldEvent::Experience(word(body, 0).min(330)))
 }
 
 /// How spawns look and their names, effects, popups and marquees, stuns
@@ -2388,7 +2404,7 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// `OP_MoneyUpdate`: carried coins after a purchase, sale or loot.
-fn money_update(body: &[u8]) -> Result<Coins> {
+pub(crate) fn money_update(body: &[u8]) -> Result<Coins> {
     ensure!(body.len() == 16, "invalid money update length");
     let coin = |offset: usize| u32::try_from(word(body, offset).cast_signed());
     Ok(Coins {

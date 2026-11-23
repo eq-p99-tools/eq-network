@@ -827,46 +827,7 @@ impl Script {
                 },
             ),
         );
-        // How the other player looks and how hurt they are (6.518): they
-        // sit, grow, change their chest, swing, are stunned and recover, and
-        // drop to half health; the player's own hit points come too.
-        let word = |value: u32| value.to_le_bytes();
-        let looks: [(u16, Vec<u8>); 8] = [
-            (
-                0x0971,
-                [&77u16.to_le_bytes()[..], &14u16.to_le_bytes(), &word(110)].concat(),
-            ),
-            (
-                0x4707,
-                [
-                    word(77),
-                    6.0f32.to_bits().to_le_bytes(),
-                    word(0),
-                    1.0f32.to_bits().to_le_bytes(),
-                ]
-                .concat(),
-            ),
-            (
-                0x2828,
-                [&77u16.to_le_bytes()[..], &word(90), &word(120)].concat(),
-            ),
-            (0x37b1, vec![77, 0, 50]),
-            (
-                0x7994,
-                [
-                    &77u16.to_le_bytes()[..],
-                    &word(70_000),
-                    &[0; 16],
-                    &word(0),
-                    &[1],
-                ]
-                .concat(),
-            ),
-            (0x7177, vec![77, 0, 5, 10]),
-            (0x559a, [word(77), word(32)].concat()),
-            (0x2d25, [word(77), word(32)].concat()),
-        ];
-        for (opcode, body) in looks {
+        for (opcode, body) in rof2_looks_and_news() {
             script.packet(opcode, body);
         }
         script.packet(DESPAWN_OPCODE, despawn_body(77));
@@ -874,6 +835,97 @@ impl Script {
         script.packet(0x7213, vec![0; 385]);
         script
     }
+}
+
+/// How the other player looks and how hurt they are (6.518), then the
+/// player's own news and the combat records (6.519), as `RoF2` messages.
+fn rof2_looks_and_news() -> Vec<(u16, Vec<u8>)> {
+    // How the other player looks and how hurt they are (6.518): they
+    // sit, grow, change their chest, swing, are stunned and recover, and
+    // drop to half health; the player's own hit points come too.
+    let word = |value: u32| value.to_le_bytes();
+    let looks: [(u16, Vec<u8>); 8] = [
+        (
+            0x0971,
+            [&77u16.to_le_bytes()[..], &14u16.to_le_bytes(), &word(110)].concat(),
+        ),
+        (
+            0x4707,
+            [
+                word(77),
+                6.0f32.to_bits().to_le_bytes(),
+                word(0),
+                1.0f32.to_bits().to_le_bytes(),
+            ]
+            .concat(),
+        ),
+        (
+            0x2828,
+            [&77u16.to_le_bytes()[..], &word(90), &word(120)].concat(),
+        ),
+        (0x37b1, vec![77, 0, 50]),
+        (
+            0x7994,
+            [
+                &77u16.to_le_bytes()[..],
+                &word(70_000),
+                &[0; 16],
+                &word(0),
+                &[1],
+            ]
+            .concat(),
+        ),
+        (0x7177, vec![77, 0, 5, 10]),
+        (0x559a, [word(77), word(32)].concat()),
+        (0x2d25, [word(77), word(32)].concat()),
+    ];
+    // The player's own news and the combat records (6.519): the other
+    // player hits them and is considered, the clock, coins, food,
+    // experience, a level, a skill and the mana change come, and then
+    // the player dies.
+    let mut damage = [&4321u16.to_le_bytes()[..], &77u16.to_le_bytes(), &[0]].concat();
+    damage.extend_from_slice(&[0; 4]);
+    damage.extend_from_slice(&word(12));
+    damage.extend_from_slice(&[0; 17]);
+    let news: [(u16, Vec<u8>); 10] = [
+        (0x6f15, damage),
+        (
+            0x742b,
+            [word(4321), word(77), word(5), word(4), word(0)].concat(),
+        ),
+        (0x5070, [vec![7, 30, 2, 5], word(3100).to_vec()].concat()),
+        (0x640c, [word(1), word(2), word(3), word(4)].concat()),
+        (0x2a79, [word(90), word(80)].concat()),
+        (0x20ed, [word(150), word(0)].concat()),
+        (0x1eec, [word(12), word(11), word(200)].concat()),
+        (0x004c, [word(22), word(150), [1, 80, 136, 54]].concat()),
+        (
+            0x5467,
+            [
+                word(300),
+                word(200),
+                word(0),
+                word(1),
+                (-1i32).to_le_bytes(),
+            ]
+            .concat(),
+        ),
+        (
+            0x6517,
+            [
+                word(4321),
+                word(77),
+                word(4321),
+                word(9),
+                word(u32::MAX),
+                word(3),
+                word(12),
+                word(0),
+            ]
+            .concat(),
+        ),
+    ];
+    looks.into_iter().chain(news).collect()
 }
 
 /// The session's idle time after the entry: longer than any position
@@ -1083,6 +1135,64 @@ fn an_admitted_rof2_session_hands_the_host_each_look_and_health_message() {
             "StatesRemoved(SpawnStates(32))",
         ]
     );
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_news_and_combat_and_dies_in_place() {
+    let (sent, diagnostics, events) = rof2_session(true, None);
+    // Nothing is sent in answer, the death included: no feature is offered
+    // and the handoff still refuses, so no zone change starts.
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let news: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Damage(damage) if damage.target_id == 4321 => Some("damage"),
+            WorldEvent::Consideration(consider) if consider.hit_points.is_none() => {
+                Some("consider")
+            }
+            WorldEvent::TimeOfDay(_) => Some("time"),
+            WorldEvent::Coins(_) => Some("coins"),
+            WorldEvent::Nourishment(_) => Some("food"),
+            WorldEvent::Experience(150) => Some("experience"),
+            WorldEvent::Level { current: 12, .. } => Some("level"),
+            WorldEvent::Skill {
+                skill_id: 22,
+                value: 150,
+            } => Some("skill"),
+            WorldEvent::Spell(eq_network_game::spells::SpellUpdate::Mana { .. }) => Some("spell"),
+            WorldEvent::Resources {
+                mana: 300,
+                endurance: 200,
+            } => Some("resources"),
+            WorldEvent::Death(death) if death.spawn_id == 4321 => Some("death"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        news,
+        [
+            "damage",
+            "consider",
+            "time",
+            "coins",
+            "food",
+            "experience",
+            "level",
+            "skill",
+            "spell",
+            "resources",
+            "death",
+        ]
+    );
+    for opcode in [
+        "0x6f15", "0x742b", "0x5070", "0x640c", "0x2a79", "0x20ed", "0x1eec", "0x004c", "0x5467",
+        "0x6517",
+    ] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
 }
 
 #[test]

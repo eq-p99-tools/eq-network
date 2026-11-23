@@ -6,7 +6,7 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518).
+//! (6.510, 6.514, 6.518, 6.519).
 
 use super::{
     sent, Part,
@@ -50,6 +50,19 @@ const SPAWN: &[Part] = &[
 
 /// What the zone decoder leaves unread of a position update (6.514).
 const POSITION: &[Part] = &[Part("the delta heading and the vehicle id", Planned(Rof2))];
+
+/// What the zone decoder leaves unread of a mana change (6.519).
+const MANA_CHANGE: &[Part] = &[Part(
+    "the slot, which Titanium's encoder drops",
+    Planned(Rof2),
+)];
+
+/// What the zone decoder leaves unread of a damage record (6.519).
+const DAMAGE: &[Part] = &[Part(
+    "the off-hand flag, which the encoder never writes, and the special word (rampage, wild \
+     rampage)",
+    Planned(Rof2),
+)];
 
 /// What the zone decoder leaves unread of a wear change (6.518).
 const WEAR_CHANGE: &[Part] = &[Part(
@@ -97,9 +110,8 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         // How they look and how hurt they are (6.518). `OP_ChangeSize` is
         // `ENCODE(OP_SpawnAppearance)`'s rewrite of a size appearance; its
         // last eight bytes are not a part, since the encoder always writes
-        // 0 and 1.0 there. `OP_Illusion`, `OP_ManaChange`, `OP_Death`,
-        // `OP_Damage` and `OP_Consider` stay unlisted, so the gap log tells
-        // them.
+        // 0 and 1.0 there. `OP_Illusion` stays unlisted, so the gap log
+        // tells it.
         0x0971 => sent("OP_SpawnAppearance", ROF2, Read(&[Zone])),
         0x4707 => sent("OP_ChangeSize", ROF2, Read(&[Zone])),
         0x2828 => sent("OP_HPUpdate", ROF2, Read(&[Zone])),
@@ -108,6 +120,27 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x7177 => sent("OP_Animation", ROF2, Read(&[Zone])),
         0x559a => sent("OP_PlayerStateAdd", ROF2, Read(&[Zone])),
         0x2d25 => sent("OP_PlayerStateRemove", ROF2, Read(&[Zone])),
+        // The player's own news and the combat records (6.519). The first
+        // six go out unencoded, the bytes Titanium gets. The skill
+        // update's last four bytes are not a part: `ENCODE(OP_SkillUpdate)`
+        // always writes 1, 80, 136 and 54 there. `OP_ManaUpdate` (0x3791)
+        // and `OP_EnduranceUpdate` (0x5f42), which stock `EQEmu` sends only
+        // to SoD and later with the maxima, stay unlisted until a batch
+        // reads them, as do the group and raid percents.
+        // Stock `EQEmu` sends its own `Death_Struct`, whose bind zone and
+        // attack skill sit the other way round from where the programs'
+        // structs declare them, so the bind zone read at word 20 carries
+        // the damage type and word 12 the bind zone (`zoning::death`).
+        0x6517 => sent("OP_Death", ROF2, Read(&[Zone])),
+        0x1eec => sent("OP_LevelUpdate", ROF2, Read(&[Zone])),
+        0x20ed => sent("OP_ExpUpdate", ROF2, Read(&[Zone])),
+        0x2a79 => sent("OP_Stamina", ROF2, Read(&[Zone])),
+        0x640c => sent("OP_MoneyUpdate", ROF2, Read(&[Zone])),
+        0x5070 => sent("OP_TimeOfDay", ROF2, Read(&[Zone])),
+        0x5467 => sent("OP_ManaChange", ROF2, Partly(&[Zone], MANA_CHANGE)),
+        0x6f15 => sent("OP_Damage", ROF2, Partly(&[Zone], DAMAGE)),
+        0x742b => sent("OP_Consider", ROF2, Read(&[Zone])),
+        0x004c => sent("OP_SkillUpdate", ROF2, Read(&[Zone])),
         _ => return None,
     })
 }

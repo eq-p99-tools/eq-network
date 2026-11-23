@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's own-player news and combat records as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.519). The new `rof2_news` module reads
+  `OP_Death` (0x6517), `OP_LevelUpdate` (0x1eec), `OP_ExpUpdate` (0x20ed),
+  `OP_Stamina` (0x2a79), `OP_MoneyUpdate` (0x640c) and `OP_TimeOfDay`
+  (0x5070), which go out unencoded with the bytes Titanium gets, through
+  Titanium's readers; the level, experience and money arms of
+  `world::titanium_update` are now named functions both call. It reads
+  `OP_ManaChange` (0x5467) at the server's 20 bytes, giving Titanium's two
+  events and leaving the slot; `OP_Damage` (0x6f15, 30 bytes, a spell past
+  16 bits refused, the push at 13) through the new shared
+  `combat::damage_from`; `OP_Consider` (0x742b, 20 bytes, no hit points);
+  and `OP_SkillUpdate` (0x004c, 12 bytes). `zoning::death`'s doc now says
+  that stock `EQEmu` sends the bind zone and attack skill the other way
+  round from both programs' structs. Coverage lists the ten; the mana and
+  endurance updates and the mob percents stay unlisted. An admitted RoF2
+  session still sends and offers nothing, its own death included.
 - Read how RoF2's spawns look and how hurt they are, as stock `EQEmu` sends
   them, labelled inferred for RoF2 (6.518). The new `rof2_looks` module
   reads `OP_SpawnAppearance` (0x0971) through the reader every generation
