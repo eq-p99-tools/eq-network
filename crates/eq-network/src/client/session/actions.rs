@@ -282,6 +282,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AnswerDuel { .. }
         | ClientCommand::RespondToPopup { .. }
         | ClientCommand::InspectPlayer { .. }
+        | ClientCommand::InspectSpawn { .. }
         | ClientCommand::SetInspectNote { .. }
         | ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
@@ -496,6 +497,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AnswerDuel { session_id, .. }
         | ClientCommand::RespondToPopup { session_id, .. }
         | ClientCommand::InspectPlayer { session_id, .. }
+        | ClientCommand::InspectSpawn { session_id, .. }
         | ClientCommand::SetInspectNote { session_id, .. }
         | ClientCommand::InviteToGroup { session_id, .. }
         | ClientCommand::FollowGroup { session_id, .. }
@@ -733,7 +735,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             session_id,
             reason,
         },
-        ClientCommand::InspectPlayer { .. } => {
+        ClientCommand::InspectPlayer { .. } | ClientCommand::InspectSpawn { .. } => {
             WorldEvent::PlayerInspectionRefused { session_id, reason }
         }
         ClientCommand::InviteToGroup { .. }

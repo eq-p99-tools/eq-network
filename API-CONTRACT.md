@@ -521,6 +521,14 @@ reply only for a supported choice with a response ID. Closing and expiration
 are local, and a successful send does not establish a quest outcome.
 
 `GameCommand::InspectPlayer` uses the current available `TargetState`.
+`GameCommand::InspectSpawn` inspects a spawn by its ID without selecting it,
+as the Titanium program's right-click on a player or on the player's own
+spawn does (read R49-16, R49-16e; checklist 6.644). It needs
+`Capability::PlayerInspection` and has the same rules: a visible player or
+the player's own spawn, closer than 20 units, one outstanding request per
+player. A spawn out of reach is refused; the caller says the program's
+too-far line (0x305a) before asking. Its answer arrives as
+`WorldEvent::PlayerInspection`, as `InspectPlayer`'s does.
 `WorldEvent::PlayerInspection` carries the equipment names, icons and note
 received for the matching nearby player. These fields carry no inventory
 custody. `GameCommand::SetInspectNote` supplies the admission's known note
@@ -536,8 +544,8 @@ request itself, at most once a second, with the worn places' item names
 and icons and the note from `SetInspectNote`; an absent note answers with an
 empty message, as the program always answers. Each answer emits
 `WorldEvent::InspectedBy` with line 0x57c and the asker's name when the
-asker is a known spawn other than the player. `InspectPlayer` and received
-answers are not offered on `EQMac`.
+asker is a known spawn other than the player. `InspectPlayer`, `InspectSpawn`
+and received answers are not offered on `EQMac`.
 
 ## Titanium observer sight
 
