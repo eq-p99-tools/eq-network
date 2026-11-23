@@ -40,8 +40,8 @@ const LOOT_ALL: &[Part] = &[Part(
 )];
 /// What the entry leaves unread of `RoF2`'s profile (6.502).
 const PROFILE: &[Part] = &[Part(
-    "gems 9 to 12, the spellbook, coins, buffs, alternate advancement, bandoliers and the \
-     rest of the profile",
+    "gems 9 to 12, the spellbook, coins, buffs, alternate advancement, the 20 bandoliers and \
+     5 potion belt slots (owed, as Titanium's 6.559), and the rest of the profile",
     Planned(Rof2),
 )];
 /// What the entry and the zone decoder leave unread of a spawn record:

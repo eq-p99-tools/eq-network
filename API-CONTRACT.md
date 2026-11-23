@@ -1796,6 +1796,23 @@ program's title window is read (R49-14). `EQMac` and RoF2 build neither
 request: `EQMac` has no titles, and RoF2's numbers are owed (inferred for
 RoF2, 6.489).
 
+## Bandolier sets and the potion belt
+
+Every Titanium server's profile, P99's included, carries the player's four
+bandolier sets and four potion belt slots (`EQEmu`'s
+`PlayerProfile_Struct`: `bandoliers` at byte 6164, 320 bytes each;
+`potionbelt` at 12564, 72 bytes a slot). At each admission the session
+reads them into `WorldEvent::Bandoliers` and `WorldEvent::PotionBelt`
+(6.559). A set is its name and its primary, secondary, range and ammo
+items; an item is its id, icon and name. An item numbered 0 is `None`
+whatever its name (`EQEmu`'s remove leaves the name), and a set with
+neither a name nor an item is `None`. A name with no end within its field
+gives one unreadable gap and withdraws only these two events; the rest of
+the profile still reads. Nothing is sent: saving, removing, swapping and
+the belt's use are later slices. P99's era has no bandolier and its bytes
+there are unverified, so a host shows them only with the windows that come
+later. `EQMac` has neither, and RoF2's 20 sets and 5 slots are owed.
+
 ## Bazaar search
 
 Stock `EQEmu` on Titanium has a Bazaar; P99's era has none, and TAKP's,

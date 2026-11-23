@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read the player's bandolier sets and potion belt from the Titanium
+  profile (6.559, slice 1). The new `bandolier` module reads the four sets
+  (a name and four items) and four belt slots into the new
+  `WorldEvent::Bandoliers` and `WorldEvent::PotionBelt`, on every Titanium
+  server. A bad field withdraws only these two events. Nothing is sent.
+  **Breaking:** new `WorldEvent` variants.
 - Read an NPC's task offer and a finished task's steps, and send the
   player's task requests (checklist 6.555), from stock `EQEmu`'s source
   and not yet checked live. The new `tasks::offers` module reads
