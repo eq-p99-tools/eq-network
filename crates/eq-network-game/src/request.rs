@@ -853,6 +853,15 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::FeignDeathPosture => abilities::eqmac::feign_posture(sender.spawn()),
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Jump => Ok(crate::quarm::jump()),
+        Request::Consent { name, given: true } => corpses::eqmac_consent(name),
+        // Neither Mac server has a deny: a consent given again takes it back.
+        Request::Consent { given: false, .. } => {
+            anyhow::bail!("TAKP and Quarm take a consent back only by giving it again")
+        }
+        Request::SummonCorpse(corpse) => corpses::eqmac_summon(corpse, sender.name),
+        Request::DragCorpse(corpse) => corpses::eqmac_drag(corpse, sender.name),
+        // Quarm's own opcode; the session sends it only to Quarm.
+        Request::DropCorpse { corpse } => corpses::quarm_drop(corpse.as_deref(), sender.name),
         Request::Random { low, high } => Ok(socials::eqmac_random(*low, *high)),
         Request::Assist(spawn_id) => Ok(socials::eqmac_assist(*spawn_id)),
         Request::SplitCoins(coins) => crate::split::eqmac_split(*coins),

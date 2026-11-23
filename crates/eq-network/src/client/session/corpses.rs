@@ -3,6 +3,17 @@
 //! as the server knows it (`Name's corpse12`) and refuses what the server
 //! would drop without a word. The server says the rest in its own string
 //! table messages, and a dragged corpse moves as any spawn does.
+//!
+//! TAKP and Quarm (6.591, from their own handlers at TAKP 44afcbf and
+//! Quarm fc75fcf) take the same requests on their own opcodes, with these
+//! differences:
+//! - A consent toggles: one given again takes it back, and neither server
+//!   has a deny. So `/deny` is refused (row 6.591a for the program's).
+//! - Only Quarm takes `/corpsedrop`, on an opcode of its own.
+//! - `/corpse` goes at most every 250 ms; the session withholds one sooner
+//!   without a word (ours, row 6.591c).
+//! - The local refusals cite no string numbers there, which are
+//!   Titanium's.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -10,9 +21,37 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{request::Request, world::SpawnKind};
+use std::time::{Duration, Instant};
 
 /// Consents, summons and drags the player's and others' corpses.
-pub(super) struct Corpses;
+#[derive(Default)]
+pub(super) struct Corpses {
+    /// TAKP's and Quarm's rules, where they apply.
+    eqmac: Option<EqMacCorpses>,
+}
+
+/// What TAKP and Quarm take: whether the server takes `/corpsedrop`, and
+/// when the last `/corpse` went.
+struct EqMacCorpses {
+    drop: bool,
+    last_summon: Option<Instant>,
+}
+
+/// The least time between two `/corpse` on TAKP and Quarm (ours, 6.591c).
+const EQMAC_SUMMON_FLOOR: Duration = Duration::from_millis(250);
+
+impl Corpses {
+    /// TAKP's or Quarm's corpses; `drop` where the server takes
+    /// `/corpsedrop` (Quarm).
+    pub(super) const fn eqmac(drop: bool) -> Self {
+        Self {
+            eqmac: Some(EqMacCorpses {
+                drop,
+                last_summon: None,
+            }),
+        }
+    }
+}
 
 /// The official client's string (`eqstr_us.txt`) refusing a consent to no
 /// name.
@@ -30,8 +69,10 @@ impl From<&str> for Refused {
     }
 }
 
-/// The request a command makes, or why it is not sent.
-fn request(command: &ClientCommand, world: &World) -> Result<Request, Refused> {
+/// The request a command makes, or why it is not sent; `official` cites the
+/// official client's strings, which are Titanium's.
+fn request(command: &ClientCommand, world: &World, official: bool) -> Result<Request, Refused> {
+    let cite = |string_id| official.then_some(string_id);
     let player = world.player.as_ref().ok_or("Not in the zone yet")?;
     // Servers ignore anything but a player's corpse.
     let corpse = |spawn_id: u16| -> Result<String, Refused> {
@@ -52,13 +93,13 @@ fn request(command: &ClientCommand, world: &World) -> Result<Request, Refused> {
         ClientCommand::Consent { name, .. } if name.trim().is_empty() => {
             return Err(Refused(
                 "That is not a name you can consent".into(),
-                Some(INVALID_NAME),
+                cite(INVALID_NAME),
             ));
         }
         ClientCommand::Consent { name, .. } if name.eq_ignore_ascii_case(&player.name) => {
             return Err(Refused(
                 "You do not need to consent yourself".into(),
-                Some(YOURSELF),
+                cite(YOURSELF),
             ));
         }
         ClientCommand::Consent { name, given, .. } => Request::Consent {
@@ -95,17 +136,56 @@ impl Feature for Corpses {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        // A name the packet cannot carry is refused as the feature's own
-        // reasons are.
-        let packet = request(command, world).and_then(|request| {
-            out.encode(&request)
-                .map_err(|error| Refused(error.to_string(), None))
-        });
-        match packet {
-            Ok(packet) => out.send(&packet),
-            Err(Refused(reason, official)) => {
-                actions::refuse_officially(command, (&reason, official), out.log)
+        if let Some(eqmac) = &mut self.eqmac {
+            let refusal = match command {
+                ClientCommand::Consent { given: false, .. } => Some(
+                    "This server takes a consent back when you give it again; consent the name again.",
+                ),
+                ClientCommand::DropCorpse { .. } if !eqmac.drop => {
+                    Some("This server has no corpse drop.")
+                }
+                _ => None,
+            };
+            if let Some(reason) = refusal {
+                return actions::refuse(command, reason, out.log);
             }
+            if matches!(command, ClientCommand::SummonCorpse { .. }) {
+                if eqmac
+                    .last_summon
+                    .is_some_and(|last| last.elapsed() < EQMAC_SUMMON_FLOOR)
+                {
+                    return out.log.diagnostic(
+                        "Corpse summon withheld: the last went under 250 ms ago".into(),
+                    );
+                }
+                if send(command, world, false, out)? {
+                    eqmac.last_summon = Some(Instant::now());
+                }
+                return Ok(());
+            }
+            return send(command, world, false, out).map(|_| ());
+        }
+        send(command, world, true, out).map(|_| ())
+    }
+}
+
+/// Sends the command's request, or refuses it; true when sent.
+fn send(
+    command: &ClientCommand,
+    world: &World,
+    official: bool,
+    out: &mut Out<'_, '_>,
+) -> Result<bool> {
+    // A name the packet cannot carry is refused as the feature's own
+    // reasons are.
+    let packet = request(command, world, official).and_then(|request| {
+        out.encode(&request)
+            .map_err(|error| Refused(error.to_string(), None))
+    });
+    match packet {
+        Ok(packet) => out.send(&packet).map(|()| true),
+        Err(Refused(reason, official)) => {
+            actions::refuse_officially(command, (&reason, official), out.log).map(|()| false)
         }
     }
 }
@@ -163,22 +243,115 @@ mod tests {
             name: name.into(),
             given,
         };
-        let outcome = testing::run(|out| Corpses.handle(&consent("Helper", true), &mut world, out));
+        let outcome = testing::run(|out| {
+            Corpses::default().handle(&consent("Helper", true), &mut world, out)
+        });
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [corpses::consent("Helper", true).unwrap()]);
-        let outcome =
-            testing::run(|out| Corpses.handle(&consent("Helper", false), &mut world, out));
+        let outcome = testing::run(|out| {
+            Corpses::default().handle(&consent("Helper", false), &mut world, out)
+        });
         assert_eq!(outcome.sent, [corpses::consent("Helper", false).unwrap()]);
         for (name, reason, string_id) in [
             ("  ", "That is not a name you can consent", INVALID_NAME),
             ("tester", "You do not need to consent yourself", YOURSELF),
         ] {
-            let outcome = testing::run(|out| Corpses.handle(&consent(name, true), &mut world, out));
+            let outcome = testing::run(|out| {
+                Corpses::default().handle(&consent(name, true), &mut world, out)
+            });
             outcome.result.unwrap();
             assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
             assert_eq!(refusals(&outcome.events), [reason]);
             assert_eq!(official(&outcome.events), [Some(string_id)]);
         }
+    }
+
+    #[test]
+    fn eqmac_corpses_use_the_mac_packets_and_refuse_what_the_server_lacks() {
+        let wire = &super::super::wire::EqMac;
+        let mut world = world();
+        let run = |feature: &mut Corpses, command: &ClientCommand, world: &mut World| {
+            let outcome = testing::run_on(wire, |out| feature.handle(command, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        let consent = |name: &str, given| ClientCommand::Consent {
+            session_id: 5,
+            name: name.into(),
+            given,
+        };
+        let mut takp = Corpses::eqmac(false);
+        assert_eq!(
+            run(&mut takp, &consent("Helper", true), &mut world).sent,
+            [corpses::eqmac_consent("Helper").unwrap()]
+        );
+        // A consent toggles there, so a deny would grant one: refused.
+        let denied = run(&mut takp, &consent("Helper", false), &mut world);
+        assert_eq!(denied.sent, []);
+        assert_eq!(refusals(&denied.events).len(), 1);
+        // Local refusals cite no Titanium string numbers there.
+        let own = run(&mut takp, &consent("tester", true), &mut world);
+        assert_eq!(own.sent, []);
+        assert_eq!(official(&own.events), [None]);
+        let drag = ClientCommand::DragCorpse {
+            session_id: 5,
+            spawn_id: 4,
+        };
+        assert_eq!(
+            run(&mut takp, &drag, &mut world).sent,
+            [corpses::eqmac_drag("Tester's corpse4", "Tester").unwrap()]
+        );
+        let drop = |spawn_id| ClientCommand::DropCorpse {
+            session_id: 5,
+            spawn_id,
+        };
+        assert_eq!(run(&mut takp, &drop(None), &mut world).sent, []);
+        let mut quarm = Corpses::eqmac(true);
+        assert_eq!(
+            run(&mut quarm, &drop(Some(4)), &mut world).sent,
+            [corpses::quarm_drop(Some("Tester's corpse4"), "Tester").unwrap()]
+        );
+        assert_eq!(
+            run(&mut quarm, &drop(None), &mut world).sent,
+            [corpses::quarm_drop(None, "Tester").unwrap()]
+        );
+    }
+
+    #[test]
+    fn an_eqmac_corpse_summon_names_only_a_player_corpse_at_most_every_250_ms() {
+        let wire = &super::super::wire::EqMac;
+        let mut world = world();
+        let mut feature = Corpses::eqmac(false);
+        let summon = |spawn_id| ClientCommand::SummonCorpse {
+            session_id: 5,
+            spawn_id,
+        };
+        let mut run = |command: &ClientCommand, world: &mut World| {
+            let outcome = testing::run_on(wire, |out| feature.handle(command, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        // Never an NPC's corpse or a spawn not here, which would name
+        // something other than a player's corpse; those refusals start no
+        // wait.
+        for spawn_id in [5, 6] {
+            let refused = run(&summon(spawn_id), &mut world);
+            assert_eq!(refused.sent, []);
+            assert_eq!(refusals(&refused.events).len(), 1);
+        }
+        assert_eq!(
+            run(&summon(4), &mut world).sent,
+            [corpses::eqmac_summon("Tester's corpse4", "Tester").unwrap()]
+        );
+        // Sooner than 250 ms: withheld without a refusal.
+        let held = run(&summon(4), &mut world);
+        assert_eq!(held.sent, []);
+        assert_eq!(refusals(&held.events), Vec::<String>::new());
+        drop(run);
+        let last = feature.eqmac.as_mut().unwrap();
+        last.last_summon = Instant::now().checked_sub(EQMAC_SUMMON_FLOOR);
+        let outcome = testing::run_on(wire, |out| feature.handle(&summon(4), &mut world, out));
+        assert_eq!(outcome.sent.len(), 1);
     }
 
     #[test]
@@ -188,7 +361,7 @@ mod tests {
             session_id: 5,
             spawn_id: 4,
         };
-        let outcome = testing::run(|out| Corpses.handle(&summon, &mut world, out));
+        let outcome = testing::run(|out| Corpses::default().handle(&summon, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
@@ -198,7 +371,7 @@ mod tests {
             session_id: 5,
             spawn_id,
         };
-        let outcome = testing::run(|out| Corpses.handle(&drag(4), &mut world, out));
+        let outcome = testing::run(|out| Corpses::default().handle(&drag(4), &mut world, out));
         assert_eq!(
             outcome.sent,
             [corpses::drag("Tester's corpse4", "Tester").unwrap()]
@@ -207,7 +380,8 @@ mod tests {
             (5, "That is not a player's corpse"),
             (6, "That corpse is not here"),
         ] {
-            let outcome = testing::run(|out| Corpses.handle(&drag(spawn_id), &mut world, out));
+            let outcome =
+                testing::run(|out| Corpses::default().handle(&drag(spawn_id), &mut world, out));
             outcome.result.unwrap();
             assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
             assert_eq!(refusals(&outcome.events), [reason]);
@@ -216,12 +390,13 @@ mod tests {
             session_id: 5,
             spawn_id,
         };
-        let outcome = testing::run(|out| Corpses.handle(&drop(Some(4)), &mut world, out));
+        let outcome =
+            testing::run(|out| Corpses::default().handle(&drop(Some(4)), &mut world, out));
         assert_eq!(
             outcome.sent,
             [corpses::release(Some("Tester's corpse4")).unwrap()]
         );
-        let outcome = testing::run(|out| Corpses.handle(&drop(None), &mut world, out));
+        let outcome = testing::run(|out| Corpses::default().handle(&drop(None), &mut world, out));
         assert_eq!(outcome.sent, [corpses::release(None).unwrap()]);
     }
 }

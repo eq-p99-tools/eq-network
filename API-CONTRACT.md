@@ -1504,6 +1504,24 @@ Quarm and TAKP offer `Rolling`, `Assisting` and `Splitting` the same way
   - One split is in flight at a time; another asked before the answer is
     refused. The purse settles only if nothing else moved it during the
     wait, and is otherwise unknown.
+
+Quarm and TAKP offer `Corpses` the same way (6.591), from Quarm fc75fcf and TAKP
+44afcbf.
+- **Consent.** A consent is the name and its NUL on 0xb740. It toggles on
+  these servers, and neither has a deny, so `ClientCommand::Consent { given:
+  false }` is refused (open row 6.591a). The answer on 0xd540 is the same
+  161 bytes, read into `WorldEvent::Consent`, and only the player consented
+  gets it.
+- **`/corpse`** is `OP_GMSummon` (0xc540, 152 bytes). It is sent only for a
+  player's corpse the session sees in the zone, and at most every 250 ms. A
+  `/corpse` sooner than that is withheld without a refusal. That floor is ours
+  (open row 6.591c), and the Mac program's `/corpse` opcode is open row
+  6.591b.
+- **`/corpsedrag`** is 152 bytes on 0x1441.
+- **`/corpsedrop`** is offered on Quarm alone, on its own opcode (0x1337 on its
+  wire): one byte drops all corpses, and the 152-byte record drops one. TAKP
+  refuses it.
+- **Refusals.** The local refusals of a consent cite no string numbers here.
   - What the `EQMac` program's purse shows after a split that made change is
     unread (open row 6.585d).
 

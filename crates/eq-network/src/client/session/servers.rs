@@ -908,7 +908,7 @@ mod shared {
     }
 
     pub(super) fn corpses() -> Box<dyn Feature> {
-        Box::new(Corpses)
+        Box::<Corpses>::default()
     }
 
     pub(super) fn pets(orders: PetOrderSet) -> Box<dyn Feature> {
@@ -1749,6 +1749,20 @@ impl ServerType for Quarm {
         offer(Box::new(Socials::eqmac()))
     }
 
+    /// Corpses in the `EQMac` program's packets
+    /// ([`eq_network_game::corpses`]), from Quarm's own `Handle_OP_Consent`,
+    /// `Handle_OP_GMSummon` and `Handle_OP_CorpseDrag` at SecretsOTheP/EQMacEmu fc75fcf: a consent
+    /// of the name and its NUL, which toggles (so `/deny` is refused, 6.591a),
+    /// and the 152-byte summon and drag records. Quarm alone takes `/corpsedrop`, on an opcode of its own (0x1337 on
+    /// its wire, [`eq_network_game::corpses::quarm_drop`]), labelled as Quarm's,
+    /// not the program's.
+    /// `/corpse` goes only for a player's corpse in the zone, at most every
+    /// 250 ms (ours, 6.591c; its Mac opcode is row 6.591b). Source-derived,
+    /// not live (6.591).
+    fn corpses(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Corpses::eqmac(true)))
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -2141,6 +2155,18 @@ impl ServerType for Takp {
     /// not live (6.585).
     fn socials(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Socials::eqmac()))
+    }
+
+    /// Corpses in the `EQMac` program's packets
+    /// ([`eq_network_game::corpses`]), from TAKP's own `Handle_OP_Consent`,
+    /// `Handle_OP_GMSummon` and `Handle_OP_CorpseDrag` at EQMacEmu/Server 44afcbf: a consent
+    /// of the name and its NUL, which toggles (so `/deny` is refused, 6.591a),
+    /// and the 152-byte summon and drag records. TAKP has no `/corpsedrop`, which is refused.
+    /// `/corpse` goes only for a player's corpse in the zone, at most every
+    /// 250 ms (ours, 6.591c; its Mac opcode is row 6.591b). Source-derived,
+    /// not live (6.591).
+    fn corpses(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Corpses::eqmac(false)))
     }
 
     /// Corpse looting in the `EQMac` program's packets
@@ -2594,10 +2620,11 @@ mod tests {
         // giving, groups, listing and translocate (6.576); both search the
         // Bazaar from source (6.580), and each answers `/who all` and friends
         // from its own handlers (6.583), and rolls, assists and splits the
-        // same way (6.585). Other features await their own evidence.
+        // same way (6.585), and corpses (6.591). Other features await their
+        // own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 25);
+        assert_eq!(quarm.features(&setup).len(), 26);
         assert_eq!(
             offers(quarm),
             [
@@ -2618,6 +2645,7 @@ mod tests {
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Who,
+                Capability::Corpses,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -2635,7 +2663,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 27);
+        assert_eq!(takp.features(&setup).len(), 28);
         assert_eq!(
             offers(takp),
             [
@@ -2656,6 +2684,7 @@ mod tests {
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Who,
+                Capability::Corpses,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,

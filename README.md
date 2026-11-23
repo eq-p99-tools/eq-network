@@ -81,7 +81,7 @@ each.
 | `MerchantOffers` | Showing what a merchant pays | – | Yes | – | – |
 | `Giving` | Handing items to NPCs and trading with players | Yes | Yes | Yes | Yes |
 | `Looting` | Looting corpses | Yes | Yes | Yes | Yes |
-| `Corpses` | Consenting, summoning and dragging corpses | Yes | Yes | – | – |
+| `Corpses` | Consenting, summoning and dragging corpses (source-derived on TAKP and Quarm, not yet checked live; /corpsedrop on Quarm only, /deny on neither) | Yes | Yes | Yes | Yes |
 | `Tradeskills` | Combining in your own containers | Yes | Yes | – | – |
 | `WorldContainers` | Combining in world containers such as forges | Yes | Yes | – | – |
 | `Reading` | Reading books and notes | Yes | Yes | Yes | Yes |
