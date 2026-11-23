@@ -947,6 +947,12 @@ mod shared {
         Box::new(Tradeskills::forge())
     }
 
+    /// TAKP's and Quarm's combines and world containers, from both servers'
+    /// `Object::HandleCombine` and `Object::HandleClick` (6.598).
+    pub(super) fn eqmac_tradeskills() -> Box<dyn Feature> {
+        Box::new(Tradeskills::eqmac())
+    }
+
     pub(super) fn map() -> Box<dyn Feature> {
         Box::new(Map)
     }
@@ -1813,6 +1819,17 @@ impl ServerType for Quarm {
         offer(Box::new(Training::eqmac()))
     }
 
+    /// Combines in a carried kit or an open world container, and opening and
+    /// closing a world container such as a forge, from Quarm's own
+    /// `Object::HandleCombine`, `Object::HandleClick` and
+    /// `Handle_OP_ClickObjectAction` at SecretsOTheP/EQMacEmu fc75fcf. A close
+    /// leaves the container's items in it. Moves into and out of it follow
+    /// Quarm's `SwapItem`: in from the cursor, out onto the empty cursor.
+    /// Source-derived, not live (6.598).
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_tradeskills())
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -2269,6 +2286,16 @@ impl ServerType for Takp {
         offer(Box::new(Training::eqmac()))
     }
 
+    /// Combines in a carried kit or an open world container, and opening and
+    /// closing a world container such as a forge, from TAKP's own
+    /// `Object::HandleCombine`, `Object::HandleClick` and
+    /// `Handle_OP_ClickObjectAction` at EQMacEmu/Server 44afcbf. A close
+    /// leaves the container's items in it. Moves keep to Quarm's stricter
+    /// rule, which TAKP also accepts. Source-derived, not live (6.598).
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_tradeskills())
+    }
+
     /// Corpse looting in the `EQMac` program's packets
     /// ([`eq_network_game::loot::eqmac`]), from TAKP's own handlers at
     /// EQMacEmu/Server 44afcbf: `Handle_OP_LootRequest` and
@@ -2721,11 +2748,12 @@ mod tests {
         // Bazaar from source (6.580), and each answers `/who all` and friends
         // from its own handlers (6.583), and rolls, assists and splits the
         // same way (6.585), corpses (6.591), pets (6.595), and resurrection and
-        // sacrifice answers (6.596), and training (6.597). Other features
+        // sacrifice answers (6.596), training (6.597), and tradeskills and
+        // world containers (6.598). Other features
         // await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 30);
+        assert_eq!(quarm.features(&setup).len(), 31);
         assert_eq!(
             offers(quarm),
             [
@@ -2751,6 +2779,7 @@ mod tests {
                 Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
+                Capability::Tradeskills,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
@@ -2761,6 +2790,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
                 Capability::FriendsWho,
                 Capability::Splitting,
                 Capability::ApplyingPoison,
@@ -2768,7 +2798,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 32);
+        assert_eq!(takp.features(&setup).len(), 33);
         assert_eq!(
             offers(takp),
             [
@@ -2794,6 +2824,7 @@ mod tests {
                 Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
+                Capability::Tradeskills,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
@@ -2805,6 +2836,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
                 Capability::FriendsWho,
                 Capability::Splitting,
                 Capability::ApplyingPoison,

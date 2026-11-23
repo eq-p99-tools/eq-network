@@ -109,6 +109,11 @@ pub enum Message {
     LoggedOut,
     /// A Titanium system notice identifying an invalid tradeskill recipe.
     TradeskillNoRecipe,
+    /// `EQMac`'s empty `OP_ClickObjectAction`: TAKP and Quarm answer every
+    /// close with it, after which the player uses no world container. What
+    /// the container held stays in it (`Object::Close` saves it), so its
+    /// places leave the player's view (6.598).
+    ContainerReleased,
     /// The server refusing a scribe or memorization because the player has
     /// not reached the spell's level: `EQEmu`'s `SPELL_LEVEL_TO_LOW` (string
     /// 12048), the only answer its `OPMemorizeSpell` gives before returning.
@@ -652,6 +657,13 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             vec![Message::SplitRefused]
         }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
+        crate::objects::eqmac::ACTION_OPCODE if body.is_empty() => vec![Message::ContainerReleased],
+        crate::tradeskills::EQMAC_COMBINE_OPCODE => {
+            vec![crate::tradeskills::eqmac_decode(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                |answer| Message::Event(WorldEvent::Combine(answer)),
+            )]
+        }
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
         _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {

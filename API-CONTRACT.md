@@ -1585,6 +1585,39 @@ fc75fcf and TAKP 44afcbf.
   skill the player's level has not reached is likely dropped without an
   answer (`MaxSkill` 0); the `EQMac` program would not ask (open row 6.597d).
 
+Quarm and TAKP offer `Tradeskills` and `WorldContainers` (6.598), from
+`Object::HandleCombine`, `Object::HandleClick` and
+`Handle_OP_ClickObjectAction` at Quarm fc75fcf and TAKP 44afcbf.
+- **Combine (0x0541).** 32 bytes (`Combine_Struct`). Both servers read only
+  the container's slot, a 16-bit value at +4: 1000 for the open world
+  container, else the pack slot. The other fields are left zero; what the
+  `EQMac` program writes there is unread (open row 6.598a). The answer is
+  always empty.
+- **Open (0xd740).** The click is the 8-byte `OP_ClickObject`. The 20-byte
+  answer carries the player, the container, `open` (0 when another player
+  uses it), the type at +10, 10 places at +12 and the icon at +16. An answer
+  with `open` 0 holds nothing. The items arrive as `OP_ObjectItemPacket`
+  (0xfb40) at places 0 to 9, which moves name 4000 to 4009.
+- **Close.** The session repeats the answer with `open` cleared. Both servers
+  answer with an empty `OP_ClickObjectAction` (`Message::ContainerReleased`).
+  Unlike `EQEmu`, neither returns the container's items: they stay in it,
+  and its places leave the view. The session closes the container when the
+  player dies, as neither server does before the player leaves the zone
+  (inferred, open row 6.598d).
+- **Combine results.** In a world container, `OP_ClearObject` (8 bytes,
+  `Clear` 1) comes before the reset; in a carried kit each component is
+  deleted with `OP_MoveItem`, and a recipe that replaces its kit deletes the
+  kit too. Refusals for class, race or (Quarm only) era send a line and no
+  reset. The session frees the player after 10 s, by time alone (open row
+  6.598c).
+- **Moves.** Into a world container only whole from the cursor, and out only
+  onto the empty cursor. Quarm refuses other world moves as a possible hack;
+  TAKP accepts them, so this stricter rule holds on both. A cursor item over
+  a different one in a place swaps, as both servers do; the same stack is
+  refused rather than predicted, because both servers move it whole.
+- **Lore.** A pickup the server refuses with a delete of its destination and
+  the duplicate-lore line leaves the item in its place, on every server.
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs
@@ -1809,13 +1842,13 @@ combines; `OpenContainer`, `CloseContainer` and `Combine(WORLD_CONTAINER)`
 require `WorldContainers`. `tradeskills::combine_capability` supplies the
 same distinction to frontends. EQEmu offers both; P99 offers carried combines
 and the guarded ordinary forge (`WorldContainers` scoped to one-unit placements
-into empty forge slots and whole withdrawals to an empty cursor), with no change
-to the current TAKP/Quarm offers. Exhaustive capability
+into empty forge slots and whole withdrawals to an empty cursor). TAKP and
+Quarm offer both from 6.598. Exhaustive capability
 matches and station controls must handle the new variant.
 
 `titanium_combine` retains its signature but writes the native full 32-bit
 slot, replacing the old invented high-word sentinel, and rejects nonpack,
-nonworld slots. No EQMac combine encoding is introduced. Additive
+nonworld slots. Additive
 `tradeskills::{check_carried, CarriedRefusal}` exposes the source-backed local
 metadata/identity prerequisites without changing any inventory.
 `CombineUpdate::Answered` means a received local transaction reset, not a

@@ -691,10 +691,20 @@ impl Inventory {
 
     /// Both Mac policies require encodable slots. The program's move routine
     /// has no pending-move gate (`EQMac` 0x422b1c).
+    ///
+    /// Into a world container both servers' `Client::SwapItem` put the whole
+    /// cursor item, whatever count the move names, so a part of a stack is
+    /// refused here rather than predicted wrongly (6.598). With
+    /// [`check_world`] this keeps every world move to one Quarm accepts:
+    /// in only from the cursor, out only onto the empty cursor.
     fn check_eqmac_move(request: &InventoryMove) -> Result<()> {
         ensure!(
             request.from.to_eqmac().is_some() && request.to.to_eqmac().is_some(),
             "This server has no such slot"
+        );
+        ensure!(
+            !request.to.is_world() || request.quantity == MoveQuantity::Whole,
+            "Put the whole item in the container"
         );
         Ok(())
     }
@@ -717,7 +727,7 @@ impl Inventory {
         ensure!(
             [request.from, request.to]
                 .iter()
-                .all(|slot| { slot.is_held() && !slot.is_in_cursor_bag() }),
+                .all(|slot| { (slot.is_held() || slot.is_world()) && !slot.is_in_cursor_bag() }),
             "This inventory action is not supported on Quarm"
         );
         if let Some(count) = source.stack_count {

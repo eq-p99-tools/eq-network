@@ -82,8 +82,8 @@ each.
 | `Giving` | Handing items to NPCs and trading with players | Yes | Yes | Yes | Yes |
 | `Looting` | Looting corpses | Yes | Yes | Yes | Yes |
 | `Corpses` | Consenting, summoning and dragging corpses (source-derived on TAKP and Quarm, not yet checked live; /corpsedrop on Quarm only, /deny on neither) | Yes | Yes | Yes | Yes |
-| `Tradeskills` | Combining in your own containers | Yes | Yes | – | – |
-| `WorldContainers` | Combining in world containers such as forges | Yes | Yes | – | – |
+| `Tradeskills` | Combining in your own containers (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `WorldContainers` | Combining in world containers such as forges (source-derived on TAKP and Quarm, not yet checked live; a close leaves the items inside there) | Yes | Yes | Yes | Yes |
 | `Reading` | Reading books and notes | Yes | Yes | Yes | Yes |
 | `BankerChange` | Changing coins at a banker | Yes | Yes | – | – |
 | `Splitting` | Sharing coin with the group (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |

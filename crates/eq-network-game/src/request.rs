@@ -913,7 +913,22 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::MoveItem { from, to, quantity } => {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }
-        Request::PickUp(drop_id) => Ok(objects::eqmac::pickup(*drop_id, sender.spawn())),
+        // A click opens a world container as it picks an item up (6.598).
+        Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {
+            Ok(objects::eqmac::pickup(*drop_id, sender.spawn()))
+        }
+        Request::CloseContainer {
+            drop_id,
+            object_type,
+            icon,
+            ..
+        } => Ok(objects::eqmac::close(
+            sender.spawn(),
+            *drop_id,
+            *object_type,
+            *icon,
+        )),
+        Request::Combine(container) => tradeskills::eqmac_combine(*container),
         Request::ClickDoor(door_id) => doors::eqmac::click(*door_id, sender.spawn()),
         Request::Consume {
             slot,
