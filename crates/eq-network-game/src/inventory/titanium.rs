@@ -201,6 +201,9 @@ impl<'a> Parser<'a> {
                 bag_type: u8::try_from(number(96)?)?,
                 bag_weight_reduction: u8::try_from(number(99)?)?,
                 item_type: u8::try_from(number(56)?)?,
+                // `SerializeItem` writes `PotionBelt` two fields before
+                // the stack size.
+                potion_belt: number(129)? != 0,
                 deity_mask: number(31)?,
             },
             slot,

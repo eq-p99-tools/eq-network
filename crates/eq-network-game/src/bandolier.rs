@@ -1,5 +1,6 @@
 //! The player's bandolier sets and potion belt as the Titanium profile
-//! carries them, read only.
+//! carries them (6.559), and the player's saving and clearing of a set and
+//! setting and clearing of a belt slot (6.564). No swap is sent from here.
 //!
 //! A bandolier set is a name and the four weapon slots' items it puts in
 //! place (primary, secondary, range, ammo); the potion belt is four items
@@ -14,7 +15,7 @@
 //! `PotionBeltItem_Struct` (`common/patches/titanium_structs.h`), which its
 //! Titanium translator copies as is.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 
 /// The Titanium profile's length, as the session's other profile readers
@@ -36,6 +37,111 @@ const SET_NAME_LENGTH: usize = 32;
 const ITEM_LENGTH: usize = 4 + 4 + 64;
 /// A set's record: its name, then its items.
 const SET_LENGTH: usize = SET_NAME_LENGTH + SET_ITEMS * ITEM_LENGTH;
+
+/// Titanium's `OP_Bandolier`: saving, clearing and (not built) swapping a
+/// set.
+pub const OPCODE: u16 = 0x6f0c;
+/// Titanium's `OP_PotionBelt`: setting and clearing a belt slot.
+pub const BELT_OPCODE: u16 = 0x0719;
+/// The length of every `OP_Bandolier` (`BandolierCreate_Struct` and its
+/// like, packed); the server drops any other.
+pub const LENGTH: usize = 40;
+/// The length of `OP_PotionBelt` (`MovePotionToBelt_Struct`).
+pub const BELT_LENGTH: usize = 12;
+/// The most bytes of a set's name, its end aside.
+pub const MOST_NAME: usize = SET_NAME_LENGTH - 1;
+/// `OP_Bandolier`'s save (`bandolierCreate`).
+const SAVE: u32 = 0;
+/// `OP_Bandolier`'s clear (`bandolierRemove`).
+const CLEAR: u32 = 1;
+/// `OP_PotionBelt`'s set; the server clears for any other action.
+const BELT_SET: u32 = 0;
+/// The action sent to clear a belt slot (inferred, R49-45 c).
+const BELT_CLEAR: u32 = 1;
+/// The Titanium slots a set's items come from, in its order: primary,
+/// secondary, range and ammo (`BandolierSlotToWeaponSlot`).
+pub const WEAPON_SLOTS: [crate::inventory::InventorySlot; SET_ITEMS] = [
+    crate::inventory::InventorySlot(13),
+    crate::inventory::InventorySlot(14),
+    crate::inventory::InventorySlot(11),
+    crate::inventory::InventorySlot(21),
+];
+/// The item type of a potion (`ItemTypePotion`), which the belt takes.
+pub const POTION: u8 = 21;
+
+/// Builds the save of set `set` under `name` (`BandolierCreate_Struct`):
+/// the server stores the name and what is worn in the four weapon slots.
+/// The two words after the name are sent as 0, which the server does not
+/// read (what the program sends is owed to R49-45 a, inferred).
+///
+/// # Errors
+/// Refuses a set past 3, and a name that is empty, longer than 31 bytes
+/// or not printable ASCII: the server copies it unbounded (`strcpy`).
+pub fn save(set: u8, name: &str) -> Result<[u8; LENGTH]> {
+    check_set(set)?;
+    ensure!(
+        !name.is_empty() && name.len() <= MOST_NAME,
+        "a set name of 1 to 31 letters"
+    );
+    ensure!(
+        name.bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' '),
+        "a set name of plain letters"
+    );
+    let mut body = [0; LENGTH];
+    body[..4].copy_from_slice(&SAVE.to_le_bytes());
+    body[4] = set;
+    body[5..5 + name.len()].copy_from_slice(name.as_bytes());
+    Ok(body)
+}
+
+/// Builds the clear of set `set` (`BandolierDelete_Struct`): its action,
+/// the set and 35 bytes of 0.
+///
+/// # Errors
+/// Refuses a set past 3: the server does not bound it.
+pub fn clear(set: u8) -> Result<[u8; LENGTH]> {
+    check_set(set)?;
+    let mut body = [0; LENGTH];
+    body[..4].copy_from_slice(&CLEAR.to_le_bytes());
+    body[4] = set;
+    Ok(body)
+}
+
+/// Builds the setting of belt slot `slot` to item `item_id`
+/// (`MovePotionToBelt_Struct`).
+///
+/// # Errors
+/// Refuses a slot past 3 and item 0.
+pub fn set_belt(slot: u8, item_id: u32) -> Result<[u8; BELT_LENGTH]> {
+    ensure!(item_id != 0, "an item to put on the belt");
+    belt(BELT_SET, slot, item_id)
+}
+
+/// Builds the clearing of belt slot `slot`, naming the item it held
+/// (action and item inferred, R49-45 c: the server reads neither).
+///
+/// # Errors
+/// Refuses a slot past 3.
+pub fn clear_belt(slot: u8, item_id: u32) -> Result<[u8; BELT_LENGTH]> {
+    belt(BELT_CLEAR, slot, item_id)
+}
+
+fn belt(action: u32, slot: u8, item_id: u32) -> Result<[u8; BELT_LENGTH]> {
+    if usize::from(slot) >= BELT_SLOTS {
+        bail!("a belt slot from 1 to 4");
+    }
+    let mut body = [0; BELT_LENGTH];
+    body[..4].copy_from_slice(&action.to_le_bytes());
+    body[4..8].copy_from_slice(&u32::from(slot).to_le_bytes());
+    body[8..].copy_from_slice(&item_id.to_le_bytes());
+    Ok(body)
+}
+
+fn check_set(set: u8) -> Result<()> {
+    ensure!(usize::from(set) < SETS, "a set from 1 to 4");
+    Ok(())
+}
 
 /// An item a set or the belt names, as the profile keeps it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -229,5 +335,49 @@ mod tests {
         profile[BELT_AT + 8..BELT_AT + ITEM_LENGTH].fill(b'c');
         assert!(titanium_profile(&profile).is_err());
         assert!(titanium_profile(&vec![0; PROFILE_LENGTH - 1]).is_err());
+    }
+
+    #[test]
+    fn a_save_and_a_clear_have_the_servers_layout() {
+        let saved = save(2, "Melee").unwrap();
+        assert_eq!(saved.len(), 40);
+        assert_eq!(word(&saved, 0), 0);
+        assert_eq!(saved[4], 2);
+        assert_eq!(&saved[5..10], b"Melee");
+        assert!(saved[10..].iter().all(|byte| *byte == 0));
+        let longest = save(0, &"a".repeat(31)).unwrap();
+        // Its end stays within the 32-byte field.
+        assert_eq!(longest[36], 0);
+        let cleared = clear(3).unwrap();
+        assert_eq!((word(&cleared, 0), cleared[4]), (1, 3));
+        assert!(cleared[5..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn a_set_or_name_out_of_bounds_is_refused() {
+        assert!(save(4, "Melee").is_err());
+        assert!(clear(4).is_err());
+        assert!(save(0, "").is_err());
+        assert!(save(0, &"a".repeat(32)).is_err());
+        assert!(save(0, "Me\0lee").is_err());
+        assert!(save(0, "Mêlée").is_err());
+        assert!(save(0, "Two Hand").is_ok());
+    }
+
+    #[test]
+    fn a_belt_slot_is_set_and_cleared_in_twelve_bytes() {
+        let set = set_belt(3, 13_005).unwrap();
+        assert_eq!(
+            [word(&set, 0), word(&set, 4), word(&set, 8)],
+            [0, 3, 13_005]
+        );
+        let cleared = clear_belt(0, 13_005).unwrap();
+        assert_eq!(
+            [word(&cleared, 0), word(&cleared, 4), word(&cleared, 8)],
+            [1, 0, 13_005]
+        );
+        assert!(set_belt(4, 13_005).is_err());
+        assert!(set_belt(0, 0).is_err());
+        assert!(clear_belt(4, 1).is_err());
     }
 }

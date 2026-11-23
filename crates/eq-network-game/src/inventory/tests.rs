@@ -1414,3 +1414,20 @@ fn carried_light_reads_static_metadata_and_respects_titanium_root_slots() {
         assert_eq!(inventory.titanium_carried_light(), expected);
     }
 }
+
+#[test]
+fn titanium_items_carry_the_potion_belt_flag() {
+    let encoded = wire(23, 123, 0, false, 0, &[]);
+    let parts: Vec<_> = encoded.splitn(3, '"').collect();
+    for (flag, held) in [("0", false), ("1", true)] {
+        let mut fields: Vec<_> = parts[1].split('|').collect();
+        // `PotionBelt` sits two fields before the stack size.
+        fields[129] = flag;
+        let text = format!("{}\"{}\"{}", parts[0], fields.join("|"), parts[2]);
+        let InventoryUpdate::Snapshot(items) = decode(0x5394, text.as_bytes()).unwrap().unwrap()
+        else {
+            panic!("snapshot");
+        };
+        assert_eq!(items[0].rules.potion_belt, held);
+    }
+}

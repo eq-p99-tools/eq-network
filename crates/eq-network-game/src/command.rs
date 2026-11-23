@@ -955,6 +955,43 @@ pub enum GameCommand {
         /// The trader's spawn.
         trader: u16,
     },
+    /// Save what is worn in the primary, secondary, range and ammo slots as
+    /// bandolier set `set` (0 to 3) under `name` (1 to 31 printable
+    /// bytes). The server answers nothing; the session tells its own copy
+    /// of the sets as [`crate::world::WorldEvent::Bandoliers`].
+    SaveBandolier {
+        /// Current zone admission.
+        session_id: u64,
+        /// The set, 0 to 3.
+        set: u8,
+        /// Its name.
+        name: String,
+    },
+    /// Clear bandolier set `set` (0 to 3).
+    ClearBandolier {
+        /// Current zone admission.
+        session_id: u64,
+        /// The set, 0 to 3.
+        set: u8,
+    },
+    /// Put an item the player carries, a potion or one made for the belt,
+    /// in potion belt slot `slot` (0 to 3). The session tells its own copy
+    /// of the belt as [`crate::world::WorldEvent::PotionBelt`].
+    SetPotionBelt {
+        /// Current zone admission.
+        session_id: u64,
+        /// The belt slot, 0 to 3.
+        slot: u8,
+        /// The item's number.
+        item_id: u32,
+    },
+    /// Empty potion belt slot `slot` (0 to 3).
+    ClearPotionBelt {
+        /// Current zone admission.
+        session_id: u64,
+        /// The belt slot, 0 to 3.
+        slot: u8,
+    },
     /// End the browse of a trader; the session tells
     /// [`crate::bazaar::BazaarEvent::BrowseEnded`] at once, as the server
     /// answers nothing.
@@ -1426,6 +1463,10 @@ impl GameCommand {
             Self::BazaarWelcome { .. } => "BazaarWelcome",
             Self::BrowseTrader { .. } => "BrowseTrader",
             Self::EndBrowse { .. } => "EndBrowse",
+            Self::SaveBandolier { .. } => "SaveBandolier",
+            Self::ClearBandolier { .. } => "ClearBandolier",
+            Self::SetPotionBelt { .. } => "SetPotionBelt",
+            Self::ClearPotionBelt { .. } => "ClearPotionBelt",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1574,6 +1615,10 @@ impl GameCommand {
             | Self::BazaarWelcome { session_id }
             | Self::BrowseTrader { session_id, .. }
             | Self::EndBrowse { session_id }
+            | Self::SaveBandolier { session_id, .. }
+            | Self::ClearBandolier { session_id, .. }
+            | Self::SetPotionBelt { session_id, .. }
+            | Self::ClearPotionBelt { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1746,6 +1791,8 @@ impl GameCommand {
             | Self::SetAlternateAdvancementSplit { .. } => Capability::AlternateAdvancement,
             Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
             Self::BrowseTrader { .. } | Self::EndBrowse { .. } => Capability::BazaarBrowsing,
+            Self::SaveBandolier { .. } | Self::ClearBandolier { .. } => Capability::Bandoliers,
+            Self::SetPotionBelt { .. } | Self::ClearPotionBelt { .. } => Capability::PotionBelt,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1824,6 +1871,10 @@ impl GameCommand {
             | Self::BazaarWelcome { .. }
             | Self::BrowseTrader { .. }
             | Self::EndBrowse { .. }
+            | Self::SaveBandolier { .. }
+            | Self::ClearBandolier { .. }
+            | Self::SetPotionBelt { .. }
+            | Self::ClearPotionBelt { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -2165,6 +2216,10 @@ pub fn encode(
         | GameCommand::BazaarWelcome { .. }
         | GameCommand::BrowseTrader { .. }
         | GameCommand::EndBrowse { .. }
+        | GameCommand::SaveBandolier { .. }
+        | GameCommand::ClearBandolier { .. }
+        | GameCommand::SetPotionBelt { .. }
+        | GameCommand::ClearPotionBelt { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }

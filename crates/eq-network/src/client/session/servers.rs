@@ -19,6 +19,7 @@ use anyhow::Result;
 
 use super::{
     abilities::Abilities,
+    bandolier::Bandolier,
     bleeding::{BleedingOut, ItemCount},
     buffs::Buffs,
     camp::Camp,
@@ -527,6 +528,15 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// The profile's bandolier sets and potion belt, told at admission on
+    /// Titanium, and saving and clearing them. No server takes the four
+    /// commands until their local live rows pass (6.564 rows 1 to 5); then
+    /// stock `EQEmu` alone offers `Bandolier::sending`, and P99, whose era
+    /// has no bandolier, never does.
+    fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -664,6 +674,7 @@ pub(super) trait ServerType: Sync {
             self.shielding(setup),
             self.titles(setup),
             self.bazaar(setup),
+            self.bandolier(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
@@ -1279,6 +1290,12 @@ impl ServerType for Project1999 {
     fn map(&self, _setup: &Setup<'_>) -> Provided {
         leave_to_player(shared::map())
     }
+
+    /// The Titanium profile's copy, told and never sent (6.559): P99's era
+    /// has no bandolier, and its bytes there are unverified.
+    fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Bandolier::reading()))
+    }
 }
 
 /// A stock `EQEmu` server speaking Titanium, which takes the player's jumps
@@ -1600,6 +1617,12 @@ impl ServerType for EqEmu {
     /// P99, TAKP and Quarm have no title list.
     fn titles(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Titles>::default())
+    }
+
+    /// The Titanium profile's copy, told at admission (6.559). The saves
+    /// and the belt, from source, wait for their live rows (6.564).
+    fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Bandolier::reading()))
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -2720,11 +2743,12 @@ mod tests {
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; only EQEmu takes the show-helm option; and only
         // EQEmu lists petitions and bug reports (6.511) and titles (6.516),
-        // and keeps a task journal (6.546).
+        // and keeps a task journal (6.546). Both tell the profile's bandolier
+        // sets and belt (6.559).
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 52),
+            (ServerProtocol::Project1999, 39),
+            (ServerProtocol::EqEmu, 53),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2850,6 +2874,26 @@ mod tests {
             super::super::bazaar::Browsing::default().capabilities(),
             [Capability::BazaarBrowsing]
         );
+    }
+
+    #[test]
+    fn no_server_offers_the_bandoliers_sets_or_belt_before_their_live_rows() {
+        // Built and tested from source (6.564); stock EQEmu offers each once
+        // its local live rows pass, and P99 never does.
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            let offered = offers(server_type(protocol));
+            assert!(
+                !offered.contains(&Capability::Bandoliers)
+                    && !offered.contains(&Capability::PotionBelt),
+                "{protocol:?}"
+            );
+        }
     }
 
     #[test]

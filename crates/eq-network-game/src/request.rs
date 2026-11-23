@@ -212,6 +212,29 @@ pub enum Request {
     BrowseTrader(u16),
     /// End the browse of a trader ([`crate::bazaar::end_browse`]).
     EndBrowse(u16),
+    /// Save what is worn as a bandolier set ([`crate::bandolier::save`]).
+    SaveBandolier {
+        /// The set, 0 to 3.
+        set: u8,
+        /// Its name.
+        name: String,
+    },
+    /// Clear a bandolier set ([`crate::bandolier::clear`]).
+    ClearBandolier(u8),
+    /// Put an item in a potion belt slot ([`crate::bandolier::set_belt`]).
+    SetPotionBelt {
+        /// The belt slot, 0 to 3.
+        slot: u8,
+        /// The item's number.
+        item_id: u32,
+    },
+    /// Empty a potion belt slot ([`crate::bandolier::clear_belt`]).
+    ClearPotionBelt {
+        /// The belt slot, 0 to 3.
+        slot: u8,
+        /// The item it held.
+        item_id: u32,
+    },
     /// Emote, in the player's own words.
     Emote(String),
     /// A social emote's text, sent as the program builds it.
@@ -635,6 +658,22 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::EndBrowse(trader) => EncodedCommand {
             opcode: crate::bazaar::TRADER_OPCODE,
             body: crate::bazaar::end_browse(*trader).to_vec(),
+        },
+        Request::SaveBandolier { set, name } => EncodedCommand {
+            opcode: crate::bandolier::OPCODE,
+            body: crate::bandolier::save(*set, name)?.to_vec(),
+        },
+        Request::ClearBandolier(set) => EncodedCommand {
+            opcode: crate::bandolier::OPCODE,
+            body: crate::bandolier::clear(*set)?.to_vec(),
+        },
+        Request::SetPotionBelt { slot, item_id } => EncodedCommand {
+            opcode: crate::bandolier::BELT_OPCODE,
+            body: crate::bandolier::set_belt(*slot, *item_id)?.to_vec(),
+        },
+        Request::ClearPotionBelt { slot, item_id } => EncodedCommand {
+            opcode: crate::bandolier::BELT_OPCODE,
+            body: crate::bandolier::clear_belt(*slot, *item_id)?.to_vec(),
         },
         Request::SetTitle { title_id, suffix } => EncodedCommand {
             opcode: crate::names::SET_TITLE_OPCODE,
@@ -1141,6 +1180,43 @@ mod tests {
         );
         assert!(eqmac(&Request::BrowseTrader(312), PLAYER).is_err());
         assert!(eqmac(&Request::EndBrowse(312), PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_saves_sets_and_sets_the_belt() {
+        let saved = titanium(
+            &Request::SaveBandolier {
+                set: 1,
+                name: "Melee".into(),
+            },
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!(
+            (saved.opcode, saved.body),
+            (0x6f0c, crate::bandolier::save(1, "Melee").unwrap().to_vec())
+        );
+        let cleared = titanium(&Request::ClearBandolier(1), PLAYER).unwrap();
+        assert_eq!(cleared.body, crate::bandolier::clear(1).unwrap().to_vec());
+        let belt = titanium(
+            &Request::SetPotionBelt {
+                slot: 2,
+                item_id: 13_005,
+            },
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!((belt.opcode, belt.body.len()), (0x0719, 12));
+        assert!(titanium(&Request::ClearBandolier(4), PLAYER).is_err());
+        assert!(eqmac(&Request::ClearBandolier(1), PLAYER).is_err());
+        assert!(eqmac(
+            &Request::ClearPotionBelt {
+                slot: 0,
+                item_id: 1
+            },
+            PLAYER
+        )
+        .is_err());
     }
 
     #[test]

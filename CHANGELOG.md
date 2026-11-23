@@ -5,6 +5,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Save and clear bandolier sets and set and clear potion belt slots on
+  Titanium (6.564, slice 2), from stock `EQEmu`'s source and not yet
+  checked live. New `GameCommand::SaveBandolier`, `ClearBandolier`,
+  `SetPotionBelt` and `ClearPotionBelt` under the new
+  `Capability::Bandoliers` and `Capability::PotionBelt`, which no server
+  type offers until their live rows pass (P99 never). The server answers
+  none, so after each send the session tells its own mirror as the whole
+  `WorldEvent::Bandoliers` or `PotionBelt`. Sets, slots and names are
+  bounded before sending, since the server bounds neither the set nor the
+  name; a belt item must be worn or carried and be a potion or made for
+  the belt. New `bandolier::{save, clear, set_belt, clear_belt}`, and
+  `request::Request` variants for each.
+- Tell the profile's bandolier sets and potion belt to the host at the
+  admission (6.559's events were read but never told, as they come before
+  the admission and no feature staged them). A bad field now tells the
+  new `WorldEvent::BandoliersUnknown`.
+- **Breaking:** the new `GameCommand`, `Request`, `WorldEvent`
+  (`BandoliersUnknown`, `BandolierRefused`) and `Capability` variants
+  (`Capability::ALL` is 86 long), and `inventory::ItemPlacement` gains
+  `potion_belt`, read from Titanium's item record.
+
 - Browse a trader's wares in the Bazaar on stock `EQEmu`, read only
   (6.558, slice 3), from source and not yet checked live. New
   `GameCommand::BrowseTrader` and `EndBrowse` under the new
