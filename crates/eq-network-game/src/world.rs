@@ -663,6 +663,12 @@ pub enum Capability {
     /// Asking for a last name: `/surname`
     /// ([`crate::command::GameCommand::Surname`]).
     Surnaming,
+    /// Sending a petition to the server's staff ([`crate::reports`]).
+    Petitioning,
+    /// Sending a bug report ([`crate::reports`]).
+    ReportingBugs,
+    /// Sending feedback, where a server reads it ([`crate::reports`]).
+    SendingFeedback,
     /// Destroying coins from the cursor
     /// ([`crate::command::GameCommand::DestroyCoins`]).
     DestroyingCoins,
@@ -671,7 +677,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 73] = [
+    pub const ALL: [Self; 76] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -744,6 +750,9 @@ impl Capability {
         Self::ServerFiltersAtOnce,
         Self::Dueling,
         Self::Surnaming,
+        Self::Petitioning,
+        Self::ReportingBugs,
+        Self::SendingFeedback,
         Self::DestroyingCoins,
     ];
 }
@@ -1849,6 +1858,25 @@ pub enum WorldEvent {
         /// What the official string names, in its order: a member's name.
         arguments: Vec<String>,
     },
+    /// A petition, bug report or feedback went to the server. The servers
+    /// answer some of these themselves and not others; a host shows its own
+    /// line only where the server sends none (recording checklist 6.511b).
+    ReportSent {
+        /// Admission from the request.
+        session_id: u64,
+        /// Which report.
+        report: crate::reports::ReportKind,
+    },
+    /// A petition, bug report or feedback was not sent, and why. The reason
+    /// never repeats the report's text.
+    ReportRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Which report.
+        report: crate::reports::ReportKind,
+        /// Why not.
+        reason: String,
+    },
     /// A roll, emote, assist or surname was not sent, and why.
     SocialRefused {
         /// Admission from the request.
@@ -2551,7 +2579,10 @@ mod tests {
             Capability::ServerFiltersAtOnce => 69,
             Capability::Dueling => 70,
             Capability::Surnaming => 71,
-            Capability::DestroyingCoins => 72,
+            Capability::Petitioning => 72,
+            Capability::ReportingBugs => 73,
+            Capability::SendingFeedback => 74,
+            Capability::DestroyingCoins => 75,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
