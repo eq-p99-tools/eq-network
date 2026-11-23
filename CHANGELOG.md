@@ -8,11 +8,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A rider's restore aboard keeps the z of the last save sent, whatever kind
   (read R49-22f, checklist 6.613). Every save writes the program's record's
   third field, which its profile loader never writes, so an ordinary
-  transfer's save now sets it too, and leaving the boat no longer forgets it.
+  transfer's save now sets it too (the destination's z, from that save's
+  place), and leaving the boat no longer forgets it.
   Labelled departures: no leave-game or periodic save is sent yet (6.614,
   6.615), resurrection's write is not copied, and the value is kept per
   session. Unreachable on stock `EQEmu`, whose profile names no vehicle.
 
+- Every Titanium save on zoning (`OP_SaveOnZoneReq` 0x1540) carries a place,
+  a heading and its checksum, as read R49-36b shows the program fills every
+  one, not only a boat transfer's (row 6.145). Off a boat the place is where
+  the accepted zone request goes, with the request's heading, as 11 recorded
+  official saves hold it; the heading at +0x11 is cut toward zero to a 32-bit
+  integer, and a reason 6 transfer's saves 0xffffffff (all three
+  capture-derived). The unidentified fields stay zero, and EQMac's save is unchanged.
+  See docs/boat-riding.md, "The save before leaving".
 - The Titanium buff slot finder's steps 4 and 6 and the effect-327 top, as
   read R49-22e reads 0x414071 (checklist 6.612).
   - **Breaking:** `buffs::placement::Finder` is now

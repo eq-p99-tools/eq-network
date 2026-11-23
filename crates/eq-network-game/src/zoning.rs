@@ -107,12 +107,13 @@ pub fn titanium_answer(
 }
 
 /// What the save before leaving a zone holds, as far as this client knows
-/// it for certain. The default is the empty save every ordinary transfer
-/// sends.
+/// it for certain. The default, with no place, is the save sent when the
+/// session has none to give.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Save {
-    /// Aboard a boat transfer the session still finds the boat for: the
-    /// player's place in the boat's frame.
+    /// The place and heading the profile holds as the player leaves: aboard
+    /// a boat transfer the session still finds the boat for, the place in
+    /// the boat's frame; else where the accepted zone request goes.
     pub position: Option<Position>,
     /// The raw name of the boat the player is aboard.
     pub vehicle: Option<String>,
@@ -120,6 +121,7 @@ pub struct Save {
 
 /// Where the save keeps its fields (0x4976bf; R36b §1).
 const SAVE_POSITION: usize = 0x05;
+const SAVE_HEADING: usize = 0x11;
 const SAVE_VEHICLE: usize = 0x6d;
 /// How many bytes from +0x05 the save's checksum covers.
 const SAVE_CHECKED: usize = 0xb8;
@@ -144,19 +146,27 @@ pub fn save_checksum(bytes: &[u8]) -> u32 {
 }
 
 /// Titanium's request that the zone save the player before they leave it
-/// (`OP_SaveOnZoneReq`, 0xc0 bytes). `EQEmu` reads nothing in its 192 bytes
-/// (`Handle_OP_SaveOnZoneReq` calls `Handle_OP_Save`), so an ordinary
-/// transfer's stay zero (inferred). The official client's are not zero: in
-/// Adam's P99 recording about 56 of them are set, in short runs, none
-/// holding the player's position; what they mean, and whether P99 reads
-/// them, is unrecorded.
+/// (`OP_SaveOnZoneReq`, 0xc0 bytes), as the program builds every one
+/// (0x4976bf; reads R36b §1, R49-36b) and as 11 official-client saves in
+/// Adam's P99 and local `EQEmu` recordings carry it:
 ///
-/// Aboard a boat transfer the session fills what the program read shows it
-/// fills (0x4976bf): the place in the boat's frame at +0x05, in the zone
-/// request's axis order (both take the same three record fields in the same
-/// order; read R36c), the vehicle name at +0x6d, and the checksum at +0 over
-/// the 0xb8 bytes from +0x05 ([`save_checksum`]). The heading at +0x11 (its
-/// conversion is unread) and the other values stay zero (6.478).
+/// - the place at +0x05, +0x09 and +0x0d, unaligned, in the zone request's
+///   axis order (y, x, z; read R36c). That it is the accepted request's
+///   destination is capture-derived: it equals the request's in all 10
+///   recorded saves whose request decoded;
+/// - the heading at +0x11 as a 32-bit integer, cut toward zero
+///   (capture-derived: a heading of 479.5 saved 479, and a reason 6
+///   transfer saved 0xffffffff, which a heading of -1 gives here);
+/// - the vehicle name at +0x6d;
+/// - the checksum at +0 over the 0xb8 bytes from +0x05 ([`save_checksum`]),
+///   always, as in every recorded save.
+///
+/// Aboard, the place and heading are in the boat's frame. The 22 values at
+/// +0x15 and the four at +0xad to +0xb9 aren't identified; the recordings'
+/// bytes there change from save to save like leftover memory, and this
+/// client leaves them zero (inferred). `EQEmu` reads nothing in the body
+/// (`Handle_OP_SaveOnZoneReq` calls `Handle_OP_Save`); what Project 1999
+/// reads is unrecorded (6.145).
 #[must_use]
 pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
     let mut body = vec![0; 192];
@@ -166,6 +176,8 @@ pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
             let at = SAVE_POSITION + index * 4;
             body[at..at + 4].copy_from_slice(&value.to_le_bytes());
         }
+        body[SAVE_HEADING..SAVE_HEADING + 4]
+            .copy_from_slice(&whole(position.heading).to_le_bytes());
     }
     if let Some(name) = save
         .vehicle
@@ -174,15 +186,22 @@ pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
     {
         body[SAVE_VEHICLE..SAVE_VEHICLE + name.len()].copy_from_slice(name.as_bytes());
     }
-    // The empty save stays all zero, as ordinary transfers have sent it.
-    if *save != Save::default() {
-        let checksum = save_checksum(&body[SAVE_POSITION..SAVE_POSITION + SAVE_CHECKED]);
-        body[..4].copy_from_slice(&checksum.to_le_bytes());
-    }
+    let checksum = save_checksum(&body[SAVE_POSITION..SAVE_POSITION + SAVE_CHECKED]);
+    body[..4].copy_from_slice(&checksum.to_le_bytes());
     EncodedCommand {
         opcode: SAVE_ON_ZONE_OPCODE,
         body,
     }
+}
+
+/// The save's heading: the whole number cut toward zero, as the recorded
+/// saves hold it; a heading too large for 32 bits, or not a number, takes
+/// the nearest that fits, or 0.
+fn whole(heading: f32) -> i32 {
+    // Rust's cast cuts toward zero and saturates, NaN giving 0.
+    #[allow(clippy::cast_possible_truncation)]
+    let whole = heading as i32;
+    whole
 }
 
 /// Titanium's departure: the player's own spawn, as a 32-bit ID.
@@ -687,13 +706,31 @@ mod tests {
     }
     #[test]
     fn titanium_departs_with_a_save_and_its_own_spawn() {
+        // A save with no place is still checksummed, as the program always
+        // checksums it.
+        let empty = titanium_save_on_zone(&Save::default());
+        assert_eq!((empty.opcode, empty.body.len()), (0x1540, 192));
+        assert_eq!(&empty.body[..4], &save_checksum(&[0; 0xb8]).to_le_bytes());
+        assert!(empty.body[4..].iter().all(|byte| *byte == 0));
+        // An ordinary save carries the place and heading, with no vehicle.
+        let ordinary = titanium_save_on_zone(&Save {
+            position: Some(Position {
+                x: 10.0,
+                y: 20.0,
+                z: -3.5,
+                heading: 127.5,
+            }),
+            vehicle: None,
+        });
+        assert_eq!(&ordinary.body[5..9], &20.0f32.to_le_bytes());
+        assert_eq!(&ordinary.body[9..13], &10.0f32.to_le_bytes());
+        assert_eq!(&ordinary.body[13..17], &(-3.5f32).to_le_bytes());
+        assert_eq!(&ordinary.body[17..21], &127u32.to_le_bytes());
         assert_eq!(
-            (
-                titanium_save_on_zone(&Save::default()).opcode,
-                titanium_save_on_zone(&Save::default()).body
-            ),
-            (0x1540, vec![0; 192])
+            &ordinary.body[..4],
+            &save_checksum(&ordinary.body[5..5 + 0xb8]).to_le_bytes()
         );
+        assert!(ordinary.body[21..].iter().all(|byte| *byte == 0));
         let aboard = titanium_save_on_zone(&Save {
             position: Some(Position {
                 x: 1.5,
@@ -726,8 +763,10 @@ mod tests {
         assert_eq!(&aboard.body[5..9], &(-2.0f32).to_le_bytes());
         assert_eq!(&aboard.body[9..13], &1.5f32.to_le_bytes());
         assert_eq!(&aboard.body[13..17], &20.0f32.to_le_bytes());
-        // The heading and the unread values stay zero.
-        assert!(aboard.body[17..0x6d].iter().all(|byte| *byte == 0));
+        // The heading, cut to a whole number, then the unidentified values
+        // stay zero.
+        assert_eq!(&aboard.body[17..21], &128u32.to_le_bytes());
+        assert!(aboard.body[21..0x6d].iter().all(|byte| *byte == 0));
         assert_eq!(&aboard.body[0x6d..0x6d + 10], b"Sabrina00\0");
         assert!(aboard.body[0x6d + 9..].iter().all(|byte| *byte == 0));
         assert_eq!(
@@ -737,6 +776,23 @@ mod tests {
                 body: vec![7, 0, 0, 0],
             }
         );
+    }
+
+    #[test]
+    fn the_saves_heading_is_cut_toward_zero() {
+        // As recorded: 479.5 saved 479, and -1 saved 0xffffffff.
+        assert_eq!(
+            [479.5, 10.9, 0.0, -1.0, -1.5, f32::NAN, 1e10].map(whole),
+            [479, 10, 0, -1, -1, 0, i32::MAX]
+        );
+        let save = titanium_save_on_zone(&Save {
+            position: Some(Position {
+                heading: -1.0,
+                ..Position::default()
+            }),
+            vehicle: None,
+        });
+        assert_eq!(&save.body[17..21], &[0xff; 4]);
     }
 
     #[test]

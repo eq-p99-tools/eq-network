@@ -58,11 +58,20 @@ At the approval the program saves the player (`OP_SaveOnZoneReq`, `0x1540`,
 - **From the arrival wait.** A transfer that began from the arrival wait
   sends no save at all and keeps the vehicle name. The program skips 0x4976bf
   while it waits.
-- **Any other transfer.** The vehicle is forgotten and the save stays the
-  empty body ordinary transfers have always sent.
+- **Any other transfer.** The vehicle is forgotten, and the save holds
+  where the accepted zone request goes, with its heading resolved as the
+  request resolved it (a zone point's 999 keeps the player's own). The
+  program fills every save from the profile (R49-36b), and all 10 recorded
+  official saves whose request decoded hold that request's y, x and z
+  (capture-derived).
 
-The heading at +0x11 and the other values stay zero. The empty save stays
-all zero, checksum included. EQEmu reads none of the body.
+The heading at +0x11 is a 32-bit integer cut toward zero (capture-derived):
+the recordings saved 479 for 479.5, and 0xffffffff for a reason 6 transfer. The checksum is
+always set. The 22 values at +0x15 and the four at +0xad to +0xb9 aren't
+identified; the recordings' bytes there change from save to save like
+leftover memory, and this client leaves them zero. EQEmu reads none of the
+body; what P99 reads is unrecorded (6.145). EQMac's save is a different
+message and is unchanged.
 
 ## Arriving aboard
 
@@ -80,8 +89,8 @@ EQEmu leaves this field empty.
   second and first fields again, and never writes the third. So the restore
   point takes the profile's y (13120) and z (13124) as its x and y, and as its
   z the z this session's last save carried: the boat-frame z after a boat
-  save, the world z the ordinary save carries otherwise (zero while that save
-  carries no place), as every save writes it (read R49-22f, 6.613). Leaving
+  save, otherwise the world z of the place the ordinary save carries (the
+  destination's), as every save writes it (read R49-22f, 6.613). Leaving
   the boat keeps it; with no save sent yet it is zero. An
   ordinary admission is unchanged.
   The host stands the player at that point, floor-sweeps from one unit above
