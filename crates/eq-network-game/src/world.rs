@@ -1038,6 +1038,18 @@ pub enum WorldEvent {
     BookAction(crate::spells::BookActionStatus),
     /// Server-driven spell and casting state.
     Spell(crate::spells::SpellUpdate),
+    /// Whether the player holds a Feign Death standing, by Move While
+    /// Feigned (6.454): true once the press or a feign spell's landing
+    /// leaves them standing with the feign owed a stand, false once any
+    /// posture is sent or reported, or the player dies. A new zone admission
+    /// starts with none held, unreported. A jump then goes without its
+    /// crouch's posture reports, which would end the feign (6.599). True
+    /// means the feign was pressed or landed and is held standing, not that
+    /// the server's roll succeeded: the servers send nothing on success, so
+    /// after a failed feign it stays true until the next posture, and a
+    /// standing-still jump in that window skips its crouch's reports too
+    /// (recording checklist 6.599a).
+    FeignHeld(bool),
     /// Server-reported appearance posture.
     Posture {
         /// Entity whose stance changed.

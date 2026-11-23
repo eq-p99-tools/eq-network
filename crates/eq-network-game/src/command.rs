@@ -315,7 +315,8 @@ pub enum GameCommand {
     /// 115): one lying report, or none when the player already lies, and
     /// the movement in hand stopped; no feign request and no auto attack
     /// change. With [`crate::movement::PostureOptions::feign_standing`] on,
-    /// it sends nothing and owes the next stand. Another spawn's id is
+    /// it sends nothing, owes the next stand and reports the feign held
+    /// ([`crate::world::WorldEvent::FeignHeld`]). Another spawn's id is
     /// refused.
     FeignLanded {
         /// Current zone admission.
