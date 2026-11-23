@@ -119,6 +119,7 @@ fn item_casts_use_current_inventory_without_predicting_charge_consumption() {
     .result
     .unwrap();
     let request = ItemUse {
+        installed_class_spell: None,
         request_id: 1,
         session_id: 5,
         revision: world.inventory.revision(),
@@ -127,6 +128,7 @@ fn item_casts_use_current_inventory_without_predicting_charge_consumption() {
         created: Instant::now(),
     };
     let stale = ClientCommand::UseItem(ItemUse {
+        installed_class_spell: None,
         revision: request.revision - 1,
         ..request.clone()
     });

@@ -368,6 +368,7 @@ fn a_twisted_next_song_is_the_one_playing() {
             spell: 203,
             item: false,
             awaiting_start: false,
+            installed_class_spell: None,
         })
     );
     stopped_with_no_cast_held(&mut bard);
@@ -435,6 +436,7 @@ fn an_items_song_not_of_the_class_stops_here_only() {
     bard.world.inventory = inventory.into();
     let used = |bard: &mut Bard, slot| {
         let command = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 5,
             revision: bard.world.inventory.revision(),
@@ -456,6 +458,7 @@ fn an_items_song_not_of_the_class_stops_here_only() {
             spell: 999,
             item: true,
             awaiting_start: false,
+            installed_class_spell: None,
         })
     );
     nothing_sent(
@@ -519,6 +522,7 @@ fn another_casters_start_or_another_spells_keeps_the_song() {
             spell: 202,
             item: false,
             awaiting_start: false,
+            installed_class_spell: None,
         })
     );
     stopped_with_no_cast_held(&mut bard);
@@ -532,6 +536,7 @@ fn another_casters_start_or_another_spells_keeps_the_song() {
             spell: 202,
             item: false,
             awaiting_start: false,
+            installed_class_spell: None,
         })
     );
 }
@@ -618,6 +623,7 @@ fn an_items_song_is_left_to_its_records_cast_time() {
     inventory.apply(InventoryUpdate::Snapshot(vec![item]));
     bard.world.inventory = inventory.into();
     let command = ClientCommand::UseItem(ItemUse {
+        installed_class_spell: None,
         request_id: 1,
         session_id: 5,
         revision: bard.world.inventory.revision(),
@@ -633,6 +639,7 @@ fn an_items_song_is_left_to_its_records_cast_time() {
             spell: 202,
             item: true,
             awaiting_start: false,
+            installed_class_spell: None,
         })
     );
 }
@@ -652,7 +659,103 @@ fn only_the_gem_casts_own_start_decides_its_song() {
             spell: 202,
             item: false,
             awaiting_start: false,
+            installed_class_spell: None,
         })
     );
     stopped_with_no_cast_held(&mut bard);
+}
+
+/// A Bard with one item that sings spell 999, not memorized, cast 1,000 ms,
+/// clicked with the host's word on its class.
+fn item_song(word: Option<bool>) -> Bard {
+    use eq_network_game::inventory::{
+        ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate, ItemUse,
+    };
+    let mut bard = Bard::new();
+    let slot = InventorySlot(22);
+    let mut item = testing::item(slot.0);
+    item.activation.effect = Some(ClickEffect {
+        spell_id: 999,
+        kind: ClickKind::Expendable,
+        required_level: 0,
+        effect_level: 1,
+        cast_time_ms: 1000,
+        recast_delay_seconds: 0,
+        recast_type: 0,
+    });
+    item.charges = 1;
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+    bard.world.inventory = inventory.into();
+    let command = ClientCommand::UseItem(ItemUse {
+        installed_class_spell: word,
+        request_id: 1,
+        session_id: 5,
+        revision: bard.world.inventory.revision(),
+        slot,
+        target_id: 7,
+        created: Instant::now(),
+    });
+    bard.command(&command).result.unwrap();
+    bard.hear(refreshed(10, 999));
+    bard
+}
+
+#[test]
+fn the_hosts_installed_word_decides_an_item_songs_class() {
+    // Some(true): a class spell not memorized still sends the stop, as the
+    // program does (0x40db0b, 6.542).
+    let mut bard = item_song(Some(true));
+    stopped_with_no_cast_held(&mut bard);
+    nothing_sent(&mut bard, "No song is playing");
+    // Some(false): another class's spell ends here only.
+    let mut bard = item_song(Some(false));
+    nothing_sent(
+        &mut bard,
+        "A song not of the class stops here only; nothing is sent",
+    );
+    // None: the memorized test, as before.
+    let mut bard = item_song(None);
+    nothing_sent(
+        &mut bard,
+        "A song not of the class stops here only; nothing is sent",
+    );
+}
+
+#[test]
+fn the_hosts_word_never_starts_a_song_or_sends_a_stop_alone() {
+    // A click of 100 ms or less is no song, whatever the host says, and a
+    // stop then sends nothing (6.542, B4).
+    use eq_network_game::inventory::{
+        ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate, ItemUse,
+    };
+    let mut bard = Bard::new();
+    let slot = InventorySlot(23);
+    let mut item = testing::item(slot.0);
+    item.activation.effect = Some(ClickEffect {
+        spell_id: 999,
+        kind: ClickKind::Expendable,
+        required_level: 0,
+        effect_level: 1,
+        cast_time_ms: 100,
+        recast_delay_seconds: 0,
+        recast_type: 0,
+    });
+    item.charges = 1;
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+    bard.world.inventory = inventory.into();
+    let command = ClientCommand::UseItem(ItemUse {
+        installed_class_spell: Some(true),
+        request_id: 1,
+        session_id: 5,
+        revision: bard.world.inventory.revision(),
+        slot,
+        target_id: 7,
+        created: Instant::now(),
+    });
+    bard.command(&command).result.unwrap();
+    bard.hear(refreshed(10, 999));
+    assert_eq!(bard.casting.song, None);
+    nothing_sent(&mut bard, "No song is playing");
 }

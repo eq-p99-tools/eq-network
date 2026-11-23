@@ -22,6 +22,13 @@ pub struct ItemUse {
     pub target_id: u16,
     /// Local creation time; stalls and reconnects do not replay requests.
     pub created: Instant,
+    /// The host's word, from its installed spell data, on whether the
+    /// item's spell is the player's class's (spells fields 104-119 below
+    /// 255 for that class); `None` without an installed record. It only
+    /// chooses, for a song the session is already keeping from this click,
+    /// between sending the stop and ending it here; it never starts a song,
+    /// names a spell, or sends a stop with no song (6.542).
+    pub installed_class_spell: Option<bool>,
 }
 
 /// Effect activation category; unknown values retain their original byte.
