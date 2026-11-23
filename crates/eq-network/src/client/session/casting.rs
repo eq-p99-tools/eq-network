@@ -339,6 +339,10 @@ struct Song {
     /// A gem's song whose own cast start has not come yet: only that first
     /// start decides it (6.542).
     awaiting_start: bool,
+    /// For an item's song, the host's word from installed spell data on
+    /// whether its spell is the class's (`ItemUse::installed_class_spell`);
+    /// `None` falls back to the memorized test.
+    installed_class_spell: Option<bool>,
 }
 
 /// The longest cast the program does not keep as a song: a cast is the
@@ -418,14 +422,16 @@ impl Casting {
         let Some(song) = self.song else {
             return out.log.diagnostic("No song is playing".into());
         };
-        // A memorized spell is taken as the class's (6.442), so an item's
-        // song of a class spell not memorized ends here unsent, where the
-        // program sends the stop.
-        if !world
-            .player
-            .as_ref()
-            .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
-        {
+        // The host's installed spell data says whether an item's song is
+        // of the class's spell (6.542); without it, a memorized spell is
+        // taken as the class's (6.442), exact for a gem's song.
+        let class_spell = song.installed_class_spell.unwrap_or_else(|| {
+            world
+                .player
+                .as_ref()
+                .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
+        });
+        if !class_spell {
             self.song = None;
             return out
                 .log
@@ -547,6 +553,7 @@ impl Casting {
                         spell: *spell_id,
                         item: false,
                         awaiting_start: true,
+                        installed_class_spell: None,
                     });
                     return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
@@ -607,6 +614,7 @@ impl Casting {
                         spell: spell_id,
                         item: true,
                         awaiting_start: false,
+                        installed_class_spell: request.installed_class_spell,
                     });
                 }
                 self.submitted(spell_id, Source::Item, world, out)?;
@@ -1002,6 +1010,7 @@ mod tests {
         world.inventory = inventory.into();
         let now = Instant::now();
         let item = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 5,
             revision: world.inventory.revision(),
@@ -1141,6 +1150,7 @@ mod tests {
         world.player.admit(testing::player(7));
         world.posture.observed(PostureState::Lying);
         let item = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 3,
             session_id: 5,
             revision: 1,
@@ -1228,6 +1238,7 @@ mod tests {
     fn item_activations_share_cast_exclusion_without_blocking_posture_interrupts() {
         let now = Instant::now();
         let request = ClientCommand::UseItem(eq_network_game::inventory::ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 12,
             revision: 1,
