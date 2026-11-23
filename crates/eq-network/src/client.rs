@@ -35,8 +35,13 @@
 //! # }
 //! ```
 
+mod gaps;
 mod selection;
 mod session;
+
+pub use gaps::{
+    Gap, GapKind, GapStage, INTERVAL as GAP_INTERVAL, MORE_KINDS, MOST_KINDS, SAMPLE_BYTES,
+};
 
 use crate::{
     assets::Assets,
@@ -689,6 +694,10 @@ pub enum ClientEvent {
     Progress(ConnectionStage),
     /// Decoded communication record.
     Record(Box<Record>),
+    /// A server message the session dropped or could not read: the first
+    /// of its kind in a stage at once, repeats counted and told at most
+    /// every ten seconds and when the stage ends ([`Gap`]).
+    Gap(Box<Gap>),
     /// Credential-safe operational diagnostic.
     Diagnostic(String),
     /// Transient failure followed by a scheduled fresh session.
@@ -925,6 +934,8 @@ struct Events<'a> {
     spell_tables: session::spell_tables::Sequence,
     /// Tracks the delivered view used by local liquid damage proposals.
     liquid_inputs: session::hazards::Observations,
+    /// The stage under way, and what it has left unread.
+    gaps: gaps::Tally,
 }
 
 impl<'a> Events<'a> {
@@ -942,6 +953,7 @@ impl<'a> Events<'a> {
             character: config.character.clone(),
             spell_tables: session::spell_tables::Sequence::new(rand::random()),
             liquid_inputs: session::hazards::Observations::default(),
+            gaps: gaps::Tally::default(),
         }
     }
 
@@ -950,6 +962,7 @@ impl<'a> Events<'a> {
         self.session_id = format!("{run_id:016x}");
         self.spell_tables = session::spell_tables::Sequence::new(run_id);
         self.liquid_inputs = session::hazards::Observations::default();
+        self.gaps = gaps::Tally::default();
         self.zone.clear();
         self.messages = 0;
         self.server.clone_from(&self.config.server);
@@ -967,6 +980,71 @@ impl<'a> Events<'a> {
 
     fn diagnostic(&mut self, message: String) -> Result<()> {
         self.send(ClientEvent::Diagnostic(message))
+    }
+
+    /// Starts a stage of the session, telling first what the last one
+    /// still had to tell of what it left unread. Its gaps name no zone
+    /// until a zone stage's zone has named itself ([`Self::name_zone`]).
+    fn begin_stage(&mut self, stage: GapStage) -> Result<()> {
+        self.end_stage()?;
+        self.gaps.stage = stage;
+        self.gaps.zone_named = false;
+        Ok(())
+    }
+
+    /// Keeps the short name the zone being entered gives itself.
+    fn name_zone(&mut self, name: &str) {
+        name.clone_into(&mut self.zone);
+        self.gaps.zone_named = true;
+    }
+
+    /// Tells what the stage under way still has to tell of what it left
+    /// unread.
+    fn end_stage(&mut self) -> Result<()> {
+        for gap in self.gaps.drain() {
+            self.send(ClientEvent::Gap(Box::new(gap)))?;
+        }
+        Ok(())
+    }
+
+    /// Counts a server message the stage under way left unread, telling of
+    /// it when it is the first of its kind, or the repeats are due.
+    fn gap(
+        &mut self,
+        opcode: u16,
+        name: Option<&'static str>,
+        body: &[u8],
+        kind: GapKind,
+    ) -> Result<()> {
+        let at = Instant::now();
+        let gap = Gap {
+            stage: self.gaps.stage,
+            dialect: self.config.protocol.into(),
+            server: self.config.protocol,
+            zone: match self.gaps.stage {
+                GapStage::Zone if self.gaps.zone_named => self.zone.clone(),
+                GapStage::Login | GapStage::World | GapStage::Zone => String::new(),
+            },
+            opcode,
+            name,
+            count: 1,
+            min_length: body.len(),
+            max_length: body.len(),
+            kind,
+            sample: None,
+        };
+        if let Some(gap) = self.gaps.count(gap, body, at) {
+            self.send(ClientEvent::Gap(Box::new(gap)))?;
+        }
+        Ok(())
+    }
+
+    /// Tells of the repeats that are due.
+    fn tick_gaps(&mut self) -> Result<()> {
+        for gap in self.gaps.due(Instant::now()) {
+            self.send(ClientEvent::Gap(Box::new(gap)))?;
+        }
+        Ok(())
     }
 
     /// Completes a move discarded outside normal zone action routing.
@@ -1234,6 +1312,43 @@ mod tests {
         packet[132..136].copy_from_slice(&channel.to_le_bytes());
         packet.extend(b"Example message\0");
         chat::parse(0x1004, &packet, false).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_gap_names_only_the_zone_that_named_itself_in_its_stage() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut zones = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                zones.push((gap.stage, gap.zone));
+            }
+            Ok(())
+        };
+        let mut events = Events::new(&config, &mut handler);
+        events.reset();
+        let unlisted = || GapKind::Unlisted;
+        events.begin_stage(GapStage::Zone).unwrap();
+        events.gap(1, None, &[], unlisted()).unwrap();
+        events.name_zone("qeynos");
+        events.gap(2, None, &[], unlisted()).unwrap();
+        events.begin_stage(GapStage::World).unwrap();
+        events.gap(3, None, &[], unlisted()).unwrap();
+        events.begin_stage(GapStage::Zone).unwrap();
+        events.gap(4, None, &[], unlisted()).unwrap();
+        events.name_zone("misty");
+        events.gap(5, None, &[], unlisted()).unwrap();
+        events.end_stage().unwrap();
+        drop(events);
+        assert_eq!(
+            zones,
+            [
+                (GapStage::Zone, String::new()),
+                (GapStage::Zone, "qeynos".to_owned()),
+                (GapStage::World, String::new()),
+                (GapStage::Zone, String::new()),
+                (GapStage::Zone, "misty".to_owned()),
+            ]
+        );
     }
 
     #[test]

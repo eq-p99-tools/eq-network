@@ -39,6 +39,14 @@ pub struct Sender<'a> {
     pub spawn_id: Option<u16>,
 }
 
+/// The player's own spawn for a duel's record, which names both players.
+fn duelist(sender: Sender<'_>) -> Result<u16> {
+    sender
+        .spawn_id
+        .filter(|&id| id != 0)
+        .ok_or_else(|| anyhow::anyhow!("no spawn to answer a duel from"))
+}
+
 impl Sender<'_> {
     /// The player's spawn, or zero, which every packet's own check refuses.
     fn spawn(self) -> u16 {
@@ -125,6 +133,19 @@ pub enum Request {
         offer: TranslocateOffer,
         /// True accepts.
         accept: bool,
+    },
+    /// Accept or decline a challenge to a duel.
+    AnswerDuel {
+        /// Who challenged.
+        challenger: u16,
+        /// True accepts.
+        accept: bool,
+    },
+    /// `EQMac`'s `OP_RequestDuel` naming the other player, which its client
+    /// sends to challenge and, by TAKP's note, again before it accepts.
+    DuelRequest {
+        /// The other player.
+        other: u16,
     },
     /// Invite a player into the player's group, by name.
     InviteToGroup {
@@ -517,6 +538,18 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerTranslocate { offer, accept } => {
             confirmations::titanium_translocate_answer(offer, *accept)
         }
+        Request::AnswerDuel { challenger, accept } => {
+            let own = duelist(sender)?;
+            if *accept {
+                socials::titanium_duel_accept(*challenger, own)
+            } else {
+                socials::titanium_duel_decline(*challenger, own)
+            }
+        }
+        // Titanium's challenge is not read yet (checklist 6.492).
+        Request::DuelRequest { .. } => {
+            anyhow::bail!("the Titanium client cannot send a duel request yet")
+        }
         Request::InviteToGroup { name, .. } => group::invite(name, sender.name)?,
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
@@ -741,6 +774,15 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerTranslocate { offer, accept } => {
             Ok(confirmations::eqmac_translocate_answer(offer, *accept))
         }
+        Request::AnswerDuel { challenger, accept } => {
+            let own = duelist(sender)?;
+            Ok(if *accept {
+                socials::eqmac_duel_accept(*challenger, own)
+            } else {
+                socials::eqmac_duel_decline(*challenger, own)
+            })
+        }
+        Request::DuelRequest { other } => Ok(socials::eqmac_duel_request(*other, duelist(sender)?)),
         Request::Trade(with) => exchange::eqmac::request(sender.spawn(), *with),
         Request::AnswerTrade { asker, busy: false } => {
             exchange::eqmac::acknowledge(sender.spawn(), *asker)

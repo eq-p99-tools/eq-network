@@ -124,10 +124,15 @@ fn world_at(
         let Some(packet) = session.receive()? else {
             continue;
         };
-        record_chat(config, "", &packet, log)?;
+        let chatted = record_chat(config, "", &packet, log)?;
         match packet.opcode {
             characters::ROF2_OPCODE if !entered && selection.is_none() => {
-                let entries = character_list(server, GameDialect::Rof2, &packet.body)?;
+                let entries = character_list(
+                    server,
+                    GameDialect::Rof2,
+                    (packet.opcode, &packet.body),
+                    log,
+                )?;
                 log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
                 if world_only {
                     session.close()?;
@@ -167,10 +172,15 @@ fn world_at(
                     shield: None,
                 }));
             }
-            opcode => log.diagnostic(format!(
-                "RoF2 world sent 0x{opcode:04x} ({} bytes), left unread",
-                packet.body.len()
-            ))?,
+            opcode => {
+                if !chatted {
+                    super::unheard(server.wire(), opcode, &packet.body, log)?;
+                }
+                log.diagnostic(format!(
+                    "RoF2 world sent 0x{opcode:04x} ({} bytes), left unread",
+                    packet.body.len()
+                ))?;
+            }
         }
     }
 }

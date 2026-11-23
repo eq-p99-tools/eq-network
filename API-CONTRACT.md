@@ -1496,6 +1496,19 @@ identity and caller stamp without accepting old motion or reasserting policy
 on every render frame.
 
 
+## Duel challenges
+
+Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
+so far), another player's challenge comes as `WorldEvent::DuelOffer` with a
+`socials::DuelQuestion`, beside the `WorldEvent::Duel` news it came in.
+Answer it with `GameCommand::AnswerDuel`, copying `id` into `offer_id` and
+its admission into `session_id`; only the player's own choice should send a
+yes. The question has no local deadline and nothing declines it on the
+player's behalf. It closes with `WorldEvent::ConsentClosed`: `AnswerSent`
+after an answer, `Interrupted` on zoning, death or logout, a newer
+challenge, the duel's start or the challenger's refusal. A stale answer is
+refused with `WorldEvent::DuelRefused` and sends nothing.
+
 ## Resurrection and translocate consent
 
 A live session exposes `WorldEvent::Resurrection` and
@@ -1581,3 +1594,33 @@ When a received profile names a vehicle, the session publishes
 
 Moves sent while an arrival is held are refused. See
 [boat riding](docs/boat-riding.md) for the wire and the inferred bounds.
+
+## Server message gaps
+
+`ClientEvent::Gap(Box<Gap>)` tells of a server message the session dropped
+or could not read. `Gap` names its `stage` (login, world or zone), the
+configured `server`, its `dialect`, the short `zone` (empty at the login
+and the world, and at a zone until that zone has named itself), the `opcode`, the generation's table `name` where one lists it, and
+the `kind`:
+
+- `Unlisted`: no table row lists the opcode.
+- `Unread { reason }`: listed, and left unread for the row's reason.
+- `ReadElsewhere`: listed as read only at another stage.
+- `PartlyRead { parts }`: read all but these parts, which work to come reads.
+- `UnknownKind { kind }`: a kind of the message no server is known to send.
+  A stage counts at most `MOST_KINDS` (4,096) kinds apart; the rest are
+  counted under `MORE_KINDS`.
+- `Unreadable { part, error }`: the decoders could not read it.
+- `Skipped { reason }`: listed as holding nothing worth reading. Counted, but
+  `GapKind::is_gap` is false.
+
+Each record counts arrivals (`count`, `min_length`, `max_length`). The first
+arrival of a gap (stage, opcode and `GapKind::key`) in a stage is told at once;
+repeats are counted in the session and told at most every `GAP_INTERVAL`
+(10 s) and when the stage ends. A host sums the counts. The first record of a
+gap in an attempt carries `sample`, the first `SAMPLE_BYTES` (256) of the body
+in hex, at the zone only; login and world records never carry one, and their
+`Unreadable` errors are the decoders' fixed words. A zone sample may hold what
+other players said or their names, so a host keeps it local. No record names
+a host, an address, the account or a character. The diagnostic lines the
+session wrote before are unchanged.

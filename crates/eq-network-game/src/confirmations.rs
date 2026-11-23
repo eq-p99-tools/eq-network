@@ -35,6 +35,8 @@ pub enum ConsentKind {
     Resurrection,
     /// Move the player with a translocate spell.
     Translocate,
+    /// Duel the player who challenged them.
+    Duel,
 }
 
 /// Local identity of one question, independent of the packet's wire fields.

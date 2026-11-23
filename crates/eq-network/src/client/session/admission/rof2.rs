@@ -149,7 +149,7 @@ impl Admission for Rof2Admission {
         match (self.stage, packet.opcode) {
             (Stage::Entering, NEW_ZONE) => {
                 let name = short_name(&packet.body)?;
-                handshake.log.zone.clone_from(&name);
+                handshake.log.name_zone(&name);
                 handshake.log.status(
                     ConnectionState::Zoning,
                     world.packets,

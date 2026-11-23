@@ -684,6 +684,16 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Accept or decline the identified challenge to a duel, on the
+    /// player's own choice.
+    AnswerDuel {
+        /// Identity from the offer event.
+        offer_id: crate::confirmations::ConsentId,
+        /// Current zone admission.
+        session_id: u64,
+        /// True accepts.
+        accept: bool,
+    },
     /// Choose a button on the exact popup that was displayed.
     RespondToPopup {
         /// Current zone admission.
@@ -1156,6 +1166,7 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => "AnswerResurrection",
             Self::AnswerSacrifice { .. } => "AnswerSacrifice",
             Self::AnswerTranslocate { .. } => "AnswerTranslocate",
+            Self::AnswerDuel { .. } => "AnswerDuel",
             Self::RespondToPopup { .. } => "RespondToPopup",
             Self::InspectPlayer { .. } => "InspectPlayer",
             Self::SetInspectNote { .. } => "SetInspectNote",
@@ -1275,6 +1286,7 @@ impl GameCommand {
             | Self::AnswerResurrection { session_id, .. }
             | Self::AnswerSacrifice { session_id, .. }
             | Self::AnswerTranslocate { session_id, .. }
+            | Self::AnswerDuel { session_id, .. }
             | Self::RespondToPopup { session_id, .. }
             | Self::InspectPlayer { session_id, .. }
             | Self::SetInspectNote { session_id, .. }
@@ -1432,6 +1444,7 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
+            Self::AnswerDuel { .. } => Capability::Dueling,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
             Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
                 Capability::PlayerInspection
@@ -1500,6 +1513,7 @@ impl GameCommand {
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
             | Self::AnswerTranslocate { .. }
+            | Self::AnswerDuel { .. }
             | Self::SetInspectNote { .. }
             | Self::DropInvisibility { .. }
             | Self::InviteToGroup { .. }
@@ -1799,6 +1813,7 @@ pub fn encode(
         | GameCommand::AnswerResurrection { .. }
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
+        | GameCommand::AnswerDuel { .. }
         | GameCommand::RespondToPopup { .. }
         | GameCommand::InspectPlayer { .. }
         | GameCommand::SetInspectNote { .. }

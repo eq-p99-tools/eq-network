@@ -253,7 +253,7 @@ impl Admission for TitaniumAdmission {
             DESCRIPTION_OPCODE => {
                 ensure!(packet.body.len() >= 96, "truncated zone description");
                 let name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
-                handshake.log.zone.clone_from(&name);
+                handshake.log.name_zone(&name);
                 handshake.log.status(
                     ConnectionState::Zoning,
                     world.packets,

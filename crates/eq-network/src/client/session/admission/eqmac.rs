@@ -140,7 +140,7 @@ impl Admission for EqMacAdmission {
                 let name =
                     String::from_utf8_lossy(crate::client::session::cstr(&packet.body[64..96]))
                         .into_owned();
-                handshake.log.zone.clone_from(&name);
+                handshake.log.name_zone(&name);
                 handshake.log.status(
                     crate::client::ConnectionState::Zoning,
                     world.packets,
