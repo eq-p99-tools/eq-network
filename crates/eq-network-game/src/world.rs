@@ -1303,7 +1303,7 @@ pub enum WorldEvent {
     },
     /// The titles the player may choose, as the server listed them in
     /// answer to [`crate::command::GameCommand::RequestTitles`]
-    /// ([`crate::names::title_list`]).
+    /// (`names::title_list`).
     TitleList(Vec<crate::names::TitleChoice>),
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
