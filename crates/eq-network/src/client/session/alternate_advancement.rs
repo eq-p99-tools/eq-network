@@ -1,4 +1,5 @@
-//! Admission-scoped, read-only AA environmental observations for local `EQEmu`.
+//! Admission-scoped, read-only AA facts for local `EQEmu`: selections,
+//! definitions, points, AA experience and reuse timers (checklist 6.547).
 use super::{
     feature::{Feature, Out, World},
     ClientEvent,
@@ -62,7 +63,7 @@ mod tests {
     use super::super::feature::testing;
     use super::*;
     use crate::client::ConnectionStage;
-    use eq_network_game::alternate_advancement::{Rank, Selection};
+    use eq_network_game::alternate_advancement::{Points, Progress, Rank, Selection, Timer};
 
     fn entered(out: &mut Out<'_, '_>) -> Result<()> {
         out.log.send(ClientEvent::World(WorldEvent::Entered {
@@ -89,13 +90,46 @@ mod tests {
             id,
             rank: Some(Rank {
                 id,
+                hotkey_sid: 0,
+                hotkey_sid2: 0,
+                title_sid: 0,
+                desc_sid: 0,
                 required_level: 1,
+                cost: 1,
                 sequence: id,
                 rank: 1,
+                prereq_skill: 0,
+                prereq_minpoints: 0,
+                kind: 1,
+                spellid: -1,
+                spell_type: 0,
+                spell_refresh: 0,
                 classes: 2,
+                max_level: 1,
+                last_id: -1,
+                next_id: -1,
+                cost2: 1,
                 effects: Vec::new(),
             }),
         }));
+        // Points, experience and a timer stage in received order too.
+        facts.extend([
+            Update::Points(Some(Points {
+                aapoints_spent: 1,
+                aapoints: 2,
+                exp_aa: 3,
+            })),
+            Update::Progress(Some(Progress {
+                experience: 165,
+                unspent: 2,
+                percentage: 50,
+            })),
+            Update::Timer(Timer {
+                begin: 1,
+                ability: 9,
+                end: 2,
+            }),
+        ]);
         let before = testing::run(|_| {
             for update in &facts {
                 feature
@@ -110,7 +144,7 @@ mod tests {
             out.log.send(ClientEvent::Progress(ConnectionStage::Ready))
         });
         outcome.result.unwrap();
-        assert_eq!(facts.len(), 115);
+        assert_eq!(facts.len(), 118);
         assert!(matches!(outcome.events.as_slice(), [
             ClientEvent::World(WorldEvent::Entered { session_id: 5, .. }),
             ClientEvent::World(WorldEvent::LiquidHazardRevision { session_id: 5, revision: 0 }),

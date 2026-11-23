@@ -5,6 +5,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read the rest of Titanium's alternate advancement, read only (6.547):
+  every `OP_SendAATable` header field (`Rank` gains `hotkey_sid`,
+  `hotkey_sid2`, `title_sid`, `desc_sid`, `cost`, `prereq_skill`,
+  `prereq_minpoints`, `kind` for the wire's `type`, `spellid`, `spell_type`,
+  `spell_refresh`, `max_level`, `last_id`, `next_id` and `cost2`, each raw
+  under its wire name), the profile's points spent, unspent and `expAA`,
+  `OP_AAExpUpdate` (0x5f58) and the server's reuse timers on `OP_AAAction`
+  (0x0681). The session publishes them as received and keeps no timers.
+  The feature is still offered on local `EQEmu` only; it opens to every
+  stock `EQEmu` session in a one-line follow-up once its local live row
+  passes, and stays off P99, TAKP, Quarm and RoF2.
+
+  **Breaking** (for the client repin):
+  - `alternate_advancement::Rank` gains the fifteen fields above.
+  - `alternate_advancement::Update` gains `Points(Option<Points>)`,
+    `Progress(Option<Progress>)` and `Timer(Timer)`, with the new structs
+    `Points`, `Progress` and `Timer`.
+  - `alternate_advancement::titanium_profile` returns `[Update; 2]`
+    (selections, then points), and `invalidated` returns `Option<Update>`
+    (`None` for an unreadable timer).
+
 - Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
   sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`
   module reads `OP_RandomReply` (0x106b), `OP_Assist` (0x4478),

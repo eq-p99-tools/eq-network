@@ -38,7 +38,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x0557 => sent("OP_VetRewardsAvaliable", EQEMU, planned(LaterSystems)),
         0x0587 => sent("OP_SendExpZonein", EQEMU, Read(&[Admission])),
         0x0677 => sent("OP_AdventureData", EQEMU, planned(LaterSystems)),
-        0x0681 => sent("OP_AAAction", EQEMU, planned(AlternateAdvancement)),
+        0x0681 => sent("OP_AAAction", EQEMU, Read(&[Zone])),
         0x0695 => sent("OP_MobHealth", EQEMU, Read(&[Zone])),
         0x06c5 => sent("OP_LFPGetMatchesResponse", EQEMU, unasked(LaterSystems)),
         0x07f1 => sent(
@@ -290,7 +290,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x5eab => sent("OP_SetTitleReply", EQEMU, Read(&[Zone])),
         0x5ecd => sent("OP_ExpUpdate", EQEMU, Read(&[Zone])),
         0x5ef7 => sent("OP_TaskDescription", EQEMU, planned(LaterSystems)),
-        0x5f58 => sent("OP_AAExpUpdate", EQEMU, planned(AlternateAdvancement)),
+        0x5f58 => sent("OP_AAExpUpdate", EQEMU, Read(&[Zone])),
         0x6014 => sent("OP_FinishTrade", EQEMU, Read(&[Zone])),
         0x601d => sent("OP_Bind_Wound", EQEMU, Read(&[Zone])),
         0x60b6 => sent("OP_OpenGuildTributeMaster", EQEMU, unasked(LaterSystems)),
