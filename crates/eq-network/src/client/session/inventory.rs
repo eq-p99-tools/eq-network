@@ -1206,10 +1206,19 @@ impl Feature for Belongings {
     /// A zone sends its whole inventory, when it sends one, before the
     /// weather the client waits for to request the zone, on the same ordered
     /// stream; admission ends later on every generation. When a zone sent no
-    /// inventory message by admission, the player holds nothing, as the
-    /// original client then holds (inferred, recording checklist 6.437). An
-    /// unreadable or partial inventory is news, and stays as unknown as it
-    /// was; a later snapshot replaces the empty one.
+    /// inventory message by admission, the player holds nothing. Stock
+    /// `EQEmu` sends a Titanium client none exactly when there is nothing to
+    /// send: `Client::BulkSendInventoryItems` queues `OP_CharInventory` with
+    /// one entry per item held (and banked, unless `Inventory:LazyLoadBank`),
+    /// and the Titanium encoder drops a packet with no entries. It also sends
+    /// none when the character's inventory fails to load from its database.
+    /// The Titanium program doesn't wait for one either: its world-to-zone
+    /// loop waits for the zone connection (or `ZoneUnavailable`), and it
+    /// takes `OP_CharInventory` whenever it arrives (0x4acf33, 0x45af4e;
+    /// read R49-36 a). Whether it clears the last zone's items at zone-in,
+    /// so that it too then holds nothing, is unread (recording checklist
+    /// 6.437). An unreadable or partial inventory is news, and stays as
+    /// unknown as it was; a later snapshot replaces the empty one.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.moves = MoveOrder::default();
         self.trades.clear();

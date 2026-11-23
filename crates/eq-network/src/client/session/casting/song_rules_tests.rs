@@ -345,3 +345,32 @@ fn an_item_cast_goes_alongside_the_song_and_its_end_follows_the_item_flag() {
     assert_eq!(output.sent, []);
     assert_eq!(bard.casting.song, None);
 }
+
+#[test]
+fn a_melody_step_the_stop_then_the_next_gem_casts() {
+    // R49-33 c through the session: after the song's own refresh, the
+    // host's StopSong and then the next gem's press go out, and the press
+    // casts (the click-while-singing rule doesn't take it).
+    let mut bard = Singer::titanium_bard();
+    bard.sing();
+    bard.hear(&Message::Event(WorldEvent::Spell(
+        SpellUpdate::BarRefresh {
+            slot: 0,
+            spell_id: SONG,
+            reduction_ms: 0,
+        },
+    )));
+    assert!(!bard.casting.guard.active());
+    assert!(bard.casting.song.is_some());
+    let stop = ClientCommand::StopSong {
+        session_id: 5,
+        created: Instant::now(),
+    };
+    let output = bard.run(&stop);
+    assert_eq!(output.sent.len(), 1);
+    assert_eq!(output.sent[0].opcode, 0x4839);
+    let output = bard.run(&bard.gem(1, OTHER_SONG));
+    assert_eq!(output.sent.len(), 1);
+    assert_ne!(output.sent[0].opcode, 0x4839);
+    assert_eq!(bard.casting.guard.pending(), Some(OTHER_SONG));
+}

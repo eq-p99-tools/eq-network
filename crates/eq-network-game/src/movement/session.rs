@@ -73,6 +73,9 @@ pub struct SwimCalibration {
     pub backward: f32,
     /// The water set of the zone's `WT` regions ([`super::water::WaterRules`]).
     pub set: super::water::WetCoefficients,
+    /// The water set of the zone's slower water, `SL`, `LA` and `VW`
+    /// ([`super::water::WetKind::Slower`]).
+    pub slower: super::water::WetCoefficients,
 }
 
 impl SwimCalibration {
@@ -82,23 +85,40 @@ impl SwimCalibration {
     #[must_use]
     pub fn caps(&self) -> super::water::WetCaps {
         let vertical = self.forward.max(self.walk).max(self.backward);
-        super::water::WetCaps::new(self.set, vertical.max(self.strafe), vertical)
+        self.caps_with(vertical.max(self.strafe), vertical)
+    }
+
+    /// The set a region of this kind takes in the granted zone.
+    #[must_use]
+    pub fn set_for(&self, kind: super::water::WetKind) -> super::water::WetCoefficients {
+        match kind {
+            super::water::WetKind::Normal => self.set,
+            super::water::WetKind::Slower => self.slower,
+        }
+    }
+
+    /// Caps for these inputs that hold in either set's water.
+    fn caps_with(&self, horizontal: f32, vertical: f32) -> super::water::WetCaps {
+        super::water::WetCaps::new(self.set, horizontal, vertical).covering(
+            super::water::WetCaps::new(self.slower, horizontal, vertical),
+        )
     }
 
     fn validate(&self) -> Result<()> {
-        let set = self.set;
         ensure!(
             [self.forward, self.walk, self.strafe, self.backward]
                 .iter()
                 .all(|v| v.is_finite() && *v >= 0.0)
-                && [
-                    set.horizontal_input,
-                    set.vertical_input,
-                    set.horizontal_keep,
-                    set.vertical_keep
-                ]
-                .iter()
-                .all(|v| v.is_finite() && *v > 0.0 && *v < 1.0),
+                && [self.set, self.slower].iter().all(|set| {
+                    [
+                        set.horizontal_input,
+                        set.vertical_input,
+                        set.horizontal_keep,
+                        set.vertical_keep,
+                    ]
+                    .iter()
+                    .all(|v| v.is_finite() && *v > 0.0 && *v < 1.0)
+                }),
             "invalid swimming calibration"
         );
         Ok(())
@@ -326,7 +346,7 @@ impl Rates {
                         .swim_backward_units_per_second
                         .map(super::swim_speed)
                 },
-                |swim| Some(super::water::WetCaps::new(swim.set, swim.backward, 0.0).horizontal),
+                |swim| Some(swim.caps_with(swim.backward, 0.0).horizontal),
             ),
             swim_caps: calibration.swim.map(|swim| swim.caps()),
         })
@@ -350,10 +370,10 @@ pub struct MotionSession {
     /// so they turn and a sample that only turns is taken, and nothing
     /// carries them anywhere ([`Self::root`]).
     rooted: bool,
-    /// The water set of the grant a root replaced: a rooted swimmer still
+    /// The water sets of the grant a root replaced: a rooted swimmer still
     /// sinks, the root zeroing only the speed (read R18; gravity in water,
     /// read R33 and R41 e).
-    rooted_water: Option<super::water::WetCoefficients>,
+    rooted_water: Option<SwimCalibration>,
     /// Whether a rooted player may jump, as the client generation's program
     /// lets them ([`crate::movement::RootRules::jumps`]).
     rooted_jumps: bool,
@@ -743,7 +763,7 @@ impl MotionSession {
         } else {
             self.guard.set_speed(None, now);
         }
-        self.rooted_water = self.calibration.and_then(|c| c.swim).map(|swim| swim.set);
+        self.rooted_water = self.calibration.and_then(|c| c.swim);
         self.calibration = None;
         self.rooted = true;
         self.hold_stop();
@@ -1116,9 +1136,7 @@ impl MotionSession {
             // Rooted, every mode is granted at no speed, a diagonal too.
             Rates {
                 lateral: diagonal.map(|_| 0.0),
-                swim_caps: self
-                    .rooted_water
-                    .map(|set| super::water::WetCaps::new(set, 0.0, 0.0)),
+                swim_caps: self.rooted_water.map(|swim| swim.caps_with(0.0, 0.0)),
                 ..Rates::ROOTED
             }
         } else if let Some(calibration) = self.calibration {

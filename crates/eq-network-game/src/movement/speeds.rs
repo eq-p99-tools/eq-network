@@ -408,6 +408,7 @@ fn swim(
         strafe: strafing.abs(),
         backward: backing.abs(),
         set: water.set(state.zone_id),
+        slower: water.set_for(state.zone_id, super::water::WetKind::Slower),
     })
 }
 

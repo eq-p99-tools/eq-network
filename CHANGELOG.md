@@ -13,6 +13,32 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   integer, and a reason 6 transfer's saves 0xffffffff (all three
   capture-derived). The unidentified fields stay zero, and EQMac's save is unchanged.
   See docs/boat-riding.md, "The save before leaving".
+- `Capability::Melody`: where the server type takes a Bard's `/melody`
+  (read R49-33 c): P99 and stock Titanium `EQEmu`; not the Mac-era server
+  types, whose program is unread. The host runs the melody with `StopSong` and gem casts, and a
+  test shows the stop followed at once by a gem press casts. **Breaking:** a
+  new `Capability` variant.
+- Say why a zone sent no inventory at admission (gap 3.11, checklist 6.437):
+  stock `EQEmu` sends a Titanium client no `OP_CharInventory` exactly when
+  the character holds nothing (its Titanium encoder drops an empty one), or
+  when the character's inventory fails to load. The session's handling is
+  unchanged (the player holds nothing), and so is its diagnostic; the docs
+  now name the source. The Titanium program doesn't wait for the message
+  either: it enters the zone once the zone server is connected, and takes
+  the inventory whenever it arrives (read R49-36 a). Whether it clears the
+  last zone's items at zone-in is still unread, so that the original client
+  then holds nothing stays inferred.
+
+- Slower water's own set in the swim grant, as read R49-26 reads the Titanium
+  region classifier (0x435ec9; checklist 6.483).
+  - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for
+    `SL`, `LA` and `VW`), `WaterRules::slower` and `WaterRules::set_for`.
+    Zone 222's own set is level 5's only; its slower water keeps
+    `LIQUID_6_TO_8`.
+  - `SwimCalibration` carries `slower` beside `set`, with
+    `SwimCalibration::set_for`. The session bound takes the larger of the
+    two sets' caps on each axis (`WetCaps::covering`), which widens it only
+    in poearthb. Breaking: a new required field.
 - A Bard's song under the Titanium program's rules (read R49-21; gap 3.5,
   checklist 6.442, 6.542), on P99 and Titanium EQEmu only. See
   API-CONTRACT.md, "A Bard's song under the Titanium program's rules".
