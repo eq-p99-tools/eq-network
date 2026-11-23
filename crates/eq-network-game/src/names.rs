@@ -44,6 +44,22 @@ pub const TITLE_OPCODE: u16 = 0x5eab;
 pub const EQMAC_TITLE_OPCODE: u16 = 0xd440;
 /// `EQMac`'s `OP_GMNameChange`: a game master renamed a player.
 pub const EQMAC_GM_RENAME_OPCODE: u16 = 0xcb40;
+/// `EQMac`'s `OP_GMLastName`: a character's new last name, as Titanium's.
+pub const EQMAC_LAST_NAME_OPCODE: u16 = 0x6e41;
+/// Titanium's `OP_Surname`: the player asks for a last name, and the server
+/// answers in the same record.
+pub const SURNAME_OPCODE: u16 = 0x4668;
+/// `EQMac`'s `OP_Surname`.
+pub const EQMAC_SURNAME_OPCODE: u16 = 0xc441;
+
+/// The surname record (`Surname_Struct`), alike on both generations: the
+/// player's name in 64 bytes, a word, and the surname in 32.
+const SURNAME_LENGTH: usize = 100;
+/// Where the surname record's surname starts.
+const SURNAME_AT: usize = 68;
+/// `EQMac`'s last name record (TAKP's `GMLastName_Struct`): three names of
+/// 64 bytes, two bytes and a 16-bit word.
+const EQMAC_LAST_NAME_LENGTH: usize = 196;
 
 /// Titanium's title record.
 const TITLE_LENGTH: usize = 40;
@@ -99,6 +115,89 @@ pub(crate) fn last_name(body: &[u8]) -> Result<(String, String)> {
     let name = text(&body[..64]);
     ensure!(!name.is_empty(), "last name for no one");
     Ok((name, text(&body[128..192])))
+}
+
+/// Decodes `EQMac`'s `OP_GMLastName` (TAKP's `GMLastName_Struct`, 196
+/// bytes): whose last name changed at 0 and the new last name at 128, as
+/// Titanium's, then two bytes and a word TAKP sets to 1 on what it sends
+/// (`Client::ChangeLastName`), which is not read.
+///
+/// # Errors
+/// Rejects a malformed length or a change for no one.
+pub(crate) fn eqmac_last_name(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(
+        body.len() == EQMAC_LAST_NAME_LENGTH,
+        "invalid last name length"
+    );
+    let name = text(&body[..64]);
+    ensure!(!name.is_empty(), "last name for no one");
+    Ok(WorldEvent::LastName {
+        name,
+        last_name: text(&body[128..192]),
+    })
+}
+
+/// The longest surname the record holds, in bytes, its end included.
+pub const SURNAME_FIELD: usize = 32;
+
+/// Builds `OP_Surname`'s request (`Surname_Struct`, 100 bytes, alike on
+/// both generations): the player's name at 0, a word left 0 (`EQEmu`'s
+/// `unknown0064`, TAKP's `success`) and the surname at 68, as given: never
+/// cut, and its case left as typed, since `EQEmu` and TAKP set it
+/// themselves (`Client::Handle_OP_Surname`). Only what the record cannot
+/// carry is refused; which letters a surname may have is the server's to
+/// judge, and the program's own rule is not read yet (inferred, program
+/// read R49-10).
+///
+/// # Errors
+/// Refuses an empty surname or player name, a surname with a space, a
+/// control character or anything outside ASCII, and either one too long
+/// for its field.
+pub fn surname_request(player: &str, surname: &str) -> Result<Vec<u8>> {
+    ensure!(!surname.is_empty(), "a surname needs a word");
+    ensure!(
+        surname.bytes().all(|byte| byte.is_ascii_graphic()),
+        "a surname is one word of plain text"
+    );
+    ensure!(
+        surname.len() < SURNAME_FIELD,
+        "a surname is at most {} characters",
+        SURNAME_FIELD - 1
+    );
+    ensure!(
+        !player.is_empty() && player.len() < NAME && !player.contains('\0'),
+        "a surname request needs the player's name"
+    );
+    let mut body = vec![0; SURNAME_LENGTH];
+    body[..player.len()].copy_from_slice(player.as_bytes());
+    body[SURNAME_AT..SURNAME_AT + surname.len()].copy_from_slice(surname.as_bytes());
+    Ok(body)
+}
+
+/// Decodes the server's answer in `OP_Surname`: the request's record sent
+/// back, its word 1 where the surname was taken (`EQEmu` and TAKP) and 0
+/// where TAKP's name filter refused it. `EQEmu` refuses with a line of its
+/// own instead and sends no record.
+///
+/// # Errors
+/// Rejects another length, another word and a surname that fills its
+/// field.
+pub(crate) fn surname_answer(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(
+        body.len() == SURNAME_LENGTH,
+        "invalid surname answer length"
+    );
+    let accepted = match word(body, 64) {
+        0 => false,
+        1 => true,
+        _ => bail!("invalid surname answer"),
+    };
+    let field = &body[SURNAME_AT..];
+    ensure!(field.contains(&0), "surname answer without its end");
+    Ok(WorldEvent::SurnameAnswer {
+        accepted,
+        last_name: text(field),
+    })
 }
 
 /// Decodes `OP_MobRename` (`MobRename_Struct`, 200 bytes): the old name at
@@ -215,6 +314,7 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(WorldEvent::NewTitles)
         }
         TITLE_OPCODE => Some(titanium_title(body)?),
+        SURNAME_OPCODE => Some(surname_answer(body)?),
         _ => None,
     })
 }
@@ -408,5 +508,93 @@ mod tests {
                 last_name: "Exemplum".into(),
             })
         );
+    }
+
+    #[test]
+    fn surname_requests_carry_the_players_name_and_the_surname_as_given() {
+        let body = surname_request("Examplar", "exemplum").unwrap();
+        assert_eq!(body.len(), 100);
+        assert_eq!(&body[..9], b"Examplar\0");
+        assert_eq!(&body[64..68], &[0; 4]);
+        assert_eq!(&body[68..77], b"exemplum\0");
+        assert!(body[77..].iter().all(|byte| *byte == 0));
+        assert!(surname_request("Examplar", &"a".repeat(31)).is_ok());
+        // Which marks a surname may have is the server's to judge.
+        assert!(surname_request("Examplar", "Ex'ample").is_ok());
+        assert!(surname_request("Examplar", "Ex-ample").is_ok());
+        for refused in [
+            "",
+            "Ex ample",
+            "Ex\tample",
+            "Exämple",
+            "Ex\0",
+            &"a".repeat(32),
+        ] {
+            assert!(surname_request("Examplar", refused).is_err(), "{refused:?}");
+        }
+        assert!(surname_request("", "Exemplum").is_err());
+        assert!(surname_request(&"a".repeat(64), "Exemplum").is_err());
+    }
+
+    #[test]
+    fn surname_answers_say_whether_it_was_taken() {
+        let mut body = surname_request("Examplar", "Exemplum").unwrap();
+        body[64] = 1;
+        let answer = |body: &[u8]| crate::world::titanium_update(SURNAME_OPCODE, body);
+        assert_eq!(
+            answer(&body).unwrap(),
+            Some(WorldEvent::SurnameAnswer {
+                accepted: true,
+                last_name: "Exemplum".into(),
+            })
+        );
+        body[64] = 0;
+        assert_eq!(
+            surname_answer(&body).unwrap(),
+            WorldEvent::SurnameAnswer {
+                accepted: false,
+                last_name: "Exemplum".into(),
+            }
+        );
+        let mut other = body.clone();
+        other[64] = 2;
+        assert!(surname_answer(&other).is_err());
+        let mut full = body.clone();
+        full[68..100].fill(b'a');
+        assert!(surname_answer(&full).is_err());
+        assert!(surname_answer(&body[..99]).is_err());
+    }
+
+    #[test]
+    fn eqmac_last_names_name_whose_and_what() {
+        let mut body = [0_u8; 196];
+        body[..8].copy_from_slice(b"Examplar");
+        body[64..72].copy_from_slice(b"Examplar");
+        body[128..136].copy_from_slice(b"Exemplum");
+        body[194] = 1;
+        assert_eq!(
+            eqmac_last_name(&body).unwrap(),
+            WorldEvent::LastName {
+                name: "Examplar".into(),
+                last_name: "Exemplum".into(),
+            }
+        );
+        assert_eq!(
+            crate::quarm::updates(EQMAC_LAST_NAME_OPCODE, &body).unwrap(),
+            [eqmac_last_name(&body).unwrap()]
+        );
+        let mut answer = surname_request("Examplar", "Exemplum").unwrap();
+        answer[64] = 1;
+        assert_eq!(
+            crate::quarm::updates(EQMAC_SURNAME_OPCODE, &answer).unwrap(),
+            [WorldEvent::SurnameAnswer {
+                accepted: true,
+                last_name: "Exemplum".into(),
+            }]
+        );
+        assert!(eqmac_last_name(&body[..195]).is_err());
+        assert!(eqmac_last_name(&[0; 196]).is_err());
+        // A 200-byte record is Titanium's, not EQMac's.
+        assert!(eqmac_last_name(&[0; 200]).is_err());
     }
 }
