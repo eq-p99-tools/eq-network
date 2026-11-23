@@ -1537,6 +1537,25 @@ Quarm and TAKP offer `Pets` the same way (6.595), from both servers' identical
   invisible or hidden, in the pet's own words.
 - **Pace.** None (open row 6.595a).
 
+Quarm and TAKP offer `Resurrection` and `Sacrifice` the same way (6.596), from
+`Handle_OP_RezzAnswer` and `Handle_OP_Sacrifice` at Quarm fc75fcf and TAKP
+44afcbf.
+- **Resurrection.** The offer (0x2a41) and the answer (0x9b41) are
+  Titanium's 228-byte `Resurrect_Struct`, with no instance. The answer is the
+  offer byte for byte, with only the choice set: Quarm takes the zone and place
+  from it. Quarm moves the player itself on a yes.
+- **TAKP's completion.** TAKP sends its kept offer again with the answer 1
+  (0xec41), and the client moves itself. The session follows it only for the
+  offer it accepted in this admission, at the same zone and place, as a
+  solicited transfer with reason 9 and heading 0 (inferred). Anything else is
+  recorded as a gap. TAKP's rez effect, which the `EQMac` program applies
+  itself, is not shown (open row 6.596b).
+- **Time limit.** A question stays open an hour, then the session declines it
+  (inferred, open row 6.596a).
+- **Sacrifice.** The 12-byte offer is returned with only the answer set (1 or
+  0), on the player's word alone. The Mac program's no is inferred as 0 (open
+  row 6.596c).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

@@ -937,6 +937,9 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerSacrifice { offer, accept } => {
             Ok(confirmations::eqmac_sacrifice_answer(offer, *accept))
         }
+        Request::AnswerResurrection { offer, accept } => {
+            Ok(resurrection::eqmac_answer(offer, *accept))
+        }
         Request::AnswerTranslocate { offer, accept } => {
             Ok(confirmations::eqmac_translocate_answer(offer, *accept))
         }

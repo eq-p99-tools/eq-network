@@ -16,6 +16,21 @@ use serde::Serialize;
 pub const OFFER_OPCODE: u16 = 0x1035;
 /// `OP_RezzAnswer`: the player's answer.
 pub const ANSWER_OPCODE: u16 = 0x6219;
+/// `EQMac`'s `OP_RezzRequest` (0x412a swapped): the offer, the same 228
+/// bytes as Titanium's (`Resurrect_Struct`, TAKP 44afcbf and Quarm fc75fcf),
+/// where the instance's place is `unused`.
+pub const EQMAC_OFFER_OPCODE: u16 = 0x2a41;
+/// `EQMac`'s `OP_RezzAnswer` (0x419b swapped): the player's answer.
+pub const EQMAC_ANSWER_OPCODE: u16 = 0x9b41;
+/// `EQMac`'s `OP_RezzComplete` (0x41ec swapped). TAKP sends its kept offer
+/// back with the answer 1 once the player accepted, and the client moves
+/// itself to the corpse (`Client::OPRezzAnswer`, `zone/client_process.cpp`);
+/// Quarm sends it only to world.
+pub const EQMAC_COMPLETE_OPCODE: u16 = 0xec41;
+
+/// The reason the `EQMac` program gives its transfer request for a
+/// resurrection (TAKP Batch 1 R8; TAKP's `ZC_ResurrectPlayer`).
+const RESURRECTED: u32 = 9;
 
 /// The length of the offer and the answer.
 const LENGTH: usize = 228;
@@ -66,6 +81,17 @@ fn name(body: &[u8], at: usize) -> String {
 /// Rejects a malformed offer or one missing its recipient, caster or corpse.
 pub fn titanium_offer(body: &[u8]) -> Result<ResurrectionOffer> {
     ensure!(body.len() == LENGTH, "invalid resurrection offer length");
+    record(body)
+}
+
+/// A little-endian 32-bit field after the length check.
+fn word(body: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]])
+}
+
+/// Reads a 228-byte resurrection record, whatever its answer.
+fn record(body: &[u8]) -> Result<ResurrectionOffer> {
+    ensure!(body.len() == LENGTH, "invalid resurrection record length");
     let float =
         |at: usize| f32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
     let recipient = name(body, RECIPIENT);
@@ -85,12 +111,7 @@ pub fn titanium_offer(body: &[u8]) -> Result<ResurrectionOffer> {
         recipient,
         caster,
         corpse,
-        spell_id: u32::from_le_bytes([
-            body[SPELL],
-            body[SPELL + 1],
-            body[SPELL + 2],
-            body[SPELL + 3],
-        ]),
+        spell_id: word(body, SPELL),
         zone_id: u16::from_le_bytes([body[ZONE], body[ZONE + 1]]),
         instance_id: u16::from_le_bytes([body[INSTANCE], body[INSTANCE + 1]]),
         position: crate::world::Position {
@@ -116,17 +137,81 @@ impl ResurrectionOffer {
     pub const fn valid_p99_question(&self) -> bool {
         self.zone_id != 0 && !matches!(self.spell_id, 0 | 0xffff | u32::MAX)
     }
+
+    /// Where TAKP's completion of this accepted offer sends the player: the
+    /// corpse's zone and place, as the `EQMac` program's own transfer
+    /// request for a resurrection. None unless the completion repeats this
+    /// offer byte for byte but for its answer of 1, and names a zone. The
+    /// record carries no heading, so the player faces heading 0 after it
+    /// (inferred, as for TAKP's translocate).
+    #[must_use]
+    pub fn eqmac_move(&self, completed: &Self) -> Option<crate::zoning::ZoneOffer> {
+        (self.body.len() == LENGTH
+            && completed.body.len() == LENGTH
+            && word(&self.body, ACTION) == 0
+            && word(&completed.body, ACTION) == 1
+            && self.body[..ACTION] == completed.body[..ACTION]
+            && self.zone_id != 0)
+            .then_some(crate::zoning::ZoneOffer {
+                zone_id: self.zone_id,
+                instance_id: 0,
+                position: self.position,
+                reason: RESURRECTED,
+                to_bind: false,
+                solicited: true,
+            })
+    }
 }
 
 /// Encodes the player's answer: the offer as it came, with the choice.
 #[must_use]
 pub fn titanium_answer(offer: &ResurrectionOffer, accept: bool) -> EncodedCommand {
+    answer(ANSWER_OPCODE, offer, accept)
+}
+
+/// Encodes `EQMac`'s answer: every byte of the offer as it came, with only
+/// the choice set. Quarm takes the zone and place from this packet
+/// (`Client::Handle_OP_RezzAnswer` at fc75fcf), so nothing else may differ.
+#[must_use]
+pub fn eqmac_answer(offer: &ResurrectionOffer, accept: bool) -> EncodedCommand {
+    answer(EQMAC_ANSWER_OPCODE, offer, accept)
+}
+
+fn answer(opcode: u16, offer: &ResurrectionOffer, accept: bool) -> EncodedCommand {
     let mut body = offer.body.clone();
     body[ACTION..ACTION + 4].copy_from_slice(&u32::from(accept).to_le_bytes());
-    EncodedCommand {
-        opcode: ANSWER_OPCODE,
-        body,
-    }
+    EncodedCommand { opcode, body }
+}
+
+/// Decodes `EQMac`'s offer: Titanium's layout, with no instance.
+///
+/// # Errors
+/// As [`titanium_offer`].
+pub fn eqmac_offer(body: &[u8]) -> Result<ResurrectionOffer> {
+    Ok(ResurrectionOffer {
+        instance_id: 0,
+        ..titanium_offer(body)?
+    })
+}
+
+/// Decodes TAKP's completion: its kept offer, with the answer 1.
+///
+/// # Errors
+/// Rejects a record of the wrong length, one whose answer is not 1, and
+/// one missing a name or place.
+pub fn eqmac_completion(body: &[u8]) -> Result<ResurrectionOffer> {
+    ensure!(
+        body.len() == LENGTH,
+        "invalid resurrection completion length"
+    );
+    ensure!(
+        word(body, ACTION) == 1,
+        "resurrection completion without an accepted answer"
+    );
+    Ok(ResurrectionOffer {
+        instance_id: 0,
+        ..record(body)?
+    })
 }
 
 /// Decodes a Titanium resurrection packet from the server: an offer; None
@@ -182,5 +267,83 @@ mod tests {
         assert_eq!(decode(ANSWER_OPCODE, &body).unwrap(), None);
         assert!(titanium_offer(&body[..227]).is_err());
         assert!(titanium_offer(&[0; LENGTH]).is_err(), "no caster");
+    }
+
+    /// A Mac offer whose unnamed fields carry bytes, as nothing promises
+    /// they are zero: the answer must return every one of them.
+    fn eqmac_offer_body() -> Vec<u8> {
+        let mut body = offer();
+        body[..4].copy_from_slice(&[0xa1, 0xa2, 0xa3, 0xa4]);
+        body[INSTANCE..INSTANCE + 2].copy_from_slice(&[0xb1, 0xb2]);
+        body[20..24].copy_from_slice(&[0xc1, 0xc2, 0xc3, 0xc4]);
+        body[88..92].copy_from_slice(&[0xd1, 0xd2, 0xd3, 0xd4]);
+        body[RECIPIENT + 60] = 0xe1;
+        body
+    }
+
+    #[test]
+    fn an_eqmac_answer_is_the_offer_byte_for_byte_but_its_choice() {
+        let body = eqmac_offer_body();
+        let offer = eqmac_offer(&body).unwrap();
+        assert_eq!(
+            (offer.zone_id, offer.instance_id),
+            (4, 0),
+            "no Mac instance"
+        );
+        assert_eq!(offer.recipient, "Example");
+        for (accept, action) in [(true, [1, 0, 0, 0]), (false, [0, 0, 0, 0])] {
+            let answer = eqmac_answer(&offer, accept);
+            assert_eq!(answer.opcode, EQMAC_ANSWER_OPCODE);
+            let mut expected = body.clone();
+            expected[ACTION..].copy_from_slice(&action);
+            assert_eq!(answer.body, expected);
+        }
+        assert!(eqmac_offer(&body[..227]).is_err());
+        let mut longer = body.clone();
+        longer.push(0);
+        assert!(eqmac_offer(&longer).is_err());
+    }
+
+    #[test]
+    fn takp_completion_moves_only_for_the_same_offer_accepted() {
+        let body = eqmac_offer_body();
+        let offer = eqmac_offer(&body).unwrap();
+        let mut done = body.clone();
+        done[ACTION] = 1;
+        let completed = eqmac_completion(&done).unwrap();
+        assert_eq!(
+            offer.eqmac_move(&completed),
+            Some(crate::zoning::ZoneOffer {
+                zone_id: 4,
+                instance_id: 0,
+                position: crate::world::Position {
+                    x: 263.0,
+                    y: 1748.0,
+                    z: 27.0,
+                    heading: 0.0,
+                },
+                reason: 9,
+                to_bind: false,
+                solicited: true,
+            })
+        );
+        let mut elsewhere = done.clone();
+        elsewhere[POSITION + 8..POSITION + 12].copy_from_slice(&28.0f32.to_le_bytes());
+        assert_eq!(
+            offer.eqmac_move(&eqmac_completion(&elsewhere).unwrap()),
+            None
+        );
+        let mut other_zone = done.clone();
+        other_zone[ZONE] = 5;
+        assert_eq!(
+            offer.eqmac_move(&eqmac_completion(&other_zone).unwrap()),
+            None
+        );
+        assert!(
+            eqmac_completion(&body).is_err(),
+            "answer 0 is no completion"
+        );
+        assert!(eqmac_completion(&done[..227]).is_err());
+        assert_eq!(completed.eqmac_move(&completed), None, "not an offer");
     }
 }

@@ -73,7 +73,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x2740 => sent("OP_ShopPlayerSell", EQMAC, Read(&[Zone])),
         0x2840 => sent("OP_ZoneEntry", EQMAC, Read(&[Admission])),
         0x2940 => sent("OP_DeleteSpawn", EQMAC, Read(&[Zone])),
-        0x2a41 => sent("OP_RezzRequest", EQMAC, planned(EqMacExchanges)),
+        0x2a41 => sent("OP_RezzRequest", EQMAC, Read(&[Zone])),
         0x2b40 => sent("OP_ClickObject", EQMAC, Read(&[Zone])),
         0x2c40 => sent("OP_GroundSpawn", EQMAC, Read(&[Zone])),
         0x2c41 => sent("OP_MoveItem", EQMAC, Read(&[Zone])),
@@ -232,7 +232,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xea41 => sent("OP_Sacrifice", EQMAC, Partly(&[Zone], SACRIFICE)),
         // TAKP's word that the player may go to their corpse after their
         // yes, which its client moves itself on, as on a translocate's.
-        0xec41 => sent("OP_RezzComplete", TAKP, planned(EqMacExchanges)),
+        0xec41 => sent("OP_RezzComplete", TAKP, Read(&[Zone])),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
         0xf240 => sent("OP_TimeOfDay", EQMAC, Read(&[Zone])),
         0xf241 => sent("OP_DisciplineChange", EQMAC, Read(&[Zone])),

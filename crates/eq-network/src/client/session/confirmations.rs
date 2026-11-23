@@ -134,7 +134,7 @@ impl<T: Clone + PartialEq> Pending<T> {
 
 /// Both open questions and accepted continuations lose their admission
 /// context on any transfer or own death.
-fn interrupted(message: &Message, world: &World) -> bool {
+pub(super) fn interrupted(message: &Message, world: &World) -> bool {
     world.lifecycle.blocks_motion()
         || matches!(
             message,

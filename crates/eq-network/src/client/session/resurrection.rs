@@ -1,26 +1,48 @@
 //! Being resurrected. The session offers one answer to the admitted player
-//! for the server's exact packet. Movement and recovery come from the server.
+//! for the server's exact packet. Movement and recovery come from the server,
+//! but for TAKP's completion of an accepted offer, which moves the player as
+//! the `EQMac` program's own transfer request (6.596).
 use super::{
     actions,
-    confirmations::{closed, Pending, TITANIUM_TIMEOUT},
+    confirmations::{closed, interrupted, Pending, TITANIUM_TIMEOUT},
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
+use crate::client::GapKind;
 use anyhow::Result;
 use eq_network_game::{
     confirmations::{ConsentClosure, ConsentKind, ConsentOffer},
     message::Message,
     request::Request,
-    resurrection::ResurrectionOffer,
+    resurrection::{ResurrectionOffer, EQMAC_COMPLETE_OPCODE},
     world::WorldEvent,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Answers offers to resurrect the player.
-#[derive(Default)]
 pub(super) struct Resurrection {
     pending: Pending<ResurrectionOffer>,
     p99: bool,
+    /// How long a question stays open before the session declines it.
+    timeout: Duration,
+    /// Whether the server may send its completion of an accepted offer for
+    /// the client to follow (`EQMac`).
+    follows_completion: bool,
+    /// The offer this admission accepted, until its completion, a transfer,
+    /// the player's death or its deadline.
+    accepted: Option<ConsentOffer<ResurrectionOffer>>,
+}
+
+impl Default for Resurrection {
+    fn default() -> Self {
+        Self {
+            pending: Pending::default(),
+            p99: false,
+            timeout: TITANIUM_TIMEOUT,
+            follows_completion: false,
+            accepted: None,
+        }
+    }
 }
 
 impl Resurrection {
@@ -30,6 +52,47 @@ impl Resurrection {
             p99: true,
             ..Self::default()
         }
+    }
+
+    /// TAKP and Quarm: `EQMac`'s packets (6.596), a question left open an
+    /// hour, and TAKP's completion followed only for the accepted offer.
+    pub(super) fn eqmac(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            follows_completion: true,
+            ..Self::default()
+        }
+    }
+
+    /// Follows a completion of the offer this admission accepted, and
+    /// records any other as a gap.
+    fn complete(
+        &mut self,
+        completed: &ResurrectionOffer,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let reason = if !self.follows_completion {
+            "a resurrection completion this server is not known to send"
+        } else if let Some(accepted) = self.accepted.take_if(|accepted| {
+            accepted.id.session_id == world.session_id && Instant::now() < accepted.expires_at
+        }) {
+            if let Some(go) = accepted.offer.eqmac_move(completed) {
+                world.happened(Message::ZoneOffer(go));
+                return Ok(());
+            }
+            "a resurrection completion unlike the offer accepted"
+        } else {
+            "a resurrection completion with no offer accepted in this admission"
+        };
+        out.log.gap(
+            EQMAC_COMPLETE_OPCODE,
+            Some("OP_RezzComplete"),
+            completed.wire_identity(),
+            GapKind::Unread {
+                reason: reason.to_owned(),
+            },
+        )
     }
 }
 
@@ -55,14 +118,20 @@ impl Feature for Resurrection {
             return Ok(());
         };
         self.tick(Instant::now(), world, out)?;
-        let Some(ConsentOffer { offer, .. }) = self.pending.take(offer_id, world) else {
+        let Some(question) = self.pending.take(offer_id, world) else {
             return actions::refuse(
                 command,
                 "That resurrection offer is no longer current.",
                 out.log,
             );
         };
-        out.request(&Request::AnswerResurrection { offer, accept })?;
+        out.request(&Request::AnswerResurrection {
+            offer: question.offer.clone(),
+            accept,
+        })?;
+        if self.follows_completion && accept {
+            self.accepted = Some(question);
+        }
         closed(out, offer_id, ConsentClosure::AnswerSent { accept })
     }
 
@@ -73,6 +142,12 @@ impl Feature for Resurrection {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.pending.invalidate(message, world, out)?;
+        if interrupted(message, world) {
+            self.accepted = None;
+        }
+        if let Message::ResurrectionCompleted(completed) = message {
+            return self.complete(completed, world, out);
+        }
         let Message::Resurrection(offer) = message else {
             return Ok(());
         };
@@ -90,7 +165,7 @@ impl Feature for Resurrection {
             offer,
             world,
             ConsentKind::Resurrection,
-            Instant::now() + TITANIUM_TIMEOUT,
+            Instant::now() + self.timeout,
             self.p99.then(|| offer.wire_identity()),
         ) {
             out.log
@@ -100,6 +175,14 @@ impl Feature for Resurrection {
     }
 
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if world.lifecycle.blocks_motion()
+            || self
+                .accepted
+                .as_ref()
+                .is_some_and(|accepted| now >= accepted.expires_at)
+        {
+            self.accepted = None;
+        }
         if let Some(ConsentOffer { id, offer, .. }) = self.pending.elapsed(now, world, out)? {
             out.request(&Request::AnswerResurrection {
                 offer,
@@ -246,5 +329,204 @@ mod tests {
             late.sent,
             [] as [eq_network_game::command::EncodedCommand; 0]
         );
+    }
+
+    /// A Mac offer to Tester at (263, 1748, 27) in zone 4, and its TAKP
+    /// completion.
+    fn eqmac_records() -> (Vec<u8>, Vec<u8>) {
+        use eq_network_game::resurrection::EQMAC_OFFER_OPCODE;
+        let mut body = vec![0; 228];
+        body[4..6].copy_from_slice(&4u16.to_le_bytes());
+        body[8..12].copy_from_slice(&1748.0f32.to_le_bytes());
+        body[12..16].copy_from_slice(&263.0f32.to_le_bytes());
+        body[16..20].copy_from_slice(&27.0f32.to_le_bytes());
+        body[24..30].copy_from_slice(b"Tester");
+        body[92..98].copy_from_slice(b"Helper");
+        body[156..160].copy_from_slice(&392u32.to_le_bytes());
+        body[160..173].copy_from_slice(b"Tester's body");
+        let mut done = body.clone();
+        done[224] = 1;
+        assert!(matches!(
+            eq_network_game::message::eqmac(EQMAC_OFFER_OPCODE, &body).as_slice(),
+            [Message::Resurrection(_)]
+        ));
+        (body, done)
+    }
+
+    fn eqmac_world() -> World {
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.name = "Tester".into();
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        world
+    }
+
+    fn completion(done: &[u8]) -> Message {
+        use eq_network_game::resurrection::EQMAC_COMPLETE_OPCODE;
+        eq_network_game::message::eqmac(EQMAC_COMPLETE_OPCODE, done).remove(0)
+    }
+
+    fn gap_reasons(events: &[ClientEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::Gap(gap) => match &gap.kind {
+                    GapKind::Unread { reason } => Some(reason.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_mac_yes_echoes_the_offer_and_follows_only_its_own_completion() {
+        use eq_network_game::resurrection::{eqmac_offer, EQMAC_ANSWER_OPCODE};
+        let (body, done) = eqmac_records();
+        let mut resurrection = Resurrection::eqmac(Duration::from_secs(3600));
+        let mut world = eqmac_world();
+
+        // A completion before any yes is a gap, and moves nobody.
+        let early = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.observe(&completion(&done), &mut world, out)
+        });
+        early.result.unwrap();
+        assert_eq!(
+            gap_reasons(&early.events),
+            ["a resurrection completion with no offer accepted in this admission"]
+        );
+        assert!(world.take_news().is_empty());
+
+        let offer = Message::Resurrection(eqmac_offer(&body).unwrap());
+        let opened = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.observe(&offer, &mut world, out)
+        });
+        let [ClientEvent::World(WorldEvent::Resurrection(question))] = opened.events.as_slice()
+        else {
+            panic!("expected the addressed offer");
+        };
+        let hour = question
+            .expires_at
+            .saturating_duration_since(Instant::now());
+        assert!(hour > Duration::from_secs(3590) && hour <= Duration::from_secs(3600));
+        let answered = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.handle(&answer(question.id, true), &mut world, out)
+        });
+        answered.result.unwrap();
+        let [sent] = answered.sent.as_slice() else {
+            panic!("expected one answer");
+        };
+        assert_eq!((sent.opcode, &sent.body), (EQMAC_ANSWER_OPCODE, &done));
+
+        // Another place is a gap and spends the acceptance.
+        let mut elsewhere = done.clone();
+        elsewhere[16..20].copy_from_slice(&28.0f32.to_le_bytes());
+        let unlike = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.observe(&completion(&elsewhere), &mut world, out)
+        });
+        assert_eq!(
+            gap_reasons(&unlike.events),
+            ["a resurrection completion unlike the offer accepted"]
+        );
+        assert!(world.take_news().is_empty());
+
+        // Accept the same offer again and follow its completion once.
+        let opened = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.observe(&offer, &mut world, out)
+        });
+        let [ClientEvent::World(WorldEvent::Resurrection(question))] = opened.events.as_slice()
+        else {
+            panic!("expected the offer again");
+        };
+        testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.handle(&answer(question.id, true), &mut world, out)
+        })
+        .result
+        .unwrap();
+        let followed = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.observe(&completion(&done), &mut world, out)
+        });
+        followed.result.unwrap();
+        assert_eq!(gap_reasons(&followed.events), Vec::<String>::new());
+        let news = world.take_news();
+        let [Message::ZoneOffer(go)] = news.as_slice() else {
+            panic!("expected the move to the corpse, got {news:?}");
+        };
+        assert_eq!(
+            (
+                go.zone_id,
+                go.instance_id,
+                go.reason,
+                go.solicited,
+                go.to_bind
+            ),
+            (4, 0, 9, true, false)
+        );
+        assert_eq!(
+            [go.position.x, go.position.y, go.position.z],
+            [263.0, 1748.0, 27.0]
+        );
+        let again = testing::run_on(&super::super::wire::EqMac, |out| {
+            resurrection.observe(&completion(&done), &mut world, out)
+        });
+        assert_eq!(gap_reasons(&again.events).len(), 1, "followed once");
+        assert!(world.take_news().is_empty());
+    }
+
+    #[test]
+    fn a_mac_no_or_a_transfer_leaves_no_completion_to_follow() {
+        use eq_network_game::resurrection::eqmac_offer;
+        let (body, done) = eqmac_records();
+        let offer = Message::Resurrection(eqmac_offer(&body).unwrap());
+        for decline in [true, false] {
+            let mut resurrection = Resurrection::eqmac(Duration::from_secs(3600));
+            let mut world = eqmac_world();
+            let opened = testing::run_on(&super::super::wire::EqMac, |out| {
+                resurrection.observe(&offer, &mut world, out)
+            });
+            let [ClientEvent::World(WorldEvent::Resurrection(question))] = opened.events.as_slice()
+            else {
+                panic!("expected the offer");
+            };
+            testing::run_on(&super::super::wire::EqMac, |out| {
+                resurrection.handle(&answer(question.id, !decline), &mut world, out)
+            })
+            .result
+            .unwrap();
+            if !decline {
+                let zone = Message::ZoneOffer(eq_network_game::zoning::ZoneOffer {
+                    zone_id: 2,
+                    instance_id: 0,
+                    position: eq_network_game::world::Position::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: true,
+                });
+                testing::run_on(&super::super::wire::EqMac, |out| {
+                    resurrection.observe(&zone, &mut world, out)
+                })
+                .result
+                .unwrap();
+            }
+            let late = testing::run_on(&super::super::wire::EqMac, |out| {
+                resurrection.observe(&completion(&done), &mut world, out)
+            });
+            assert_eq!(gap_reasons(&late.events).len(), 1);
+            assert!(world.take_news().is_empty());
+        }
+    }
+
+    #[test]
+    fn titanium_never_follows_a_resurrection_completion() {
+        let (_, done) = eqmac_records();
+        let mut resurrection = Resurrection::default();
+        let mut world = eqmac_world();
+        let outcome = testing::run(|out| resurrection.observe(&completion(&done), &mut world, out));
+        assert_eq!(
+            gap_reasons(&outcome.events),
+            ["a resurrection completion this server is not known to send"]
+        );
+        assert!(world.take_news().is_empty());
     }
 }
