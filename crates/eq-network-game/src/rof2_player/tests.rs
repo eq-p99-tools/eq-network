@@ -279,3 +279,593 @@ fn rof2s_player_refuses_values_it_cannot_trust() {
     long.push(0);
     assert!(own_spawn(&long).is_err());
 }
+
+use super::samples::{pack, record_body, Packed, Record};
+
+/// Every branch's sample, by name.
+fn branches() -> [(&'static str, Record); 6] {
+    [
+        ("creature", Record::creature()),
+        ("player", Record::player()),
+        ("dressed NPC", Record::dressed_npc()),
+        ("treasure", Record::treasure()),
+        ("destructible", Record::destructible()),
+        (
+            "corpse",
+            Record {
+                npc: 3,
+                ..Record::creature()
+            },
+        ),
+    ]
+}
+
+#[test]
+fn every_branch_is_as_long_as_eqemu_sizes_it_and_reads_back() {
+    for (branch, record) in branches() {
+        let body = record_body(&record);
+        assert_eq!(body.len(), record.encoder_length(), "{branch}");
+        let spawn = spawn(&body).unwrap_or_else(|error| panic!("{branch}: {error}"));
+        assert_eq!(spawn.name, record.name, "{branch}");
+        assert_eq!(u32::from(spawn.spawn_id), record.spawn_id, "{branch}");
+        assert_eq!(spawn.level, record.level, "{branch}");
+        assert_eq!(spawn.race, record.race, "{branch}");
+        assert_eq!(spawn.class, Some(record.class), "{branch}");
+        assert_eq!(spawn.hp_percent, Some(record.hp), "{branch}");
+        assert!((spawn.size - record.size).abs() < f32::EPSILON, "{branch}");
+        assert!((spawn.walk_speed - record.speeds[0]).abs() < f32::EPSILON);
+        assert!((spawn.run_speed - record.speeds[1]).abs() < f32::EPSILON);
+        assert_eq!(
+            spawn.posture,
+            Some(PostureState::from(u32::from(record.stand))),
+            "{branch}"
+        );
+        assert_eq!(spawn.name_parts.title, record.title, "{branch}");
+        assert_eq!(spawn.name_parts.last_name, record.last_name, "{branch}");
+        assert_eq!(spawn.name_parts.suffix, record.suffix, "{branch}");
+        assert_eq!(spawn.velocity, [0.0; 3], "{branch}");
+        assert!(spawn.forward.abs() < f32::EPSILON, "{branch}");
+        assert_eq!(
+            spawn.appearance,
+            crate::appearance::Appearance::default(),
+            "{branch}"
+        );
+        assert_eq!(
+            spawn.listing,
+            crate::listing::Listing::default(),
+            "{branch}"
+        );
+        assert_eq!(
+            spawn.position,
+            Position {
+                x: 10.0,
+                y: -20.0,
+                z: 3.0,
+                heading: 256.0
+            },
+            "{branch}"
+        );
+    }
+}
+
+#[test]
+fn each_branch_reads_its_own_fields() {
+    let read = |record: &Record| spawn(&record_body(record)).unwrap();
+    // A creature: female, invisible, an NPC with a body type.
+    let creature = read(&Record::creature());
+    assert_eq!(creature.kind, SpawnKind::Npc);
+    assert_eq!(creature.gender, 1);
+    assert!(creature.invisible);
+    assert_eq!(creature.body_type, Some(21));
+    assert_eq!(creature.pet_owner, None);
+    let player = read(&Record::player());
+    assert_eq!(player.kind, SpawnKind::Player);
+    assert_eq!((player.gender, player.invisible), (0, false));
+    // Corpses and the NPC byte past 3.
+    for (npc, kind) in [
+        (2, SpawnKind::PlayerCorpse),
+        (3, SpawnKind::NpcCorpse),
+        (4, SpawnKind::Unknown(4)),
+        (0xff, SpawnKind::Unknown(0xff)),
+    ] {
+        let record = Record {
+            npc,
+            ..Record::creature()
+        };
+        assert_eq!(read(&record).kind, kind);
+    }
+    // A pet's owner; one past 16 bits is no owner.
+    for (owner, read_as) in [(123, Some(123)), (0x1_0000, None)] {
+        let record = Record {
+            pet_owner: owner,
+            ..Record::creature()
+        };
+        assert_eq!(read(&record).pet_owner, read_as);
+    }
+    // A treasure chest has a body type; a destructible object has none,
+    // and its bitfields are the encoder's constant, so neither its gender
+    // nor any invisibility is read from them.
+    let treasure = read(&Record::treasure());
+    assert_eq!(
+        (treasure.kind, treasure.body_type),
+        (SpawnKind::Npc, Some(21))
+    );
+    let destructible = read(&Record::destructible());
+    assert_eq!(destructible.body_type, None);
+    assert_eq!((destructible.gender, destructible.invisible), (0, false));
+    // A destructible object's suffix bit is always set; a suffix follows
+    // only when the record holds more than its tail.
+    let suffixed = Record {
+        suffix: "of Oak",
+        ..Record::destructible()
+    };
+    assert_eq!(record_body(&suffixed).len(), suffixed.encoder_length());
+    assert_eq!(read(&suffixed).name_parts.suffix, "of Oak");
+    // A destructible object of the treasure class: one block, as a
+    // destructible.
+    let both = Record {
+        other: DESTRUCTIBLE | TREASURE,
+        ..Record::destructible()
+    };
+    assert_eq!(read(&both).body_type, None);
+    // A rewritten body type comes as race 127 and body type 11, and is read
+    // as sent: race 127 is not dressed.
+    let rewritten = Record {
+        race: 127,
+        body_type: 11,
+        ..Record::creature()
+    };
+    let rewritten = read(&rewritten);
+    assert_eq!((rewritten.race, rewritten.body_type), (127, Some(11)));
+    // Every dressed race, and the races either side of each.
+    for race in [0, 1, 12, 128, 130, 330, 522] {
+        let record = Record {
+            race,
+            dressed: true,
+            ..Record::creature()
+        };
+        assert_eq!(read(&record).race, race);
+    }
+    for race in [13, 127, 129, 131, 329, 331, 521, 523] {
+        let record = Record {
+            race,
+            ..Record::creature()
+        };
+        assert_eq!(read(&record).race, race);
+        let dressed = Record {
+            dressed: true,
+            ..record
+        };
+        assert!(spawn(&record_body(&dressed)).is_err(), "race {race}");
+    }
+    // A player of any race is dressed.
+    let player = Record {
+        race: 36,
+        ..Record::player()
+    };
+    assert_eq!(read(&player).race, 36);
+    // A bad walk or run speed costs only that speed.
+    let slow = Record {
+        speeds: [f32::NAN, -1.0],
+        ..Record::creature()
+    };
+    let slow = read(&slow);
+    assert_eq!((slow.walk_speed, slow.run_speed), (0.0, 0.0));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_record_whose_bits_contradict_each_other_is_refused() {
+    for (what, record) in [
+        // One of a destructible's own bits without the rest of 0xe1.
+        (
+            "0x80 alone",
+            Record {
+                other: 0x80,
+                ..Record::destructible()
+            },
+        ),
+        (
+            "0x40 alone",
+            Record {
+                other: 0x40 | 0x20 | 0x01,
+                ..Record::destructible()
+            },
+        ),
+        (
+            "0xe1 without the buyer bit",
+            Record {
+                other: 0xe0,
+                ..Record::destructible()
+            },
+        ),
+        // A destructible's bitfields not the encoder's constant.
+        (
+            "destructible bitfields",
+            Record {
+                bitfields: 0,
+                ..Record::destructible()
+            },
+        ),
+        // A property count the branch doesn't take.
+        (
+            "destructible with a body type",
+            Record {
+                properties: 1,
+                ..Record::destructible()
+            },
+        ),
+        (
+            "creature without one",
+            Record {
+                properties: 0,
+                ..Record::creature()
+            },
+        ),
+        (
+            "two properties",
+            Record {
+                properties: 2,
+                ..Record::creature()
+            },
+        ),
+        // Zero and past 16 bits.
+        (
+            "spawn id 0",
+            Record {
+                spawn_id: 0,
+                ..Record::creature()
+            },
+        ),
+        (
+            "spawn id past 16 bits",
+            Record {
+                spawn_id: 0x1_0000,
+                ..Record::creature()
+            },
+        ),
+        (
+            "negative size",
+            Record {
+                size: -1.0,
+                ..Record::creature()
+            },
+        ),
+        (
+            "size not finite",
+            Record {
+                size: f32::INFINITY,
+                ..Record::creature()
+            },
+        ),
+        // A flagged title or suffix that is not written.
+        (
+            "flagged title missing",
+            Record {
+                other: TITLE,
+                ..Record::creature()
+            },
+        ),
+        (
+            "flagged suffix missing",
+            Record {
+                other: SUFFIX,
+                ..Record::creature()
+            },
+        ),
+        // A title written that no bit flags.
+        (
+            "unflagged title",
+            Record {
+                title: "Sir",
+                ..Record::creature()
+            },
+        ),
+    ] {
+        assert!(spawn(&record_body(&record)).is_err(), "{what}");
+    }
+}
+
+#[test]
+fn every_branch_refuses_a_cut_at_every_offset_and_a_trailing_byte() {
+    for (branch, record) in branches() {
+        let body = record_body(&record);
+        for end in 0..body.len() {
+            assert!(spawn(&body[..end]).is_err(), "{branch} cut at {end}");
+        }
+        let mut long = body.clone();
+        long.push(0);
+        assert!(spawn(&long).is_err(), "{branch}");
+    }
+}
+
+#[test]
+fn every_string_must_end_in_its_field() {
+    // A name of 63 letters fits its 64 bytes; 64 do not.
+    for (length, fits) in [(63, true), (64, false)] {
+        let name: &'static str = "a".repeat(length).leak();
+        let body = record_body(&Record {
+            name,
+            ..Record::creature()
+        });
+        assert_eq!(spawn(&body).is_ok(), fits, "name of {length}");
+    }
+    // The last name, title and suffix fit 31 letters and their NUL.
+    for (length, fits) in [(31, true), (32, false)] {
+        let part: &'static str = "b".repeat(length).leak();
+        for record in [
+            Record {
+                last_name: part,
+                ..Record::player()
+            },
+            Record {
+                title: part,
+                ..Record::player()
+            },
+            Record {
+                suffix: part,
+                ..Record::player()
+            },
+        ] {
+            assert_eq!(
+                spawn(&record_body(&record)).is_ok(),
+                fits,
+                "part of {length}"
+            );
+        }
+    }
+    // A treasure chest's three strings end in their 64 bytes.
+    for (length, fits) in [(63, true), (64, false)] {
+        let model: &'static str = "c".repeat(length).leak();
+        let record = Record {
+            object: Some([model, "", ""]),
+            ..Record::treasure()
+        };
+        assert_eq!(
+            spawn(&record_body(&record)).is_ok(),
+            fits,
+            "model of {length}"
+        );
+    }
+    // The GUID the encoder writes is 16 characters; any other length is
+    // refused.
+    let body = record_body(&Record::creature());
+    let at = body
+        .windows(17)
+        .position(|window| window == b"0000000000000000\0")
+        .unwrap();
+    let mut short = body.clone();
+    short.remove(at);
+    assert!(spawn(&short).is_err());
+    let mut long = body[..at].to_vec();
+    long.push(b'0');
+    long.extend_from_slice(&body[at..]);
+    assert!(spawn(&long).is_err());
+    // A name the error never quotes.
+    let unprintable = Record {
+        name: "Bad\u{1}Name",
+        ..Record::creature()
+    };
+    let error = spawn(&record_body(&unprintable)).unwrap_err().to_string();
+    assert!(!error.contains("Bad"), "{error}");
+}
+
+#[test]
+fn our_position_writer_puts_each_field_in_its_own_bits() {
+    // Our table's bit positions, as words: each field alone.
+    let alone = |packed: Packed| pack(&packed);
+    assert_eq!(
+        alone(Packed {
+            angle: 1,
+            ..Packed::default()
+        }),
+        [1, 0, 0, 0, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            y: 1,
+            ..Packed::default()
+        }),
+        [1 << 12, 0, 0, 0, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            delta_z: 1,
+            ..Packed::default()
+        }),
+        [0, 1, 0, 0, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            delta_x: 1,
+            ..Packed::default()
+        }),
+        [0, 1 << 13, 0, 0, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            x: 1,
+            ..Packed::default()
+        }),
+        [0, 0, 1, 0, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            heading: 1,
+            ..Packed::default()
+        }),
+        [0, 0, 1 << 19, 0, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            delta_heading: 1,
+            ..Packed::default()
+        }),
+        [0, 0, 0, 1, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            z: 1,
+            ..Packed::default()
+        }),
+        [0, 0, 0, 1 << 10, 0]
+    );
+    assert_eq!(
+        alone(Packed {
+            animation: 1,
+            ..Packed::default()
+        }),
+        [0, 0, 0, 0, 1]
+    );
+    assert_eq!(
+        alone(Packed {
+            delta_y: 1,
+            ..Packed::default()
+        }),
+        [0, 0, 0, 0, 1 << 10]
+    );
+}
+
+#[test]
+fn the_packed_position_reads_each_field_from_its_own_bits() {
+    // Each coordinate alone, so a swapped pair fails.
+    let read = |packed: Packed| packed_position(pack(&packed));
+    let at = |x: f32, y: f32, z: f32, heading: f32| Position { x, y, z, heading };
+    assert_eq!(
+        read(Packed {
+            x: 8,
+            ..Packed::default()
+        }),
+        at(1.0, 0.0, 0.0, 0.0)
+    );
+    assert_eq!(
+        read(Packed {
+            y: 8,
+            ..Packed::default()
+        }),
+        at(0.0, 1.0, 0.0, 0.0)
+    );
+    assert_eq!(
+        read(Packed {
+            z: 8,
+            ..Packed::default()
+        }),
+        at(0.0, 0.0, 1.0, 0.0)
+    );
+    assert_eq!(
+        read(Packed {
+            heading: 4,
+            ..Packed::default()
+        }),
+        at(0.0, 0.0, 0.0, 1.0)
+    );
+    // Negatives, and both 19-bit extremes.
+    let low = -(1 << 18);
+    let high = (1 << 18) - 1;
+    assert_eq!(
+        read(Packed {
+            x: -1,
+            y: -12,
+            z: low,
+            ..Packed::default()
+        }),
+        at(-0.125, -1.5, -32768.0, 0.0)
+    );
+    assert_eq!(
+        read(Packed {
+            x: high,
+            y: low,
+            z: high,
+            ..Packed::default()
+        }),
+        at(32767.875, -32768.0, 32767.875, 0.0)
+    );
+    // The heading's top: 2047 quarters, the last before a full turn.
+    assert_eq!(
+        read(Packed {
+            heading: 2047,
+            ..Packed::default()
+        })
+        .heading,
+        511.75
+    );
+    // The fields not read change nothing.
+    let unread = Packed {
+        angle: 0xfff,
+        delta_x: -1,
+        delta_y: -1,
+        delta_z: -1,
+        delta_heading: -1,
+        animation: -1,
+        ..Packed::default()
+    };
+    assert_eq!(read(unread), at(0.0, 0.0, 0.0, 0.0));
+    // Padding bits change nothing either.
+    let mut padded = pack(&Packed {
+        x: 8,
+        ..Packed::default()
+    });
+    padded[0] |= 1 << 31;
+    padded[1] |= 0x3f << 26;
+    padded[2] |= 1 << 31;
+    padded[3] |= 0x7 << 29;
+    padded[4] |= 0x1ff << 23;
+    assert_eq!(packed_position(padded), at(1.0, 0.0, 0.0, 0.0));
+}
+
+#[test]
+fn the_own_spawn_is_a_players_record_walked_as_every_record_is() {
+    // A player's record from the other writer is the own spawn too.
+    let other = record_body(&Record::player());
+    let own = own_spawn(&other).unwrap();
+    assert_eq!((own.id, own.title.as_str()), (77, "Lady"));
+    // What is not a player's is refused.
+    for record in [
+        Record::creature(),
+        Record::treasure(),
+        Record::destructible(),
+        Record {
+            npc: 2,
+            ..Record::player()
+        },
+        Record {
+            other: TREASURE,
+            object: Some(["", "", ""]),
+            title: "",
+            suffix: "",
+            ..Record::player()
+        },
+    ] {
+        let body = record_body(&record);
+        assert!(spawn(&body).is_ok());
+        assert!(own_spawn(&body).is_err());
+    }
+    // The own spawn's id, as the entry keeps it.
+    assert_eq!(spawn_id(&spawn_body(&Sample::default())), Some(4321));
+    assert_eq!(spawn_id(&[0; 3]), None);
+}
+
+#[test]
+fn rof2s_zone_decoder_makes_each_record_one_spawn_and_a_refused_one_unreadable() {
+    use crate::message::{rof2, Message, Part};
+    use crate::world::WorldEvent;
+    let body = record_body(&Record::creature());
+    let messages = rof2(SPAWN_OPCODE, &body);
+    let [Message::Event(WorldEvent::Spawns(spawns))] = messages.as_slice() else {
+        panic!("{messages:?}");
+    };
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0], spawn(&body).unwrap());
+    // A refused record is unreadable in fixed words, naming no one.
+    let messages = rof2(SPAWN_OPCODE, &body[..body.len() - 1]);
+    let [Message::Unreadable {
+        part: Part::World,
+        error,
+    }] = messages.as_slice()
+    else {
+        panic!("{messages:?}");
+    };
+    assert!(!error.contains("a_rat"), "{error}");
+    // Nothing else is read yet.
+    assert!(rof2(PROFILE_OPCODE, &profile_body(&Sample::default()).bytes).is_empty());
+}

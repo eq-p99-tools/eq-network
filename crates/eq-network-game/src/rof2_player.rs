@@ -1,25 +1,39 @@
-//! `RoF2`'s player profile and the player's own spawn, as stock `EQEmu`
-//! writes them, inferred for `RoF2` (6.502).
+//! `RoF2`'s player profile and its spawn records, as stock `EQEmu` writes
+//! them, inferred for `RoF2` (6.502, 6.510).
 //!
 //! Neither is a struct. Each one is a stream with counted arrays and
 //! terminated strings, written field by field (`common/patches/rof2.cpp`:
-//! `ENCODE(OP_PlayerProfile)`, and `ENCODE(OP_ZoneEntry)`, which forwards to
-//! `ENCODE(OP_ZoneSpawns)`). The readers walk the whole of each stream in the
-//! encoder's order. Every count must be the constant the encoder writes, every
-//! string must end inside its field, and the walk must end exactly at the
-//! body's end. No count sizes an allocation.
+//! `ENCODE(OP_PlayerProfile)`, and `ENCODE(OP_ZoneSpawns)`, to which
+//! `ENCODE(OP_ZoneEntry)` and `ENCODE(OP_NewSpawn)` forward). The readers
+//! walk the whole of each stream in the encoder's order. Every count must be
+//! the constant the encoder writes, every string must end inside its field,
+//! and the walk must end exactly at the body's end. No count sizes an
+//! allocation.
 //!
-//! What the `RoF2` program reads from each field is not read yet (6.502).
-//! That includes whether it checks the profile's checksum, gems 9 to 12, the
-//! appearance and `/who` fields, and the spawn's packed position.
-use crate::world::{profile_heading, BaseAttributes, PlayerState, Position, PostureState};
+//! Stock `EQEmu` sends every spawn a `RoF2` client sees as one record of its
+//! own under one number, `OP_ZoneEntry`: the player's own spawn first, then
+//! the zone's spawns (`EntityList::SendZoneSpawnsBulk` in `zone/entity.cpp`
+//! fills a bulk packet, whose encoder writes one record per spawn) and each
+//! later one. One walker reads them all
+//! ([`spawn`](crate::rof2_player::spawn)); the own spawn is a player's
+//! record ([`player`](crate::rof2_player::player)).
+//!
+//! What the `RoF2` program reads from each field is not read yet (6.502,
+//! 6.510). That includes whether it checks the profile's checksum, gems 9 to
+//! 12, the appearance and `/who` fields, a spawn's motion deltas, and what
+//! it does with a record the encoder rewrote for a body type of 66 and up.
+use crate::world::{
+    profile_heading, BaseAttributes, PlayerState, Position, PostureState, SpawnKind, SpawnState,
+};
 use anyhow::{ensure, Context, Result};
 
 /// `OP_PlayerProfile` (`utils/patches/patch_RoF2.conf`; inferred, 6.502).
 pub const PROFILE_OPCODE: u16 = 0x6506;
-/// `OP_ZoneEntry` from the zone: the player's own spawn
-/// (`utils/patches/patch_RoF2.conf`; inferred, 6.502).
-pub const OWN_SPAWN_OPCODE: u16 = 0x5089;
+/// `OP_ZoneEntry` from the zone: every spawn record, the player's own
+/// first (`utils/patches/patch_RoF2.conf`; inferred, 6.502 and 6.510).
+pub const SPAWN_OPCODE: u16 = 0x5089;
+/// The player's own spawn, the first record under [`SPAWN_OPCODE`].
+pub const OWN_SPAWN_OPCODE: u16 = SPAWN_OPCODE;
 
 /// The longest string the profile holds, with its NUL: names of 64 bytes
 /// (`rof2_structs.h`).
@@ -365,6 +379,333 @@ fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
+/// The "other data" bits after the spawn's bitfields
+/// (`ENCODE(OP_ZoneSpawns)`): a title and a suffix follow the position when
+/// set, and a buyer sets the lowest.
+const TITLE: u8 = 0x10;
+const SUFFIX: u8 = 0x20;
+/// A treasure chest's bit: the encoder sets it for a spawn of the `LDoN`
+/// treasure class.
+const TREASURE: u8 = 0x04;
+/// What a destructible object sets, all of it: 0xe1. Of its bits, 0x80
+/// and 0x40 come from nothing else, so either one names a destructible,
+/// and a record with one but not the rest of 0xe1 is refused.
+const DESTRUCTIBLE: u8 = 0xe1;
+const DESTRUCTIBLE_ONLY: u8 = 0x80 | 0x40;
+/// The word the encoder writes over a destructible object's bitfields.
+const DESTRUCTIBLE_BITFIELDS: u32 = 0x1d60_0000;
+/// The races whose records carry nine tints and nine textures even for a
+/// non-player: every race to the gnome's (12), the Iksar, the Vah Shir,
+/// the Froglok and the Drakkin (`common/races.h`). Other non-players carry
+/// three textures.
+const DRESSED_RACES: [u32; 4] = [128, 130, 330, 522];
+/// The real estate GUID the encoder writes in every record: 16 characters
+/// and a NUL. The walker takes any 16 and no other length.
+const GUID: &str = "0000000000000000";
+/// The record's tail after the title and suffix: two words, the mercenary
+/// byte, the GUID, two real estate ids, and 29 bytes.
+const TAIL: usize = 8 + 1 + GUID.len() + 1 + 8 + 29;
+
+/// What a spawn record is, by the branches the encoder takes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Object {
+    /// A player, creature or corpse.
+    Mob,
+    /// An `LDoN` treasure chest: three strings and a fixed block after the
+    /// emitter words.
+    Treasure,
+    /// A destructible object: the same strings and block, its bitfields
+    /// written over, and no body type.
+    Destructible,
+}
+
+/// Everything read from one spawn record.
+#[derive(Debug, PartialEq)]
+struct Record {
+    name: String,
+    id: u32,
+    level: u8,
+    npc: u8,
+    object: Object,
+    /// Gender (bits 0 and 1) and invisibility (bits 10 to 21), from the
+    /// bitfields; zero for a destructible object, whose bitfields are the
+    /// encoder's constant.
+    gender: u8,
+    invisibility: u16,
+    body_type: Option<u32>,
+    hp: u8,
+    size: f32,
+    walk_speed: f32,
+    run_speed: f32,
+    race: u32,
+    class: u8,
+    stand: u8,
+    last_name: String,
+    pet_owner: u32,
+    /// The packed position's five words.
+    position: [u32; 5],
+    title: String,
+    suffix: String,
+}
+
+/// Walks one spawn record the way `ENCODE(OP_ZoneSpawns)` writes it
+/// (`common/patches/rof2.cpp`), choosing each branch from the record's own
+/// bytes as the encoder chose it from the spawn:
+///
+/// - the "other data" byte names a treasure chest (0x04, the encoder's
+///   `class_ == Class::LDoNTreasure`) and a destructible object (0xe1, its
+///   `DestructibleObject`). Either one is followed by three strings and a
+///   53-byte block. Both set is a destructible object of the treasure
+///   class, which the encoder writes once, as a destructible.
+/// - The property count is 0 for a destructible object and 1, followed by
+///   the body type, for everything else; any other count is refused.
+/// - Nine tints and nine textures (216 bytes) follow for a player (NPC
+///   byte 0) and for the dressed races; three textures (60 bytes) for
+///   every other non-player. The race is the one sent: the encoder's
+///   rewrite of body types 66 and up to race 127 comes before its test, and
+///   is read as sent.
+/// - A title follows the position when its bit is set. A suffix follows
+///   when its bit is set, except on a destructible object, whose 0xe1 sets
+///   the suffix bit whether it has one or not: there a suffix follows when
+///   more bytes are left than the record's fixed tail (inferred, 6.510).
+///
+/// # Errors
+/// Refuses a record whose bits contradict each other (one of 0x80 and
+/// 0x40 without the rest of 0xe1, or a destructible object's bitfields not
+/// the encoder's constant), a property count the branch doesn't take, an
+/// unterminated string, an empty flagged title or suffix, a GUID that
+/// isn't 16 characters, a cut record and a trailing byte.
+fn record(body: &[u8]) -> Result<Record> {
+    let mut read = Cursor::new(body, "spawn");
+    let name = text(read.string(SPAWN_NAME)?)?;
+    let id = read.word()?;
+    let level = read.byte()?;
+    // The eye height (a destructible object's melee range).
+    read.skip(4)?;
+    let npc = read.byte()?;
+    let bitfields = read.word()?;
+    let other = read.byte()?;
+    let object = if other & DESTRUCTIBLE_ONLY != 0 {
+        ensure!(
+            other & DESTRUCTIBLE == DESTRUCTIBLE && bitfields == DESTRUCTIBLE_BITFIELDS,
+            "contradictory RoF2 spawn bits"
+        );
+        Object::Destructible
+    } else if other & TREASURE != 0 {
+        Object::Treasure
+    } else {
+        Object::Mob
+    };
+    // The emitter radius and its id.
+    read.skip(8)?;
+    if object != Object::Mob {
+        // The model, two names, the appearance, the animation, ten sound
+        // ids, the collision byte and the object type.
+        for _ in 0..3 {
+            read.string(SPAWN_NAME)?;
+        }
+        read.skip(4 + 4 + 10 * 4 + 1 + 4)?;
+    }
+    let properties = read.byte()?;
+    let body_type = match (object, properties) {
+        (Object::Destructible, 0) => None,
+        (Object::Mob | Object::Treasure, 1) => Some(read.word()?),
+        _ => anyhow::bail!("invalid RoF2 spawn property count"),
+    };
+    let hp = read.byte()?;
+    // Colours and features, the Drakkin words, the illusion and head bytes.
+    read.skip(6 + 12 + 4)?;
+    let size = read.float()?;
+    read.skip(1)?;
+    let walk_speed = read.float()?;
+    let run_speed = read.float()?;
+    let race = read.word()?;
+    // Holding, deity, guild and rank.
+    read.skip(1 + 4 + 8)?;
+    let class = read.byte()?;
+    // PvP.
+    read.skip(1)?;
+    let stand = read.byte()?;
+    // Light and fly mode.
+    read.skip(2)?;
+    let last_name = text(read.string(SPAWN_PART)?)?;
+    // AA title, guild shown, temporary pet.
+    read.skip(4 + 1 + 1)?;
+    let pet_owner = read.word()?;
+    // Find bits, player state, three tint indexes and two weapon words.
+    read.skip(1 + 4 + 12 + 8)?;
+    let dressed = npc == 0 || race <= 12 || DRESSED_RACES.contains(&race);
+    read.skip(if dressed { 9 * 4 + 9 * 20 } else { 3 * 20 })?;
+    let mut position = [0; 5];
+    for word in &mut position {
+        *word = read.word()?;
+    }
+    let title = flagged(&mut read, other & TITLE != 0)?;
+    let suffix = if object == Object::Destructible {
+        body.len() - read.at > TAIL
+    } else {
+        other & SUFFIX != 0
+    };
+    let suffix = flagged(&mut read, suffix)?;
+    read.skip(8 + 1)?;
+    ensure!(
+        read.string(GUID.len() + 1)?.len() == GUID.len(),
+        "invalid RoF2 spawn tail"
+    );
+    read.skip(8 + 29)?;
+    read.end()?;
+    let (gender, invisibility) = if object == Object::Destructible {
+        (0, 0)
+    } else {
+        (
+            u8::try_from(bitfields & 0x3).expect("two bits"),
+            u16::try_from((bitfields >> 10) & 0xfff).expect("twelve bits"),
+        )
+    };
+    Ok(Record {
+        name,
+        id,
+        level,
+        npc,
+        object,
+        gender,
+        invisibility,
+        body_type,
+        hp,
+        size,
+        walk_speed,
+        run_speed,
+        race,
+        class,
+        stand,
+        last_name,
+        pet_owner,
+        position,
+        title,
+        suffix,
+    })
+}
+
+/// A title or suffix the record flags: present, ended in its field and
+/// not empty.
+fn flagged(read: &mut Cursor<'_>, present: bool) -> Result<String> {
+    if !present {
+        return Ok(String::new());
+    }
+    let part = read.string(SPAWN_PART)?;
+    ensure!(!part.is_empty(), "empty flagged RoF2 name part");
+    text(part)
+}
+
+/// The packed position, from the active `Spawn_Struct_Position` in
+/// `common/patches/rof2_structs.h` (the second definition; the first is
+/// commented out). Its five words, lowest bit first:
+///
+/// - word 0: the angle (bits 0 to 11), y (12 to 30), padding (31);
+/// - word 1: delta z (0 to 12), delta x (13 to 25), padding (26 to 31);
+/// - word 2: x (0 to 18), the heading (19 to 30), padding (31);
+/// - word 3: delta heading (0 to 9), z (10 to 28), padding (29 to 31);
+/// - word 4: the animation (0 to 9), delta y (10 to 22), padding (23 to 31).
+///
+/// x, y and z are signed 19-bit values in eighths of a unit, and the
+/// heading 12 bits in quarters of the 512-unit turn: `Mob::FillSpawnStruct`
+/// (`zone/mob.cpp`) fills them with `FloatToEQ19` and `FloatToEQ12`, whose
+/// inverses are `EQ19toFloat` and `EQ12toFloat` (`common/misc_functions.cpp`).
+/// From integers no value can be non-finite. The angle, the deltas and the
+/// animation are not read: stock `EQEmu` sends a spawn's deltas and
+/// animation as zero (`EntityList::SendZoneSpawnsBulk` clears the record
+/// and `FillSpawnStruct` sets neither), and how the `RoF2` program takes
+/// them is not read (6.510).
+fn packed_position(words: [u32; 5]) -> Position {
+    Position {
+        x: crate::world::signed_position(words[2]),
+        y: crate::world::signed_position(words[0] >> 12),
+        z: crate::world::signed_position(words[3] >> 10),
+        heading: f32::from(u16::try_from((words[2] >> 19) & 0xfff).expect("twelve bits")) / 4.0,
+    }
+}
+
+/// Another spawn from its record: a player, a creature, a corpse, a
+/// treasure chest or a destructible object, each walked whole.
+///
+/// The kind is the NPC byte: 0 a player, 1 an NPC, 2 a player's corpse and
+/// 3 an NPC's (`Spawn_Struct`'s note in `common/eq_packet_structs.h`;
+/// inferred for `RoF2`, 6.510), any other `Unknown` and walked as the
+/// encoder writes a non-player. A nonzero invisibility value is taken as
+/// invisible, and a pet owner of 0 as no owner (both inferred, 6.510).
+/// Appearance and `/who` listing stay at their defaults, the velocity and
+/// forward input at zero: none of their fields is read (6.510).
+///
+/// # Errors
+/// Refuses a record whose bits contradict each other (one of 0x80 and
+/// 0x40 without the rest of 0xe1, or a destructible object's bitfields not
+/// the encoder's constant), a property count the branch doesn't take, an
+/// unterminated string, an empty flagged title or suffix, a GUID that
+/// isn't 16 characters, a cut record, a trailing byte, a spawn id that is
+/// zero or past 16 bits, and a size that is negative or not finite. A walk
+/// or run speed that is negative or not finite costs the spawn only that
+/// speed, as a Titanium record's does.
+pub fn spawn(body: &[u8]) -> Result<SpawnState> {
+    let record = record(body)?;
+    let spawn_id = u16::try_from(record.id)
+        .ok()
+        .filter(|id| *id != 0)
+        .context("invalid RoF2 spawn ID")?;
+    ensure!(
+        record.size.is_finite() && record.size >= 0.0,
+        "invalid RoF2 spawn size"
+    );
+    let speed = |speed: f32| {
+        if speed.is_finite() && speed >= 0.0 {
+            speed
+        } else {
+            0.0
+        }
+    };
+    Ok(SpawnState {
+        class: Some(record.class),
+        spawn_id,
+        name: record.name,
+        kind: match record.npc {
+            0 => SpawnKind::Player,
+            1 => SpawnKind::Npc,
+            2 => SpawnKind::PlayerCorpse,
+            3 => SpawnKind::NpcCorpse,
+            other => SpawnKind::Unknown(other),
+        },
+        race: record.race,
+        gender: u32::from(record.gender),
+        position: packed_position(record.position),
+        velocity: [0.0; 3],
+        forward: 0.0,
+        walk_speed: speed(record.walk_speed),
+        run_speed: speed(record.run_speed),
+        size: record.size,
+        invisible: record.invisibility != 0,
+        appearance: crate::appearance::Appearance::default(),
+        level: record.level,
+        listing: crate::listing::Listing::default(),
+        pet_owner: u16::try_from(record.pet_owner)
+            .ok()
+            .filter(|owner| *owner != 0),
+        hp_percent: (record.hp <= 100).then_some(record.hp),
+        posture: Some(PostureState::from(u32::from(record.stand))),
+        name_parts: crate::names::NameParts {
+            title: record.title,
+            last_name: record.last_name,
+            suffix: record.suffix,
+        },
+        body_type: record.body_type,
+    })
+}
+
+/// The spawn id a record names, when it can be read: what the entry keeps
+/// to tell the player's own spawn from the others.
+#[must_use]
+pub fn spawn_id(body: &[u8]) -> Option<u16> {
+    spawn(body).ok().map(|spawn| spawn.spawn_id)
+}
+
 /// What the player takes from the own spawn.
 #[derive(Debug, PartialEq)]
 struct Spawn {
@@ -379,83 +720,28 @@ struct Spawn {
     suffix: String,
 }
 
-/// The "other data" bits after the spawn's bitfields: a title and a suffix
-/// follow the position when set (`ENCODE(OP_ZoneSpawns)`).
-const TITLE: u8 = 0x10;
-const SUFFIX: u8 = 0x20;
-/// A treasure chest's bit, and the two bits only a destructible object sets
-/// (its 0xe1 also sets the suffix and buyer bits).
-const NOT_A_PLAYER: u8 = 0x04 | 0x80 | 0x40;
-
-/// Walks the own spawn the way `ENCODE(OP_ZoneSpawns)` writes a player's.
+/// The own spawn: a player's record, walked as every record is
+/// ([`record`]).
 ///
 /// # Errors
-/// Refuses a record that isn't a player's: an NPC, a treasure chest or a
-/// destructible object, or one without the single body-type property. Also
-/// refuses an unterminated string, a flagged title or suffix that is
-/// missing or empty, a cut body, and a trailing byte.
+/// Refuses what [`record`] refuses, and a record that isn't a player's: an
+/// NPC, a corpse, a treasure chest or a destructible object.
 fn own_spawn(body: &[u8]) -> Result<Spawn> {
-    let mut read = Cursor::new(body, "own spawn");
-    read.string(SPAWN_NAME)?;
-    let spawn_id = read.word()?;
-    // The level and the eye height.
-    read.skip(1 + 4)?;
-    ensure!(read.byte()? == 0, "the RoF2 own spawn is not a player");
-    // The bitfields.
-    read.skip(4)?;
-    let other = read.byte()?;
+    let record = record(body)?;
     ensure!(
-        other & NOT_A_PLAYER == 0,
+        record.npc == 0 && record.object == Object::Mob,
         "the RoF2 own spawn is not a player"
     );
-    // The emitter radius and its id.
-    read.skip(8)?;
-    ensure!(read.byte()? == 1, "invalid RoF2 own spawn property count");
-    // The body type.
-    read.skip(4)?;
-    let hp = read.byte()?;
-    // Colours and features, the Drakkin words, the illusion and head bytes.
-    read.skip(6 + 12 + 4)?;
-    let size = read.float()?;
-    read.skip(1)?;
-    let walk_speed = read.float()?;
-    let run_speed = read.float()?;
-    // Race, holding, deity, guild and rank, class and PvP.
-    read.skip(4 + 1 + 4 + 8 + 1 + 1)?;
-    let stand = read.byte()?;
-    // Light and fly mode.
-    read.skip(2)?;
-    let last_name = text(read.string(SPAWN_PART)?)?;
-    // AA title, guild shown, temporary pet, pet owner, find bits, player
-    // state, three tint indexes and two weapon words; then a player's nine
-    // tints and nine textures, and the packed position.
-    read.skip(4 + 1 + 1 + 4 + 1 + 4 + 12 + 8 + 9 * 4 + 9 * 20 + 20)?;
-    let mut part = |flag: u8| -> Result<String> {
-        if other & flag == 0 {
-            return Ok(String::new());
-        }
-        let part = read.string(SPAWN_PART)?;
-        ensure!(!part.is_empty(), "empty flagged RoF2 name part");
-        text(part)
-    };
-    let title = part(TITLE)?;
-    let suffix = part(SUFFIX)?;
-    // Two unknown words, the mercenary byte, the real estate GUID string,
-    // two real estate ids, and 29 bytes.
-    read.skip(8 + 1)?;
-    read.string(SPAWN_PART)?;
-    read.skip(8 + 29)?;
-    read.end()?;
     Ok(Spawn {
-        id: spawn_id,
-        size,
-        walk_speed,
-        run_speed,
-        hp,
-        stand,
-        title,
-        last_name,
-        suffix,
+        id: record.id,
+        size: record.size,
+        walk_speed: record.walk_speed,
+        run_speed: record.run_speed,
+        hp: record.hp,
+        stand: record.stand,
+        title: record.title,
+        last_name: record.last_name,
+        suffix: record.suffix,
     })
 }
 

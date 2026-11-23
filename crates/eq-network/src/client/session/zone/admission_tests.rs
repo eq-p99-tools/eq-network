@@ -768,14 +768,16 @@ fn every_server_type_sends_the_characters_kept_filters_at_zone_in() {
 
 impl Script {
     /// Stock `EQEmu`'s zone entry for a `RoF2` client: with `player`, the
-    /// profile and own spawn; its description, unasked, then its objects
-    /// (the spawn request's answer), then a message numbered as a Titanium
-    /// spawn, which `RoF2` must not read. It stays idle for `idle` before
-    /// it stops.
+    /// profile and own spawn; a creature's record, as the zone's spawns
+    /// follow the own spawn; its description, unasked, then its objects
+    /// (the spawn request's answer). After the entry: another player's
+    /// record, a record with the player's own id, a record cut short, and
+    /// a message numbered as a Titanium spawn, which `RoF2` must not read.
+    /// It stays idle for `idle` before it stops.
     fn rof2(player: bool, stop: &CancellationToken, idle: Duration) -> Self {
         use eq_network_game::rof2_player::{
-            samples::{profile_body, spawn_body, Sample},
-            OWN_SPAWN_OPCODE, PROFILE_OPCODE,
+            samples::{profile_body, record_body, spawn_body, Record, Sample},
+            OWN_SPAWN_OPCODE, PROFILE_OPCODE, SPAWN_OPCODE,
         };
         let mut description = vec![0; 948];
         description[64..71].copy_from_slice(b"example");
@@ -793,8 +795,19 @@ impl Script {
             script.packet(PROFILE_OPCODE, profile_body(&sample).bytes);
             script.packet(OWN_SPAWN_OPCODE, spawn_body(&sample));
         }
+        script.packet(SPAWN_OPCODE, record_body(&Record::creature()));
         script.packet(0x1795, description);
         script.packet(0x5ae2, Vec::new());
+        script.packet(SPAWN_OPCODE, record_body(&Record::player()));
+        script.packet(
+            SPAWN_OPCODE,
+            record_body(&Record {
+                spawn_id: 4321,
+                ..Record::creature()
+            }),
+        );
+        let cut = record_body(&Record::creature());
+        script.packet(SPAWN_OPCODE, cut[..cut.len() - 1].to_vec());
         script.packet(0x7213, vec![0; 385]);
         script
     }
@@ -896,6 +909,41 @@ fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_gene
             "{opcode}: {diagnostics:?}"
         );
     }
+    // The zone's spawns are read (6.510), and the other player's after the
+    // entry reaches the host. The creature that came during the entry is
+    // read too, but nothing stages it for the admission: `EqEmuRof2` offers
+    // no feature yet, the spawn table among them. The player's own spawn is
+    // never another spawn, at the entry or when a later record carries its
+    // id.
+    let spawns: Vec<Vec<u16>> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Spawns(spawns) => Some(spawns.iter().map(|spawn| spawn.spawn_id).collect()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(spawns, [vec![77]]);
+    let length = eq_network_game::rof2_player::samples::record_body(
+        &eq_network_game::rof2_player::samples::Record::creature(),
+    )
+    .len();
+    assert!(
+        diagnostics.iter().any(|line| line
+            == &format!(
+                "RoF2 zone sent the player's own spawn again ({length} bytes), left unread"
+            )),
+        "{diagnostics:?}"
+    );
+    // A record cut short is told by number and length, in fixed words.
+    let length = length - 1;
+    assert!(
+        diagnostics.iter().any(|line| line
+            == &format!(
+                "World update rejected: truncated RoF2 spawn (opcode=0x5089, payload_len={length})"
+            )),
+        "{diagnostics:?}"
+    );
+    assert!(!diagnostics.iter().any(|line| line.contains("a_rat")));
 }
 
 #[test]

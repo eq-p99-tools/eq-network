@@ -12,7 +12,7 @@
 //! `Client::Handle_Connect_OP_ClientReady`; opcodes from
 //! `utils/patches/patch_RoF2.conf`).
 //!
-//! The first profile and own spawn before the description are kept, and
+//! The first profile and spawn record before the description are kept, and
 //! the entry completes with the player read from them as stock `EQEmu`
 //! writes them ([`eq_network_game::rof2_player`], 6.502); without either,
 //! or with one refused, it completes with no player. Nothing is sent that
@@ -20,6 +20,12 @@
 //! entry, and which message prompts its spawn request and its ready (stock
 //! `EQEmu` sending the description unasked, and its own ready first, is the
 //! server's side only), are not read yet (6.501).
+//!
+//! The first spawn record is the player's own, and the entry keeps it to
+//! itself; every later one is another spawn's, which the zone decoder
+//! reads as it reads them after the entry (6.510). A later record with the
+//! player's own id is kept back too and told, so the player is never
+//! another spawn.
 //!
 //! The entry sends no server filters: `RoF2`'s filter packet is not built.
 use super::{
@@ -78,6 +84,10 @@ pub(in crate::client) struct Rof2Admission {
     profile: Option<Vec<u8>>,
     /// The first own spawn before the description.
     spawn: Option<Vec<u8>>,
+    /// The id the own spawn names, once it came and could be read.
+    own: Option<u16>,
+    /// Whether the packet read last was the own spawn, again or not.
+    kept: bool,
     /// The profile's heading scale.
     revolution: f32,
 }
@@ -143,6 +153,8 @@ impl Rof2Admission {
             zone: None,
             profile: None,
             spawn: None,
+            own: None,
+            kept: false,
             revolution,
         })
     }
@@ -163,16 +175,38 @@ impl Admission for Rof2Admission {
         world: &mut World,
         handshake: &mut Handshake<'_, '_>,
     ) -> Result<Option<HandshakeComplete>> {
+        self.kept = false;
         match (self.stage, packet.opcode) {
             (Stage::Entering, PROFILE_OPCODE) if self.profile.is_none() => {
                 self.profile = Some(packet.body.clone());
                 Ok(None)
             }
             (Stage::Entering, OWN_SPAWN_OPCODE) if self.spawn.is_none() => {
+                // The first record is the player's own; every later one
+                // is another spawn's, which the zone decoder reads.
+                self.own = rof2_player::spawn_id(&packet.body);
                 self.spawn = Some(packet.body.clone());
+                self.kept = true;
                 Ok(None)
             }
-            (_, PROFILE_OPCODE | OWN_SPAWN_OPCODE) => {
+            (_, OWN_SPAWN_OPCODE)
+                if self.own.is_some() && rof2_player::spawn_id(&packet.body) == self.own =>
+            {
+                // A later record for the player changes nothing, and the
+                // player is no other spawn: stock `EQEmu` sends none
+                // (`EntityList::SendZoneSpawnsBulk` passes over the
+                // entering player, who is not spawned until
+                // `Client::SendZoneInPackets`, and that sends the player's
+                // spawn to the others alone). What the `RoF2` program does
+                // with one is not read (6.510).
+                self.kept = true;
+                handshake.log.diagnostic(format!(
+                    "RoF2 zone sent the player's own spawn again ({} bytes), left unread",
+                    packet.body.len()
+                ))?;
+                Ok(None)
+            }
+            (_, PROFILE_OPCODE) => {
                 // A second one, or one after the description, changes
                 // nothing.
                 handshake.log.diagnostic(format!(
@@ -222,6 +256,10 @@ impl Admission for Rof2Admission {
             _ => Ok(None),
         }
     }
+
+    fn kept(&self) -> bool {
+        self.kept
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +293,9 @@ mod tests {
         }
     }
 
+    /// Packets by number and body.
+    type Packets = Vec<(u16, Vec<u8>)>;
+
     fn description(name: &[u8]) -> Vec<u8> {
         let mut body = vec![0; NEW_ZONE_LENGTH];
         body[..6].copy_from_slice(b"Tester");
@@ -263,12 +304,15 @@ mod tests {
     }
 
     /// Runs an entry: `before` reaches the admission ahead of the
-    /// description, `after` between it and the objects. What it completed
-    /// with, and everything the client sent.
-    fn run(
+    /// description, `after` between it and the objects, and `later` after
+    /// the entry completed. What it completed with, everything the client
+    /// sent, and whether the entry kept each packet of `before`, `after`
+    /// and `later` to itself.
+    fn run_on(
         before: &[(u16, Vec<u8>)],
         after: &[(u16, Vec<u8>)],
-    ) -> (Result<PlayerState>, Vec<(u16, Vec<u8>)>) {
+        later: &[(u16, Vec<u8>)],
+    ) -> (Result<PlayerState>, Packets, Vec<bool>) {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
@@ -297,8 +341,10 @@ mod tests {
         };
         // Objects before the description finish nothing.
         assert!(read(&mut admission, OBJECTS_SENT, Vec::new()).is_none());
+        let mut kept = Vec::new();
         for (opcode, body) in before {
             assert!(read(&mut admission, *opcode, body.clone()).is_none());
+            kept.push(admission.kept());
         }
         assert_eq!(admission.stage(), "Entering");
         assert!(read(&mut admission, NEW_ZONE, description(b"qeynos2")).is_none());
@@ -307,14 +353,26 @@ mod tests {
         assert!(read(&mut admission, NEW_ZONE, description(b"qeynos2")).is_none());
         for (opcode, body) in after {
             assert!(read(&mut admission, *opcode, body.clone()).is_none());
+            kept.push(admission.kept());
         }
         let HandshakeComplete { player, zone } =
             read(&mut admission, OBJECTS_SENT, Vec::new()).unwrap();
         assert_eq!(zone.name, "qeynos2");
         assert_eq!(admission.stage(), "Complete");
         assert!(read(&mut admission, OBJECTS_SENT, Vec::new()).is_none());
+        assert!(!admission.kept());
+        for (opcode, body) in later {
+            assert!(read(&mut admission, *opcode, body.clone()).is_none());
+            kept.push(admission.kept());
+        }
         drop(read);
-        (player, wire.0)
+        (player, wire.0, kept)
+    }
+
+    /// [`run_on`] with nothing after the entry.
+    fn run(before: &[(u16, Vec<u8>)], after: &[(u16, Vec<u8>)]) -> (Result<PlayerState>, Packets) {
+        let (player, sent, _) = run_on(before, after, &[]);
+        (player, sent)
     }
 
     fn profile() -> (u16, Vec<u8>) {
@@ -368,6 +426,55 @@ mod tests {
             assert!(player.is_err());
             assert_eq!(sent.len(), 3);
         }
+    }
+
+    #[test]
+    fn rof2s_entry_keeps_the_own_spawn_to_itself_and_leaves_the_others_to_the_zone() {
+        use eq_network_game::rof2_player::samples::{record_body, Record};
+        let other = (OWN_SPAWN_OPCODE, record_body(&Record::creature()));
+        // The player's own id in a creature's record.
+        let again = (
+            OWN_SPAWN_OPCODE,
+            record_body(&Record {
+                spawn_id: 4321,
+                ..Record::creature()
+            }),
+        );
+        let unreadable = (OWN_SPAWN_OPCODE, vec![0; 3]);
+        let (player, sent, kept) = run_on(
+            &[
+                profile(),
+                spawn(),
+                other.clone(),
+                again.clone(),
+                unreadable.clone(),
+            ],
+            &[other.clone(), again.clone(), (PROFILE_OPCODE, vec![0; 30])],
+            &[other, again.clone(), unreadable],
+        );
+        // The entry's player is the first record's.
+        assert_eq!(player.unwrap().spawn_id, 4321);
+        assert_eq!(sent.len(), 3);
+        // The first record is kept, and so is every later one with the
+        // player's id; the others, a profile and an unreadable record are
+        // for the zone decoder.
+        assert_eq!(
+            kept,
+            [
+                false, true, false, true, false, // before
+                false, true, false, // after
+                false, true, false, // later
+            ]
+        );
+        // A first record that cannot be read names no one, so no later
+        // record is kept back for it.
+        let (player, _, kept) = run_on(
+            &[profile(), (OWN_SPAWN_OPCODE, vec![0; 3]), again.clone()],
+            &[again],
+            &[],
+        );
+        assert!(player.is_err());
+        assert_eq!(kept, [false, true, false, false]);
     }
 
     #[test]

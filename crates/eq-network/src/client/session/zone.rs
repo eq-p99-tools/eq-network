@@ -550,17 +550,22 @@ fn run_connected(
         // Everything else is read once, in the server's client generation, the
         // same way before and after admission, and heard by every feature;
         // a kind no server is known to send leaves a trace, once a session.
-        let messages = unheard.sift(
-            server.wire(),
-            (packet.opcode, &packet.body),
-            read_messages(
+        // What the handshake keeps to itself is not read again.
+        let messages = if admission.kept() {
+            Vec::new()
+        } else {
+            unheard.sift(
                 server.wire(),
-                packet.opcode,
-                &packet.body,
-                server.item_rules(),
-            ),
-            log,
-        )?;
+                (packet.opcode, &packet.body),
+                read_messages(
+                    server.wire(),
+                    packet.opcode,
+                    &packet.body,
+                    server.item_rules(),
+                ),
+                log,
+            )?
+        };
         if context.commands.is_none() && !world.ready() && !entry_position_superseded {
             // A later handshake packet cannot restore a superseded fallback.
             entry_position_superseded = messages

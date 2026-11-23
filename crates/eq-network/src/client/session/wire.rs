@@ -443,10 +443,11 @@ impl Wire for EqMac {
     }
 }
 
-/// The `RoF2` client's packets: a placeholder. It logs in and enters the
-/// world the way stock `EQEmu` expects the `RoF2` client to (inferred, 6.497
-/// and 6.499); every later stage keeps the trait's refusal, so it connects to
-/// no zone and reads and sends nothing there.
+/// The `RoF2` client's packets: a placeholder. It logs in, enters the
+/// world and the zone the way stock `EQEmu` expects the `RoF2` client to
+/// (inferred, 6.497, 6.499 and 6.501), and reads the zone's spawn records
+/// (6.510); everything else keeps the trait's refusal, so it sends nothing
+/// in the zone and reads nothing more there.
 /// Nothing reaches the login either: a configuration for the `RoF2`
 /// generation is refused before a session starts.
 pub(super) struct Rof2;
@@ -458,6 +459,17 @@ impl Wire for Rof2 {
 
     fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
         coverage::rof2(opcode)
+    }
+
+    /// Its spawn records only, as stock `EQEmu` writes them (inferred,
+    /// 6.510).
+    fn messages(
+        &self,
+        opcode: u16,
+        body: &[u8],
+        _item_rules: eq_network_game::inventory::ItemRules,
+    ) -> Vec<Message> {
+        eq_network_game::message::rof2(opcode, body)
     }
 
     fn login(
@@ -634,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rof2_placeholder_logs_in_sends_and_reads_nothing() {
+    fn the_rof2_placeholder_sends_nothing_and_reads_only_spawns() {
         use crate::client::{ClientConfig, ServerProtocol};
         use eq_network_game::chat::OutboundChat;
         let config = ClientConfig::for_protocol(
@@ -681,6 +693,11 @@ mod tests {
             );
         }
         assert!(Rof2.messages(0x3cdc, &[], ItemRules::Takp).is_empty());
+        // Its spawn records are its one zone decoder (6.510).
+        assert!(matches!(
+            Rof2.messages(0x5089, &[0; 3], ItemRules::Takp)[..],
+            [Message::Unreadable { .. }]
+        ));
         assert!(Rof2.chat(0x1004, &[0; 200], false).unwrap().is_none());
         assert!(Rof2.coverage(0x1004).is_none());
         assert!(Rof2.speeds().is_none());
