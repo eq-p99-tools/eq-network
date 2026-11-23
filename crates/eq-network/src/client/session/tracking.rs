@@ -3,6 +3,12 @@
 //! six minutes the session tells the host where it lies every two seconds,
 //! and stopping names no one. A press of the Tracking ability itself goes
 //! out with the other abilities.
+//!
+//! Following ends silently when six minutes pass, when the spawn is removed
+//! and when the player dies, as the program's does (read R49-30 c); a zone
+//! change ends it with the zone session. The program's 0x30d3 is for a
+//! tracked spawn it no longer holds while still tracking, a state removal
+//! never leaves here, so this session doesn't say it (inferred, 6.636).
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
@@ -15,6 +21,9 @@ use eq_network_game::{
     world::WorldEvent,
 };
 use std::time::Instant;
+
+/// The Tracking skill's place in the player's skills.
+const TRACKING_SKILL: usize = 53;
 
 /// The spawn followed, if any.
 #[derive(Default)]
@@ -107,12 +116,22 @@ impl Feature for Tracking {
         let Some(following) = &mut self.following else {
             return Ok(());
         };
+        // The program's removal of the tracked spawn ends it silently
+        // (0x4581b7, 0x4849b2).
         let Some(spawn) = world.spawns.get(following.spawn_id) else {
-            return self.end(Some(lines::GONE), out);
+            return self.end(None, out);
         };
-        if following
-            .reported
-            .is_none_or(|told| now.duration_since(told) >= tracking::REPORT_EVERY)
+        // Its report runs only while the Tracking skill (53) reads 0 or more
+        // as the program's signed value (+0x1044, read R49-30 b).
+        let skilled = world
+            .player
+            .as_ref()
+            .and_then(|player| player.skills.as_ref()?.get(TRACKING_SKILL).copied())
+            .is_none_or(|value| i32::from_ne_bytes(value.to_ne_bytes()) >= 0);
+        if skilled
+            && following
+                .reported
+                .is_none_or(|told| now.duration_since(told) >= tracking::REPORT_EVERY)
         {
             if let Some((_, at)) = world.player_at() {
                 following.reported = Some(now);
@@ -126,8 +145,24 @@ impl Feature for Tracking {
                 )))?;
             }
         }
+        // Six minutes end it silently too (0x422198).
         if now > following.ends {
-            return self.end(Some(lines::EXPIRED), out);
+            return self.end(None, out);
+        }
+        Ok(())
+    }
+
+    /// The player's death ends following silently (`OP_Death`, 0x4a8cd5).
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self.following.is_some()
+            && matches!(message, Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id))
+        {
+            return self.end(None, out);
         }
         Ok(())
     }
@@ -276,9 +311,7 @@ mod tests {
         outcome.result.unwrap();
         assert_eq!(
             updates(&outcome.events).last(),
-            Some(&TrackingUpdate::Ended {
-                string_id: Some(lines::EXPIRED)
-            })
+            Some(&TrackingUpdate::Ended { string_id: None })
         );
 
         testing::run(|out| feature.handle(&track(TrackAction::Follow(42)), &mut world, out))
@@ -289,11 +322,59 @@ mod tests {
         outcome.result.unwrap();
         assert_eq!(
             updates(&outcome.events),
-            [TrackingUpdate::Ended {
-                string_id: Some(lines::GONE)
-            }]
+            [TrackingUpdate::Ended { string_id: None }]
         );
         let outcome = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+        assert_eq!(updates(&outcome.events), []);
+    }
+
+    #[test]
+    fn the_players_death_ends_following_silently_and_anothers_does_not() {
+        use eq_network_game::zoning::Death;
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.spawns.insert(spawn(42, 0.0, 10.0));
+        let mut feature = Tracking::default();
+        testing::run(|out| feature.handle(&track(TrackAction::Follow(42)), &mut world, out))
+            .result
+            .unwrap();
+        let death = |spawn_id| {
+            Message::Event(WorldEvent::Death(Death {
+                spawn_id,
+                killer_id: 0,
+                corpse_id: spawn_id,
+                bind_zone_id: 0,
+                corpse_name: None,
+            }))
+        };
+        let outcome = testing::run(|out| feature.observe(&death(42), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(updates(&outcome.events), []);
+        let outcome = testing::run(|out| feature.observe(&death(7), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            updates(&outcome.events),
+            [TrackingUpdate::Ended { string_id: None }]
+        );
+        assert_eq!(outcome.sent, []);
+    }
+
+    #[test]
+    fn the_report_waits_while_the_tracking_skill_reads_below_zero() {
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        let mut skills = vec![0; 100];
+        skills[TRACKING_SKILL] = u32::MAX;
+        player.skills = Some(skills);
+        world.player.admit(player);
+        world.spawns.insert(spawn(42, 0.0, 10.0));
+        let mut feature = Tracking::default();
+        testing::run(|out| feature.handle(&track(TrackAction::Follow(42)), &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
         assert_eq!(updates(&outcome.events), []);
     }
 }

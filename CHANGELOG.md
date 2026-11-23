@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Tracking ends silently as the Titanium program's does (read R49-30 c,
+  checklist 6.636): when six minutes pass, when the followed spawn is
+  removed, and when the player dies, `TrackingUpdate::Ended` now carries no
+  line (it carried 0x3189 and 0x30d3). A zone change ends it with the zone
+  session, as before. The two-second report runs only while the player's
+  Tracking skill reads 0 or more as the program's signed value (read
+  R49-30 b). The program's 0x30d3, for a tracked spawn it no longer holds
+  while still tracking, is a state removal never leaves here, so it isn't
+  said (inferred). Not breaking: only which line is sent.
 - Quarm and TAKP offer the Tracking ability (checklist 6.619; TAKP program
   read row 10d; source-derived from `Client::Handle_OP_Track` at TAKP 44afcbf
   and Quarm fc75fcf, not live): each press sends an empty `OP_Track`
