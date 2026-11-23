@@ -93,11 +93,16 @@ unreachable because validation refuses the generation:
   `EQEmu` ignores; what the `RoF2` program sends there is a read still owed.
 - The zone connection and entry (`admission::rof2`, 6.501): the entry, the zone's unasked
   description (its short name read), the spawn request, and the ready after the zone's objects.
-  The profile and spawn are not read, so the entry completes with no player snapshot: the
-  session then only records (no in-zone message is sent, and nothing is read through another
-  generation's layout), or with a player at the controls ends with the admission error. What
-  the `RoF2` program sends during entry, and what prompts its spawn request and ready, is a read
-  still owed. The handoff between zones still refuses.
+  What the `RoF2` program sends during entry, and what prompts its spawn request and ready, is a
+  read still owed. The handoff between zones still refuses.
+- The player profile and own spawn (`rof2_player`, 6.502), each walked whole as the encoder
+  writes it: every count the encoder's constant, every string ended in its field, and an exact
+  end. The entry completes with the player read from them, or without either with no player
+  (the session then only records). An admitted `RoF2` session still sends nothing in the zone:
+  `EqEmuRof2` offers no feature, server filters or departures, `Rof2::messages` reads nothing
+  and `Rof2::encode` refuses, so every command is refused. Gems 9 to 12, appearance, the `/who`
+  listing and the spawn's packed position are not read, and what the `RoF2` program reads in
+  each field is a read still owed.
 
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.
