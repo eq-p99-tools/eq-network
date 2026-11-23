@@ -1968,6 +1968,48 @@ known or is stale, the item is not worn or in a pack, or the first slot
 holding it has custody unknown (as after an `EQEmu` move until the server
 sends it again). Hosts and scripts get no wider rule than for `UseItem`.
 
+## Guild bank
+
+Stock `EQEmu` keeps a guild bank only in the guild hall (zone 345), and
+never sends a Titanium client the bank's list: `SendGuildBank` sends a
+client before RoF the slots of its inventory type sizes, which are 0 for
+Titanium. What the server does send, to every guild member in the zone, is
+one slot at a time as an item arrives, leaves or changes there
+(`SendGuildBankItemUpdate`). The session reads `OP_GuildBank` (0xb4ab) into
+`WorldEvent::GuildBank` (6.563):
+
+- `Shown(GuildBankEntry)`: a slot of the deposit or main area holds this
+  item now, replacing what it held. `quantity` is the stack's count, or 1
+  for an item with charges (the server sends 1). `usable_for_actor` is the
+  server's `is_useable`, worked out for the player whose action caused the
+  update, so for anyone else it is not this player's answer; nothing should
+  act on it for this player.
+- `Removed { area, slot, item_id }`: that slot is empty now.
+- `DepositAnswered { taken }` and `Acknowledged`: the server's answers to a
+  deposit and to the other requests. Neither names the request it answers.
+  The session sends no guild bank request yet and acts on neither; in
+  particular a taken deposit moves no cursor item until the deposit slice.
+- `Cleared { deposit_slots, main_slots }`: read as its layout says; nothing
+  on stock `EQEmu` sends it.
+- `Banker(bool)`: the player's own banker flag from the profile's
+  `guildbanker` word (byte 13056), which `EQEmu` sets only in the guild
+  hall. A word other than 0 or 1 is an unreadable gap, never "banker". In
+  the guild hall the flag also changes through `OP_SetGuildRank`
+  (`GuildUpdate::MemberRank` with no guild); a host takes the latest of the
+  two.
+
+**The view is never complete.** A host's view of the bank is the slots it
+has seen through `Shown` and `Removed` since it entered the guild hall; it
+starts empty at every zone change. A slot never seen may hold anything.
+
+`GuildBankEntry`'s `donor` and `permitted` are players' names. They are in
+the event only: its `Debug` output leaves them out, and a host should not
+log them either. Any other action, a known action at another length, an
+area other than 0 or 1, and a `display` or `Fail` word other than 0 or 1
+are unreadable gaps. P99's era has no guild bank; `EQMac` has no such
+message, and RoF2's bank is another layout, owed.
+
+
 ## Bazaar search
 
 Stock `EQEmu` on Titanium has a Bazaar; P99's era has none, and TAKP's,
