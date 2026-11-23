@@ -1439,6 +1439,16 @@ zones, GM checks) answer as its lines. A Quarm translocate is answered as on
 TAKP, but Quarm sends no second offer after a yes: it moves the player with
 its ordinary zone change.
 
+What Quarm sends back on those four, from the same commit: its group packets
+use the same layouts as TAKP's. Its trade cancel names who closed at +0 and
+carries a fixed 1665 at +2, which is not read. It echoes the player's own
+cancel back to them (with their own ID, or the NPC's on a give window), and
+echoes the `EQMac` program's second cancel too; the window is already closed,
+so the session withholds each echo and sends nothing more. On an NPC's give
+window it sends an empty `OP_TradeReset` (0x1040) before the NPC's
+acknowledgement and after a cancel; nothing reads it yet, so it is recorded
+as the planned exchanges gap, never as an error.
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

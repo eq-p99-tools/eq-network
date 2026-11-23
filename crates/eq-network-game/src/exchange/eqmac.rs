@@ -366,6 +366,26 @@ mod tests {
         assert_eq!(update(0x1234, &[]), None);
     }
 
+    /// Quarm's `ENCODE(OP_CancelTrade)` (fc75fcf `common/patches/mac.cpp`)
+    /// writes who closed at +0 and a fixed 1665 at +2, which this decoder
+    /// doesn't read. `Handle_OP_CancelTrade` sends the canceller their own
+    /// ID, the other player the canceller's, and an NPC giver the NPC's
+    /// (checklist 6.576).
+    #[test]
+    fn quarms_cancel_names_who_closed_and_its_fixed_action_is_not_read() {
+        let action = 1665u16.to_le_bytes();
+        for by in [7u16, 42, 50] {
+            let [low, high] = by.to_le_bytes();
+            assert_eq!(
+                update(CANCEL_OPCODE, &[low, high, action[0], action[1]]),
+                Some(TradeMessage::Update(ExchangeUpdate::Cancelled {
+                    by: by.into()
+                }))
+            );
+        }
+        assert_eq!(action, [0x81, 0x06]);
+    }
+
     #[test]
     fn their_slots_empty_and_unread_records_keep_their_place() {
         // Kind 0xff empties slot +2.

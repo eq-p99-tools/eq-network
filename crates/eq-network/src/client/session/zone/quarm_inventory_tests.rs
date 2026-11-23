@@ -738,10 +738,22 @@ fn quarm_inventory_composes_with_meals_and_giving() {
             created: Instant::now(),
         },
     );
-    // Quarm's exchange owns the offer now (6.576); with no spawn 9 in
-    // reach nothing goes.
+    // Quarm's exchange owns the offer now (6.576). The command is handled,
+    // so the result is true, but with no spawn 9 in the zone nothing goes:
+    // the host is told the trade was refused, and why.
     assert!(output.result.unwrap());
     assert_eq!(output.sent, []);
+    let refusals: Vec<_> = output
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ClientEvent::World(WorldEvent::ExchangeRefused { session_id, reason }) => {
+                Some((*session_id, reason.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals, [(5, "There is nobody there to trade with")]);
     let output = testing::run_on(servers::server_type(ServerProtocol::Quarm).wire(), |out| {
         features.observe(
             &Message::Event(WorldEvent::Nourishment(Nourishment {
