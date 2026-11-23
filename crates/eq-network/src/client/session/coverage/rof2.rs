@@ -34,11 +34,20 @@ const PROFILE: &[Part] = &[Part(
      rest of the profile",
     Planned(Rof2),
 )];
-/// What the entry leaves unread of the player's own spawn (6.502).
-const OWN_SPAWN: &[Part] = &[Part(
-    "appearance, the /who listing and the packed position",
-    Planned(Rof2),
-)];
+/// What the entry leaves unread of the player's own spawn (6.502), and
+/// the other players' spawns stock `EQEmu` sends under the same number
+/// after the entry (`ENCODE(OP_NewSpawn)` and `ENCODE(OP_ZoneSpawns)` both
+/// write `OP_ZoneEntry` records), which nothing reads yet.
+const OWN_SPAWN: &[Part] = &[
+    Part(
+        "appearance, the /who listing and the packed position",
+        Planned(Rof2),
+    ),
+    Part(
+        "other players' spawns sent under this number after the entry",
+        Planned(Rof2),
+    ),
+];
 
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
 /// client; nothing for one no stage reads yet.
