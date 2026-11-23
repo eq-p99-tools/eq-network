@@ -124,6 +124,35 @@ Mac-era rule. The native early return for spawn+0x244 > 1 remains unidentified,
 and mounted state is not supplied to the session; these remain damage-parity
 gaps.
 
+## Chat server channels
+
+Where the server type opens one (`EQEmu` Titanium only), the world's
+Titanium chat-channel offer opens one chat server link for the character,
+kept across zones and ended by the character list, a camp, a stop or the
+session's end; a later offer replaces it, and nothing retries.
+`Capability::ChatChannels` is part of a zone's `Entered` capabilities only
+when its world opened a link; it is never added or removed mid-zone.
+Whether the link is up is told by `WorldEvent::ChannelLink`: `Up` once the
+chat server takes the login, `Lost { reason }` once when it ends (the
+reason names no address; a login unanswered for 30 seconds ends it). Each
+is told once, in the zone that hears it, and not again at the next zone's
+`Entered`: the host keeps the link's state across zones until `Lost` or the
+character list. `GameCommand::ChatChannel { session_id, text,
+created }` carries the chat server's own command text (`join a, b`,
+`leave a`, `leaveall`, `list`, `announce on`, `2 hello`, and the owner and
+moderator words, passed through unchecked); it is refused with
+`WorldEvent::ChatChannelRefused { session_id, reason }` before the login is
+taken, after the link is lost, for another admission, empty or over the
+zone chat's length, or when 16 commands already wait, and is never queued
+for later. `WorldEvent::Channel` carries `ChannelEvent::Message { channel,
+sender, text }` (the sender without the `<world>.` the server puts first,
+an inferred strip), `Notice { text }` (the server's own lines, as sent),
+`Joined { channels }` (slot order: the first is `/1`), and `MemberJoined`
+/ `MemberLeft { channel, name }`. All text is the server's and untrusted:
+print it through the host's ordinary chat path. Hosts receive
+`WorldEvent::ChatServer` as before; it carries the offered host and port,
+so a host that records events should not publish it.
+
 ## Admission-scoped chat
 
 `GameCommand::SendChatInAdmission { session_id, message, tongue }` binds queued chat to

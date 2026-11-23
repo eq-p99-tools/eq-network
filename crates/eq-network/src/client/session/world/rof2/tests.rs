@@ -40,6 +40,7 @@ fn run(socket: &UdpSocket, character: &str, flags: (bool, bool)) -> mpsc::Receiv
             answer_list_polls: std::cell::Cell::new(false),
             server_filters: std::cell::RefCell::default(),
             riding: std::sync::Arc::default(),
+            chat: std::sync::Arc::default(),
         };
         let mut diagnostics = Vec::new();
         let mut handler = |event| {

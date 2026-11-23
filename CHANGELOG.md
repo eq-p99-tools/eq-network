@@ -17,6 +17,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Coverage lists both as read by the zone decoder; `OP_MobUpdate` and
   `OP_NPCMoveUpdate` stay unlisted, since stock `EQEmu` sends neither. An
   admitted RoF2 session still sends nothing and offers nothing.
+- Open the chat server's channels link (recording checklist 6.509; the
+  Titanium program's own side is pending read R49-12). From the world's
+  Titanium chat-channel offer (`OP_SetChatServer`, letter `B`), where the
+  server type opens one (`EQEmu`; not Project 1999, withheld until Adam
+  has attended a session there, nor Quarm, TAKP or RoF2), the session
+  opens one link per character on its own thread: the offered address
+  through the zone handoff's checks, then the
+  modern transport, then `OP_MailLogin` with the key, which stays zeroized in
+  `chat_server::Login` and in no event, log or `Debug` (the transport's
+  resend queue holds the login until the server acknowledges it). A login
+  unanswered for 30 seconds (our bound, inferred) ends the link; closing
+  never waits on the offered host's resolution. The link survives zone
+  changes and ends on the character list, a camp, a stop and the session's
+  end; a second offer replaces it; nothing retries. `GameCommand::ChatChannel
+  { text }` (behind `Capability::ChatChannels`, offered only in a zone whose
+  world opened a link) sends the text the chat server takes, refused with
+  `WorldEvent::ChatChannelRefused` while the link is not up and never kept
+  for later. What the server says arrives as `WorldEvent::Channel` (a
+  message, a server line, the channels joined in slot order, a member
+  joining or leaving) and `WorldEvent::ChannelLink` (up, or lost and why).
+  Queues are bounded both ways; mail, friends and ignore opcodes go to the
+  gap log by opcode and length. New `eq_network_game::chat_server`.
+
+  Breaking: new variants on the exhaustive command, event and capability
+  enums (`Capability::ALL` holds 76).
 - Read RoF2's spawn records as stock `EQEmu` writes them, labelled inferred
   for RoF2 (6.510). Stock `EQEmu` sends every spawn a RoF2 client sees as
   one `OP_ZoneEntry` record. `eq_network_game::rof2_player::spawn` walks
