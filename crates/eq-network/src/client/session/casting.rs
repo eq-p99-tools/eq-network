@@ -328,16 +328,18 @@ impl CastGuard {
 /// The program's song state (actor +0xf98 and +0x104c, read R16): the spell
 /// of the player's own last cast start, and whether an item cast it. No song
 /// ends on its own; the server's cast update, a stop, or a new cast ends it.
-/// The program's memorize path (0x308e), where a Bard memorizing a spell stops
-/// the song with the stop sent and restarts that gem's, is not followed
-/// (6.442).
+/// A gem's song is kept only over 100 ms once the player's own cast start
+/// says its time. The program's memorize path (0x308e), where a Bard
+/// memorizing a spell stops the song with the stop sent and restarts that
+/// gem's, is not followed (6.442, R49-21c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Song {
     spell: u32,
     item: bool,
 }
 
-/// The shortest cast the program keeps as a song: over 100 ms (read R16).
+/// The longest cast the program does not keep as a song: a cast is the
+/// song only over 100 ms (0x411f3d, read R16).
 const SONG_CAST_MS: u32 = 100;
 
 /// Casts spells and item effects for the player, one at a time.
@@ -479,6 +481,21 @@ impl Casting {
         }
     }
 
+    /// The player's own cast start, with the cast time the server sends
+    /// (`EQEmu`'s base time, `Mob::DoCastSpell`), keeps a gem's song only over
+    /// 100 ms, as 0x411f3d keeps a cast (read R16). Until it comes, a gem
+    /// cast is taken as a song; with none, it stays one. Whether 0x411f3d
+    /// reads the base or the focused time is unread (R49-21a, 6.442). An
+    /// item's song was decided by its record's own cast time.
+    fn song_begun(&mut self, spell: u32, duration_ms: u32) {
+        if self
+            .song
+            .is_some_and(|song| !song.item && song.spell == spell && duration_ms <= SONG_CAST_MS)
+        {
+            self.song = None;
+        }
+    }
+
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -515,8 +532,8 @@ impl Casting {
             match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
-                    // The session does not know a gem's cast time; every gem
-                    // cast is taken as over 100 ms (6.442).
+                    // A gem cast is taken as a song until the player's own
+                    // cast start says its time (`song_begun`, 6.442).
                     self.song = Some(Song {
                         spell: *spell_id,
                         item: false,
@@ -748,6 +765,16 @@ impl Feature for Casting {
         })) = message
         {
             self.song_reported(*spell_id, world);
+        }
+        if let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            duration_ms,
+        })) = message
+        {
+            if world.is_player(*caster_id) {
+                self.song_begun(u32::from(*spell_id), *duration_ms);
+            }
         }
         match message {
             Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,

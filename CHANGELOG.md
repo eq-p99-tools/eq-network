@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep a Bard's gem cast as the song only over 100 ms once the player's
+  own `OP_BeginCast` says its time (gap 3.5, checklist 6.442 / 6.542).
+  The 100 ms rule is the program's (0x411f3d, read R16); the time is the
+  one the server sends (stock `EQEmu` sends the base cast time to the
+  caster too). Until the start comes a gem cast is taken as a song, and with
+  none it stays one, as before. Another spawn's start, another spell's, or
+  an item's song (decided by its record's cast time) changes nothing.
+  Whether 0x411f3d reads the base or the focused time, and whether P99
+  echoes the start to the caster, are inferred (R49-21a). The song state
+  still decides only what `/stopsong` and a Bard's `/stopcast` send; it
+  holds nothing and never touches movement.
 - Read RoF2's mana and endurance pools as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.538). The new `rof2_pools` module reads
   `OP_ManaUpdate` (0x3791) and `OP_EnduranceUpdate` (0x5f42), the server's
