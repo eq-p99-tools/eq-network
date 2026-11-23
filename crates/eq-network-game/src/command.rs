@@ -96,6 +96,9 @@ pub enum GameCommand {
     },
     /// Activate the click effect on a current carried or equipped item.
     UseItem(crate::inventory::ItemUse),
+    /// Use the item a potion belt slot names, as an item click from the
+    /// first slot the player wears or carries it in (6.568).
+    UseBeltItem(crate::bandolier::BeltUse),
     /// Acquire or release a supported vessel, or refresh its floor link.
     BoatControl {
         /// Current zone admission.
@@ -246,8 +249,8 @@ pub enum GameCommand {
         created: std::time::Instant,
     },
     /// Send a petition to the server's staff ([`crate::reports::petition`]).
-    /// A person reads it, so a host sends one only when the player types
-    /// it.
+    /// A person reads it, so the session sends one of a kind in any 10
+    /// seconds, whether it was typed or came from a script.
     SendPetition {
         /// Current zone admission.
         session_id: u64,
@@ -312,7 +315,8 @@ pub enum GameCommand {
     /// 115): one lying report, or none when the player already lies, and
     /// the movement in hand stopped; no feign request and no auto attack
     /// change. With [`crate::movement::PostureOptions::feign_standing`] on,
-    /// it sends nothing and owes the next stand. Another spawn's id is
+    /// it sends nothing, owes the next stand and reports the feign held
+    /// ([`crate::world::WorldEvent::FeignHeld`]). Another spawn's id is
     /// refused.
     FeignLanded {
         /// Current zone admission.
@@ -561,8 +565,12 @@ pub enum GameCommand {
         created: std::time::Instant,
     },
     /// Put the poison in a slot on the weapon, as a right-click on it does
-    /// ([`crate::poisons`]; what starts it in the program is pending read
-    /// R49-1, recording checklist 6.493).
+    /// ([`crate::poisons`]; read R49-1, recording checklist 6.493): the
+    /// session sits a standing player, waits 10 s seated, then sends it.
+    /// [`crate::world::WorldEvent::PoisonStarted`] says it began;
+    /// [`crate::world::WorldEvent::PoisonInterrupted`] that a posture change
+    /// stopped it. A command while one is under way is ignored, as the
+    /// program ignores it.
     ApplyPoison {
         /// Current zone admission.
         session_id: u64,
@@ -570,6 +578,22 @@ pub enum GameCommand {
         slot: crate::inventory::InventorySlot,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
+    },
+    /// Effect 234's total for the player, in ms, as the host sums it: the
+    /// effect's value from every active buff at its caster's level, type-4
+    /// records negated, and from every AA the player's class may use at
+    /// their level (read R49-1f; 0x41002f and 0x40feaa). Worn items do not
+    /// count. `None` when the host cannot resolve something that could
+    /// carry the effect, such as a buff whose spell it does not know.
+    ///
+    /// The host's own report, posted whenever the total changes; the
+    /// Apply Poison wait reads the latest one on each tick (checklist
+    /// 6.493b). Each zone session starts untold, which waits 10 s.
+    PoisonWait {
+        /// Current zone admission.
+        session_id: u64,
+        /// The total in ms, or `None` when it cannot be summed.
+        total_ms: Option<i64>,
     },
     /// What the session may eat and drink on its own from now on. Each zone
     /// session starts with the client's configured choice, so a host that
@@ -752,14 +776,15 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
-    /// Challenge another player to a duel: Titanium's `/duel` at the
-    /// player's target (checklist 6.492b; what the program checks and
-    /// prints is pending R49-6h). The session sends it only at a player
-    /// spawn in the zone other than the player, one challenge at a time.
+    /// Titanium's `/duel` at the player's target (R49-6h, 0x472a67): a
+    /// challenge, or the acceptance of the target's own. The session tells
+    /// what it did as [`crate::socials::DuelNews`], with the program's
+    /// refusals for no player target, the player themselves, a duel on and
+    /// another challenge waiting.
     ChallengeDuel {
         /// Current zone admission.
         session_id: u64,
-        /// The player challenged.
+        /// The player's target, or 0 for none.
         target: u16,
         /// When the player asked.
         created: std::time::Instant,
@@ -898,6 +923,117 @@ pub enum GameCommand {
         title_id: u32,
         /// Whether it is the suffix.
         suffix: bool,
+    },
+    /// Buy this AA rank: a definition the server's table offered this
+    /// admission ([`crate::alternate_advancement::Action::Train`]). Spends
+    /// points, which nothing gives back; the server answers a purchase with
+    /// its own lines and the new table, and a refused one with nothing.
+    TrainAlternateAdvancement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The rank's definition id.
+        rank_id: u32,
+    },
+    /// Use an owned AA rank's ability, on a target or none
+    /// ([`crate::alternate_advancement::Action::Activate`]); the server
+    /// answers a reuse wait with its own line.
+    ActivateAlternateAdvancement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The owned rank's definition id.
+        rank_id: u32,
+        /// The target's spawn, or None.
+        target: Option<u16>,
+    },
+    /// The share of experience that goes to AAs, 0 (off) to 100
+    /// ([`crate::alternate_advancement::Action::Split`]).
+    SetAlternateAdvancementSplit {
+        /// Current zone admission.
+        session_id: u64,
+        /// The share, 0 to 100.
+        percentage: u8,
+    },
+    /// Search the Bazaar for traders' items; the server answers with
+    /// [`crate::bazaar::BazaarEvent::Results`] when anything matched, then
+    /// [`crate::bazaar::BazaarEvent::SearchDone`]. Only in the Bazaar, and
+    /// one at a time.
+    BazaarSearch {
+        /// Current zone admission.
+        session_id: u64,
+        /// What to look for.
+        criteria: crate::bazaar::BazaarCriteria,
+    },
+    /// Ask how many traders and items the Bazaar has; the server answers
+    /// with [`crate::bazaar::BazaarEvent::Welcome`].
+    BazaarWelcome {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Browse a trader's wares in the Bazaar: the server answers with
+    /// [`crate::bazaar::BazaarEvent::Admitted`] and, when approved, their
+    /// list as [`crate::bazaar::BazaarEvent::Listed`]. Only a player whose
+    /// trader sign is on, within reach, with no merchant or browse open,
+    /// one click at a time.
+    BrowseTrader {
+        /// Current zone admission.
+        session_id: u64,
+        /// The trader's spawn.
+        trader: u16,
+    },
+    /// Save what is worn in the primary, secondary, range and ammo slots as
+    /// bandolier set `set` (0 to 3) under `name` (1 to 31 printable
+    /// bytes). The server answers nothing; the session tells its own copy
+    /// of the sets as [`crate::world::WorldEvent::Bandoliers`].
+    SaveBandolier {
+        /// Current zone admission.
+        session_id: u64,
+        /// The set, 0 to 3.
+        set: u8,
+        /// Its name.
+        name: String,
+    },
+    /// Clear bandolier set `set` (0 to 3).
+    ClearBandolier {
+        /// Current zone admission.
+        session_id: u64,
+        /// The set, 0 to 3.
+        set: u8,
+    },
+    /// Swap to bandolier set `set` (0 to 3): the server puts the set's
+    /// items in the weapon slots and returns what they held, telling the
+    /// client nothing; the session predicts every move or refuses
+    /// ([`crate::bandolier::swap()`]), whether from a click, a key, a social
+    /// or a script.
+    SwapBandolier {
+        /// Current zone admission.
+        session_id: u64,
+        /// The set, 0 to 3.
+        set: u8,
+    },
+    /// Put an item the player carries, a potion or one made for the belt,
+    /// in potion belt slot `slot` (0 to 3). The session tells its own copy
+    /// of the belt as [`crate::world::WorldEvent::PotionBelt`].
+    SetPotionBelt {
+        /// Current zone admission.
+        session_id: u64,
+        /// The belt slot, 0 to 3.
+        slot: u8,
+        /// The item's number.
+        item_id: u32,
+    },
+    /// Empty potion belt slot `slot` (0 to 3).
+    ClearPotionBelt {
+        /// Current zone admission.
+        session_id: u64,
+        /// The belt slot, 0 to 3.
+        slot: u8,
+    },
+    /// End the browse of a trader; the session tells
+    /// [`crate::bazaar::BazaarEvent::BrowseEnded`] at once, as the server
+    /// answers nothing.
+    EndBrowse {
+        /// Current zone admission.
+        session_id: u64,
     },
     /// Emote, in the player's own words: `/emote`.
     Emote {
@@ -1103,7 +1239,10 @@ pub enum GameCommand {
     /// 0x4bb39d, read R48): the ordinary cast with the discipline slot. The
     /// host judges class, level and the spell's own refusals from its spell
     /// data; the session refuses a spell the server didn't list, one whose
-    /// timer runs, and a timed self one while a discipline is active.
+    /// timer runs, and a timed self one while a discipline is active. On
+    /// TAKP and Quarm the session sends the servers' number for the spell
+    /// and class ([`crate::disciplines::eqmac`]) and refuses only a spell
+    /// with none; the timer and target fields are unused there.
     UseDiscipline {
         /// Admission where the player selected the discipline.
         session_id: u64,
@@ -1119,6 +1258,26 @@ pub enum GameCommand {
         /// read R48b b).
         timed_self: bool,
         /// When the player requested it.
+        created: std::time::Instant,
+    },
+    /// Titanium's `/sheathe` (0x465dea) or `/aggressive` (0x465e51): flip
+    /// one bit of the player's own state word and tell the server (read
+    /// R49-6n). No line; the server's echo changes how the player stands.
+    ToggleStance {
+        /// Current zone admission.
+        session_id: u64,
+        /// Which one.
+        stance: crate::appearance::Stance,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// Ask when a discipline may next be used: `EQMac`'s bare `/disc`
+    /// ([`crate::disciplines::eqmac::REUSE_QUESTION`]). The server answers
+    /// with a line; the session keeps no timer of its own.
+    AskDisciplineReuse {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player asked.
         created: std::time::Instant,
     },
     /// Cast a Paladin or Shadow Knight class ability at the selected target.
@@ -1140,6 +1299,50 @@ pub enum GameCommand {
         session_id: u64,
         /// The player to shield.
         spawn_id: u16,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// Take a task the last offer holds ([`crate::tasks::offers`]). The
+    /// giver must still be in the zone. A host may send it from a click, a
+    /// social, a hotbutton or a script.
+    AcceptTask {
+        /// Current zone admission.
+        session_id: u64,
+        /// The offered task.
+        task_id: u32,
+        /// When the player chose it.
+        created: std::time::Instant,
+    },
+    /// Close the last offer without taking a task.
+    DeclineTasks {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Cancel a journal entry, losing its progress
+    /// ([`crate::tasks::offers`]). A host asks the player first when it
+    /// comes from a click; a script's own step asks nothing.
+    CancelTask {
+        /// Current zone admission.
+        session_id: u64,
+        /// The entry.
+        at: crate::tasks::TaskSlot,
+        /// When the player chose it.
+        created: std::time::Instant,
+    },
+    /// Ask for the done steps of the finished task at this index of the
+    /// last finished list ([`crate::tasks::offers`]).
+    AskTaskHistory {
+        /// Current zone admission.
+        session_id: u64,
+        /// The index in the last finished list.
+        index: u32,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// `/tasktimers`: the server answers with lines of its own.
+    ListTaskTimers {
+        /// Current zone admission.
+        session_id: u64,
         /// When the player asked.
         created: std::time::Instant,
     },
@@ -1218,6 +1421,7 @@ impl GameCommand {
             Self::GenerateName { .. } => "GenerateName",
             Self::SwapSpell { .. } => "SwapSpell",
             Self::UseItem(..) => "UseItem",
+            Self::UseBeltItem(..) => "UseBeltItem",
             Self::ClickDoor { .. } => "ClickDoor",
             Self::BoatControl { .. } => "BoatControl",
             Self::ArrivalPlacement { .. } => "ArrivalPlacement",
@@ -1269,6 +1473,7 @@ impl GameCommand {
             Self::ApplyPoison { .. } => "ApplyPoison",
             Self::ChatChannel { .. } => "ChatChannel",
             Self::AutoEat { .. } => "AutoEat",
+            Self::PoisonWait { .. } => "PoisonWait",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
             Self::SetMovementOptions { .. } => "SetMovementOptions",
             Self::SetBookOptions { .. } => "SetBookOptions",
@@ -1276,6 +1481,13 @@ impl GameCommand {
             Self::UseAbility { .. } => "UseAbility",
             Self::UseKnightAbility { .. } => "UseKnightAbility",
             Self::Shield { .. } => "Shield",
+            Self::AskDisciplineReuse { .. } => "AskDisciplineReuse",
+            Self::ToggleStance { .. } => "ToggleStance",
+            Self::AcceptTask { .. } => "AcceptTask",
+            Self::DeclineTasks { .. } => "DeclineTasks",
+            Self::CancelTask { .. } => "CancelTask",
+            Self::AskTaskHistory { .. } => "AskTaskHistory",
+            Self::ListTaskTimers { .. } => "ListTaskTimers",
             Self::UseDiscipline { .. } => "UseDiscipline",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
@@ -1307,6 +1519,18 @@ impl GameCommand {
             Self::Surname { .. } => "Surname",
             Self::RequestTitles { .. } => "RequestTitles",
             Self::SetTitle { .. } => "SetTitle",
+            Self::TrainAlternateAdvancement { .. } => "TrainAlternateAdvancement",
+            Self::ActivateAlternateAdvancement { .. } => "ActivateAlternateAdvancement",
+            Self::SetAlternateAdvancementSplit { .. } => "SetAlternateAdvancementSplit",
+            Self::BazaarSearch { .. } => "BazaarSearch",
+            Self::BazaarWelcome { .. } => "BazaarWelcome",
+            Self::BrowseTrader { .. } => "BrowseTrader",
+            Self::EndBrowse { .. } => "EndBrowse",
+            Self::SaveBandolier { .. } => "SaveBandolier",
+            Self::ClearBandolier { .. } => "ClearBandolier",
+            Self::SwapBandolier { .. } => "SwapBandolier",
+            Self::SetPotionBelt { .. } => "SetPotionBelt",
+            Self::ClearPotionBelt { .. } => "ClearPotionBelt",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1358,6 +1582,7 @@ impl GameCommand {
             Self::CancelBuff(request) => Some(request.session_id),
             Self::RangedAttack(request) => Some(request.session_id),
             Self::UseItem(request) => Some(request.session_id),
+            Self::UseBeltItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
             Self::DropItem(request) => Some(request.session_id),
@@ -1401,6 +1626,7 @@ impl GameCommand {
             | Self::ApplyPoison { session_id, .. }
             | Self::ChatChannel { session_id, .. }
             | Self::AutoEat { session_id, .. }
+            | Self::PoisonWait { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
             | Self::SetServerFilters { session_id, .. }
             | Self::SetMovementOptions { session_id, .. }
@@ -1409,6 +1635,13 @@ impl GameCommand {
             | Self::UseAbility { session_id, .. }
             | Self::UseKnightAbility { session_id, .. }
             | Self::Shield { session_id, .. }
+            | Self::AskDisciplineReuse { session_id, .. }
+            | Self::ToggleStance { session_id, .. }
+            | Self::AcceptTask { session_id, .. }
+            | Self::DeclineTasks { session_id }
+            | Self::CancelTask { session_id, .. }
+            | Self::AskTaskHistory { session_id, .. }
+            | Self::ListTaskTimers { session_id, .. }
             | Self::UseDiscipline { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
@@ -1443,6 +1676,18 @@ impl GameCommand {
             | Self::Surname { session_id, .. }
             | Self::RequestTitles { session_id }
             | Self::SetTitle { session_id, .. }
+            | Self::TrainAlternateAdvancement { session_id, .. }
+            | Self::ActivateAlternateAdvancement { session_id, .. }
+            | Self::SetAlternateAdvancementSplit { session_id, .. }
+            | Self::BazaarSearch { session_id, .. }
+            | Self::BazaarWelcome { session_id }
+            | Self::BrowseTrader { session_id, .. }
+            | Self::EndBrowse { session_id }
+            | Self::SaveBandolier { session_id, .. }
+            | Self::ClearBandolier { session_id, .. }
+            | Self::SwapBandolier { session_id, .. }
+            | Self::SetPotionBelt { session_id, .. }
+            | Self::ClearPotionBelt { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1518,6 +1763,7 @@ impl GameCommand {
             Self::CastSpell { .. } | Self::UseItem(_) | Self::DropInvisibility { .. } => {
                 Capability::Casting
             }
+            Self::UseBeltItem(_) => Capability::UsingPotionBelt,
             Self::BoatControl { .. } => Capability::BoatControl,
             Self::ArrivalPlacement { .. } => Capability::BoatRiding,
             Self::ClickDoor { .. } => Capability::Doors,
@@ -1533,12 +1779,14 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::LiquidDamage { hazard, .. } => match hazard {
                 crate::hazards::LiquidHazard::Drowning => Capability::Drowning,
-                crate::hazards::LiquidHazard::Lava => Capability::LavaHeat,
+                crate::hazards::LiquidHazard::Lava | crate::hazards::LiquidHazard::ZoneHeat => {
+                    Capability::LavaHeat
+                }
             },
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
-            Self::ApplyPoison { .. } => Capability::ApplyingPoison,
+            Self::ApplyPoison { .. } | Self::PoisonWait { .. } => Capability::ApplyingPoison,
             Self::ChatChannel { .. } => Capability::ChatChannels,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SetServerFilters { .. } => Capability::ServerFilters,
@@ -1569,6 +1817,13 @@ impl GameCommand {
             Self::UseAbility { .. } => Capability::Abilities,
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
             Self::Shield { .. } => Capability::Shielding,
+            Self::AskDisciplineReuse { .. } => Capability::DisciplineReuse,
+            Self::ToggleStance { .. } => Capability::WeaponStances,
+            Self::AcceptTask { .. }
+            | Self::DeclineTasks { .. }
+            | Self::CancelTask { .. }
+            | Self::AskTaskHistory { .. }
+            | Self::ListTaskTimers { .. } => Capability::Tasks,
             Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
             Self::WhoFriends { .. } => Capability::FriendsWho,
@@ -1605,6 +1860,14 @@ impl GameCommand {
             Self::Random { .. } => Capability::Rolling,
             Self::Surname { .. } => Capability::Surnaming,
             Self::RequestTitles { .. } | Self::SetTitle { .. } => Capability::Titling,
+            Self::TrainAlternateAdvancement { .. }
+            | Self::ActivateAlternateAdvancement { .. }
+            | Self::SetAlternateAdvancementSplit { .. } => Capability::AlternateAdvancement,
+            Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
+            Self::BrowseTrader { .. } | Self::EndBrowse { .. } => Capability::BazaarBrowsing,
+            Self::SaveBandolier { .. } | Self::ClearBandolier { .. } => Capability::Bandoliers,
+            Self::SwapBandolier { .. } => Capability::BandolierSwap,
+            Self::SetPotionBelt { .. } | Self::ClearPotionBelt { .. } => Capability::PotionBelt,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1649,6 +1912,7 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
+            | Self::PoisonWait { .. }
             | Self::AnswerListPolls { .. }
             | Self::SetServerFilters { .. }
             | Self::SetBookOptions { .. }
@@ -1676,6 +1940,18 @@ impl GameCommand {
             | Self::Surname { .. }
             | Self::RequestTitles { .. }
             | Self::SetTitle { .. }
+            | Self::TrainAlternateAdvancement { .. }
+            | Self::ActivateAlternateAdvancement { .. }
+            | Self::SetAlternateAdvancementSplit { .. }
+            | Self::BazaarSearch { .. }
+            | Self::BazaarWelcome { .. }
+            | Self::BrowseTrader { .. }
+            | Self::EndBrowse { .. }
+            | Self::SaveBandolier { .. }
+            | Self::ClearBandolier { .. }
+            | Self::SwapBandolier { .. }
+            | Self::SetPotionBelt { .. }
+            | Self::ClearPotionBelt { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -1703,10 +1979,12 @@ impl GameCommand {
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
             | Self::DropCorpse { .. }
+            | Self::DeclineTasks { .. }
             | Self::SelectTarget { .. } => None,
             Self::CancelBuff(request) => Some(request.created),
             Self::RangedAttack(request) => Some(request.created),
             Self::UseItem(request) => Some(request.created),
+            Self::UseBeltItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
             Self::DropItem(request) => Some(request.created),
@@ -1758,6 +2036,12 @@ impl GameCommand {
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
             | Self::Shield { created, .. }
+            | Self::AskDisciplineReuse { created, .. }
+            | Self::ToggleStance { created, .. }
+            | Self::AcceptTask { created, .. }
+            | Self::CancelTask { created, .. }
+            | Self::AskTaskHistory { created, .. }
+            | Self::ListTaskTimers { created, .. }
             | Self::UseDiscipline { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
@@ -1959,6 +2243,7 @@ pub fn encode(
         | GameCommand::ApplyPoison { .. }
         | GameCommand::ChatChannel { .. }
         | GameCommand::AutoEat { .. }
+        | GameCommand::PoisonWait { .. }
         | GameCommand::AnswerListPolls { .. }
         | GameCommand::SetServerFilters { .. }
         | GameCommand::SetMovementOptions { .. }
@@ -1967,6 +2252,13 @@ pub fn encode(
         | GameCommand::UseAbility { .. }
         | GameCommand::UseKnightAbility { .. }
         | GameCommand::Shield { .. }
+        | GameCommand::AskDisciplineReuse { .. }
+        | GameCommand::ToggleStance { .. }
+        | GameCommand::AcceptTask { .. }
+        | GameCommand::DeclineTasks { .. }
+        | GameCommand::CancelTask { .. }
+        | GameCommand::AskTaskHistory { .. }
+        | GameCommand::ListTaskTimers { .. }
         | GameCommand::UseDiscipline { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
@@ -2000,6 +2292,18 @@ pub fn encode(
         | GameCommand::Surname { .. }
         | GameCommand::RequestTitles { .. }
         | GameCommand::SetTitle { .. }
+        | GameCommand::TrainAlternateAdvancement { .. }
+        | GameCommand::ActivateAlternateAdvancement { .. }
+        | GameCommand::SetAlternateAdvancementSplit { .. }
+        | GameCommand::BazaarSearch { .. }
+        | GameCommand::BazaarWelcome { .. }
+        | GameCommand::BrowseTrader { .. }
+        | GameCommand::EndBrowse { .. }
+        | GameCommand::SaveBandolier { .. }
+        | GameCommand::ClearBandolier { .. }
+        | GameCommand::SwapBandolier { .. }
+        | GameCommand::SetPotionBelt { .. }
+        | GameCommand::ClearPotionBelt { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }
@@ -2030,6 +2334,7 @@ pub fn encode(
         | GameCommand::DragCorpse { .. }
         | GameCommand::DropCorpse { .. }
         | GameCommand::UseItem(_)
+        | GameCommand::UseBeltItem(_)
         | GameCommand::MemorizeSpell { .. }
         | GameCommand::ForgetSpell { .. }
         | GameCommand::DeleteSpell { .. }

@@ -9,13 +9,19 @@ use serde::Serialize;
 mod eqmac;
 
 pub use eqmac::{
-    decode_eqmac, eqmac_cast, eqmac_forget, eqmac_item_cast, eqmac_memorize, eqmac_scribe,
-    eqmac_swap, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS, EQMAC_CAST_OPCODE, EQMAC_DELETE_OPCODE,
-    EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE, EQMAC_SWAP_OPCODE,
+    decode_eqmac, eqmac_cast, eqmac_delete, eqmac_forget, eqmac_item_cast, eqmac_memorize,
+    eqmac_scribe, eqmac_swap, eqmac_token, DISCIPLINE_READY, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS,
+    EQMAC_CAST_OPCODE, EQMAC_DELETE_OPCODE, EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE,
+    EQMAC_SWAP_OPCODE,
 };
 
 /// The Titanium and `EQMac` casting slot for an ordinary item click.
 pub const ITEM_CAST_SLOT: u16 = 10;
+
+/// Titanium's casting slot for an item used from the potion belt
+/// (`CastingSlot::PotionBelt`; inferred as the program's until read
+/// R49-45 c, 6.568).
+pub const BELT_CAST_SLOT: u16 = 11;
 
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
 pub const MEMORIZE_OPCODE: u16 = 0x308e;
@@ -362,7 +368,8 @@ pub enum SpellUpdate {
     },
     /// Reply to a book-slot deletion; failed replies must preserve the entry.
     BookDeletion {
-        /// Indexed Titanium book slot, independent of memorized gems.
+        /// Book slot, independent of memorized gems, within the
+        /// generation's book ([`book_size`]).
         slot: u16,
         /// Whether the server removed the entry.
         success: bool,
@@ -370,11 +377,18 @@ pub enum SpellUpdate {
     /// Mode-3 spell-bar refresh, carrying the server's reuse-time adjustment.
     /// This does not prove the spell affected its target.
     BarRefresh {
-        /// Spell gem or another casting slot; consumers validate their own slots.
+        /// Spell gem or another casting slot, in the receiving generation's
+        /// own numbering: Titanium's as its encoder renumbers the server's
+        /// (`ServerToTitaniumCastingSlot`), and `RoF2`'s as the server sends
+        /// it, since the server's casting slots are `RoF2`'s (gems 0 to 11,
+        /// the item 12, the discipline 13; 6.532). Consumers validate their
+        /// own slots.
         slot: u32,
         /// Spell whose reuse timer should refresh.
         spell_id: u32,
         /// Milliseconds deducted from the local spell's base reuse time.
+        /// Titanium's encoder does not copy it, so Titanium reads 0;
+        /// `RoF2` gets the server's.
         reduction_ms: u32,
     },
     /// Server cancellation, including interrupts, fizzles and related casting failures.
@@ -461,25 +475,8 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
         ])
     };
     Ok(Some(match opcode {
-        0x2126 => {
-            ensure!(body.len() == 8, "invalid book-swap length");
-            let (from, to) = (word(0), word(4));
-            ensure!(from < 400 && to < 400, "invalid book-swap slots");
-            SpellUpdate::BookSwap {
-                from: u16::try_from(from)?,
-                to: u16::try_from(to)?,
-            }
-        }
-        0x4f37 => {
-            // EQEmu Titanium DeleteSpell_Struct: signed slot, padding, success, padding.
-            ensure!(body.len() == 8, "invalid book-deletion length");
-            let slot = u16::from_le_bytes([body[0], body[1]]);
-            ensure!(slot < 400 && body[4] <= 1, "invalid book-deletion fields");
-            SpellUpdate::BookDeletion {
-                slot,
-                success: body[4] != 0,
-            }
-        }
+        0x2126 => book_swap(body, book_size(crate::GameDialect::Titanium))?,
+        0x4f37 => book_deletion(body, book_size(crate::GameDialect::Titanium))?,
         0x0b97 => interrupted(body)?,
         0x3990 => {
             ensure!(body.len() == 8, "invalid begin-cast length");
@@ -489,21 +486,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
                 duration_ms: word(4),
             }
         }
-        0x308e => {
-            ensure!(body.len() == 16, "invalid spell-slot length");
-            if word(8) == 3 {
-                return Ok(Some(SpellUpdate::BarRefresh {
-                    slot: word(0),
-                    spell_id: word(4),
-                    reduction_ms: word(12),
-                }));
-            }
-            SpellUpdate::Slot {
-                slot: word(0),
-                spell_id: word(4),
-                mode: word(8),
-            }
-        }
+        0x308e => memorized(body)?,
         0x4839 => {
             ensure!(
                 body.len() == 16 && body[12] <= 1,
@@ -516,6 +499,87 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
         }
         _ => return Ok(None),
     }))
+}
+
+/// How many slots a generation's spell book has, which bounds a swap's
+/// and a deletion's slots: Titanium's 400 and `RoF2`'s 720, `EQEmu`'s
+/// `SpellbookSize` for each (`common/patches/titanium_limits.h`,
+/// `rof2_limits.h`), and `EQMac`'s 256 ([`EQMAC_BOOK_SLOTS`], which
+/// its own reader bounds by).
+#[must_use]
+pub const fn book_size(dialect: crate::GameDialect) -> u32 {
+    match dialect {
+        crate::GameDialect::Titanium => 400,
+        crate::GameDialect::EqMac => 256,
+        crate::GameDialect::Rof2 => 720,
+    }
+}
+
+/// Decodes `SwapSpell_Struct`, which stock `EQEmu` sends Titanium and `RoF2`
+/// alike, with no encoder for either: the two slots of the client's own
+/// request, echoed once both are inside the client's book of `book_size`
+/// slots (`Client::Handle_OP_SwapSpell` in `zone/client_packet.cpp`).
+///
+/// # Errors
+/// Rejects any length but 8 and a slot at or past the book's size.
+pub(crate) fn book_swap(body: &[u8], book_size: u32) -> Result<SpellUpdate> {
+    ensure!(body.len() == 8, "invalid book-swap length");
+    let word = |at: usize| u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    let (from, to) = (word(0), word(4));
+    ensure!(
+        from < book_size && to < book_size,
+        "invalid book-swap slots"
+    );
+    Ok(SpellUpdate::BookSwap {
+        from: u16::try_from(from)?,
+        to: u16::try_from(to)?,
+    })
+}
+
+/// Decodes `DeleteSpell_Struct`, which stock `EQEmu` sends Titanium and
+/// `RoF2` alike, with no encoder for either: the client's own request copied
+/// back with its success byte set (`Client::Handle_OP_DeleteSpell`): the
+/// signed 16-bit slot, padding, success and padding, which is not read. A
+/// negative slot reads past every book, so it refuses.
+///
+/// # Errors
+/// Rejects any length but 8, a slot that is negative or at or past the
+/// book's size, and a success byte past 1.
+pub(crate) fn book_deletion(body: &[u8], book_size: u32) -> Result<SpellUpdate> {
+    ensure!(body.len() == 8, "invalid book-deletion length");
+    let slot = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(
+        u32::from(slot) < book_size && body[4] <= 1,
+        "invalid book-deletion fields"
+    );
+    Ok(SpellUpdate::BookDeletion {
+        slot,
+        success: body[4] != 0,
+    })
+}
+
+/// Decodes `MemorizeSpell_Struct` (16 bytes): the slot, the spell, the mode
+/// and the reduction. Mode 3 is the spell bar's refresh; any other mode is
+/// a slot's update (`Client::MemorizeSpell` in `zone/client.cpp`).
+///
+/// # Errors
+/// Rejects any length but 16.
+pub(crate) fn memorized(body: &[u8]) -> Result<SpellUpdate> {
+    ensure!(body.len() == 16, "invalid spell-slot length");
+    let word = |at: usize| u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    Ok(if word(8) == 3 {
+        SpellUpdate::BarRefresh {
+            slot: word(0),
+            spell_id: word(4),
+            reduction_ms: word(12),
+        }
+    } else {
+        SpellUpdate::Slot {
+            slot: word(0),
+            spell_id: word(4),
+            mode: word(8),
+        }
+    })
 }
 
 /// Decodes `InterruptCast_Struct`, which stock `EQEmu` sends Titanium and

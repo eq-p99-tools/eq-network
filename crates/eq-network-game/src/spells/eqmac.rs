@@ -13,6 +13,9 @@ pub const EQMAC_CAST_OPCODE: u16 = 0x7e41;
 /// `OP_BeginCast`: a cast beginning, sent to everyone nearby.
 pub const EQMAC_BEGIN_OPCODE: u16 = 0xa940;
 /// `OP_InterruptCast`: the player's own cast stopping, sent to them alone.
+/// Quarm sends a message and its color (`InterruptCast_Struct`, 4 bytes);
+/// TAKP since 0802525 sends the same two words and a third, `fromWorld`
+/// (`TokenText_Struct`, 6 bytes), which it always leaves 0.
 pub const EQMAC_INTERRUPT_OPCODE: u16 = 0x3542;
 /// `OP_MemorizeSpell`: a scribe, a memorize or a forget, and a gem's refresh.
 pub const EQMAC_MEMORIZE_OPCODE: u16 = 0x8241;
@@ -37,10 +40,32 @@ const NO_ITEM: u16 = u16::MAX;
 /// `InventoryProfile::SupportsClickCasting`).
 const CLICKABLE: std::ops::RangeInclusive<u16> = 1..=29;
 
-/// The message TAKP's discipline command sends through `OP_InterruptCast` to
-/// say a discipline can be used again (`Client::Handle_OP_Discipline`); it
-/// ends no cast.
-const DISCIPLINE_READY: u16 = 393;
+/// The message TAKP's and Quarm's discipline command sends through
+/// `OP_InterruptCast` to say a discipline can be used again
+/// (`Client::Handle_OP_Discipline`, `StringID::DISCIPLINE_RDY`); it ends no
+/// cast, and reaches the host as a line of chat
+/// ([`crate::chat::parse_for`]).
+pub const DISCIPLINE_READY: u16 = 393;
+
+/// The message and color an `OP_InterruptCast` carries, from Quarm's four
+/// bytes or TAKP's six (6.603 D0).
+///
+/// # Errors
+/// Rejects any other length, and a `fromWorld` other than 0, whose meaning
+/// neither server's source shows: it is logged as a message not understood.
+pub fn eqmac_token(body: &[u8]) -> Result<(u16, u16)> {
+    ensure!(
+        matches!(body.len(), 4 | 6),
+        "invalid EQMac cast-interruption length"
+    );
+    let short = |at: usize| u16::from_le_bytes([body[at], body[at + 1]]);
+    ensure!(
+        body.len() == 4 || short(4) == 0,
+        "EQMac cast-interruption names an unread string table {}",
+        short(4)
+    );
+    Ok((short(0), short(2)))
+}
 
 impl SpellBook {
     /// Reads the 256 `EQMac` book slots from an unpacked profile, where an
@@ -143,6 +168,25 @@ pub fn eqmac_scribe(slot: u16, spell_id: u32) -> Result<EncodedCommand> {
     Ok(book_packet(u32::from(slot), spell_id, 0))
 }
 
+/// `EQMac`'s request deleting a book slot (6.604 E4): `DeleteSpell_Struct`,
+/// 8 bytes, the signed slot, then zeros where the server writes its
+/// outcome. TAKP's and Quarm's own `Handle_OP_DeleteSpell` answer with the
+/// same packet, success 1 only for a slot that held a spell; both delete
+/// the spell from the character's record but leave the live profile as it
+/// was until the next load.
+///
+/// # Errors
+/// Refuses a slot past the 256-slot book.
+pub fn eqmac_delete(slot: u16) -> Result<EncodedCommand> {
+    let slot = book_slot(u32::from(slot))?;
+    let mut body = vec![0; 8];
+    body[..2].copy_from_slice(&slot.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: EQMAC_DELETE_OPCODE,
+        body,
+    })
+}
+
 /// `EQMac`'s request exchanging two book slots, already checked against the
 /// book; TAKP answers with the same packet.
 ///
@@ -197,8 +241,7 @@ pub fn decode_eqmac(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
         }
         EQMAC_INTERRUPT_OPCODE => {
             // The message, then the color to show it in.
-            ensure!(body.len() == 4, "invalid EQMac cast-interruption length");
-            let message_id = short(0);
+            let (message_id, _) = eqmac_token(body)?;
             if message_id == DISCIPLINE_READY {
                 return Ok(None);
             }
@@ -284,9 +327,26 @@ mod tests {
             decode_eqmac(EQMAC_INTERRUPT_OPCODE, &[0x89, 0x01, 15, 0]).unwrap(),
             None
         );
+        // TAKP's six bytes, `fromWorld` 0, say the same; any other
+        // `fromWorld` is not understood.
+        assert_eq!(
+            decode_eqmac(EQMAC_INTERRUPT_OPCODE, &[173, 0, 13, 0, 0, 0]).unwrap(),
+            Some(SpellUpdate::Interrupted {
+                caster_id: 0,
+                message_id: 173,
+                caster_name: None
+            })
+        );
+        assert_eq!(
+            decode_eqmac(EQMAC_INTERRUPT_OPCODE, &[0x89, 0x01, 15, 0, 0, 0]).unwrap(),
+            None
+        );
+        assert!(decode_eqmac(EQMAC_INTERRUPT_OPCODE, &[173, 0, 13, 0, 1, 0]).is_err());
+        for size in [0, 3, 5, 7] {
+            assert!(decode_eqmac(EQMAC_INTERRUPT_OPCODE, &vec![0; size]).is_err());
+        }
         for (opcode, size) in [
             (EQMAC_BEGIN_OPCODE, 8),
-            (EQMAC_INTERRUPT_OPCODE, 4),
             (EQMAC_MEMORIZE_OPCODE, 12),
             (EQMAC_DELETE_OPCODE, 8),
             (EQMAC_SWAP_OPCODE, 8),

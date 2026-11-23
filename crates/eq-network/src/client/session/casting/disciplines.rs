@@ -1,13 +1,16 @@
 //! Titanium disciplines: any the server listed, cast with the discipline
 //! slot (0x4bb39d, read R48), and the received reuse and active state.
-use super::{rejected, Casting, Source};
+//! TAKP's and Quarm's `/disc` by number (6.603 G1), which the server alone
+//! judges: the session refuses only a spell with no number for the class.
+use super::{rejected, Casting, DisciplineUse, Source};
 use crate::client::session::{
+    actions,
     feature::{Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::{ensure, Context, Result};
 use eq_network_game::{
-    disciplines::{titanium_cast, Active, Timers},
+    disciplines::{eqmac, titanium_cast, Active, Timers},
     message::Message,
     world::WorldEvent,
 };
@@ -104,6 +107,11 @@ impl DisciplineState {
                 .is_none_or(|wait| wait.is_zero()),
             "The shared discipline timer is still running"
         );
+        self.retry_ready(now)
+    }
+
+    /// The local one-second guard between two tries.
+    fn retry_ready(&self, now: Instant) -> Result<()> {
         ensure!(
             self.retry_at.is_none_or(|retry| now >= retry),
             "Wait before trying a discipline again"
@@ -124,10 +132,13 @@ impl Casting {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if self.use_disciplines == DisciplineUse::EqMac {
+            return self.use_eqmac_discipline(command, spell_id, world, out);
+        }
         let now = Instant::now();
         let prepared = (|| {
             ensure!(
-                self.use_disciplines,
+                self.use_disciplines == DisciplineUse::Titanium,
                 "Disciplines are unavailable on this server"
             );
             let player = world.player.as_ref().context("Not in the zone yet")?;
@@ -152,15 +163,73 @@ impl Casting {
                 self.disciplines.retry_at = Some(now + RETRY_DELAY);
                 self.submitted(spell_id, Source::Discipline, world, out)
             }
-            Err(error) => {
-                let reason = error.to_string();
-                if let Some(event) = rejected(command, &reason) {
-                    out.log.send(ClientEvent::World(event))?;
-                }
-                out.log.diagnostic(reason)
-            }
+            Err(error) => refused(command, &error, out),
         }
     }
+
+    /// `EQMac`'s `/disc` with a discipline: its number for the player's
+    /// class, or a refusal when it has none. The server judges the level,
+    /// the reuse timer, any active discipline and the player's state, and
+    /// answers with its own lines and `OP_DisciplineChange`; nothing waits
+    /// here for a cast.
+    fn use_eqmac_discipline(
+        &mut self,
+        command: &ClientCommand,
+        spell_id: u32,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let now = Instant::now();
+        let prepared = (|| {
+            let player = world.player.as_ref().context("Not in the zone yet")?;
+            let number = player
+                .class
+                .and_then(|class| eqmac::number(spell_id, class))
+                .context("The discipline is unavailable to your character")?;
+            self.disciplines.retry_ready(now)?;
+            Ok(eqmac::encode(number))
+        })();
+        match prepared {
+            Ok(packet) => {
+                out.send(&packet)?;
+                self.disciplines.retry_at = Some(now + RETRY_DELAY);
+                Ok(())
+            }
+            Err(error) => refused(command, &error, out),
+        }
+    }
+
+    /// `EQMac`'s bare `/disc`: asks the server when a discipline may next be
+    /// used, under the same one-second guard.
+    pub(super) fn ask_discipline_reuse(
+        &mut self,
+        command: &ClientCommand,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self.use_disciplines != DisciplineUse::EqMac {
+            return actions::refuse(
+                command,
+                "Disciplines are unavailable on this server",
+                out.log,
+            );
+        }
+        let now = Instant::now();
+        if let Err(error) = self.disciplines.retry_ready(now) {
+            return actions::refuse(command, &error.to_string(), out.log);
+        }
+        out.send(&eqmac::encode(eqmac::REUSE_QUESTION))?;
+        self.disciplines.retry_at = Some(now + RETRY_DELAY);
+        Ok(())
+    }
+}
+
+/// Tells the host why a discipline was not sent.
+fn refused(command: &ClientCommand, error: &anyhow::Error, out: &mut Out<'_, '_>) -> Result<()> {
+    let reason = error.to_string();
+    if let Some(event) = rejected(command, &reason) {
+        out.log.send(ClientEvent::World(event))?;
+    }
+    out.log.diagnostic(reason)
 }
 
 #[cfg(test)]

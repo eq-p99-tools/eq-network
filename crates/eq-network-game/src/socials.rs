@@ -65,6 +65,8 @@ pub const ASSIST_OPCODE: u16 = 0x7709;
 pub const YELL_OPCODE: u16 = 0x61ef;
 /// `EQMac`'s `OP_YellForHelp`.
 pub const EQMAC_YELL_OPCODE: u16 = 0xda41;
+/// `EQMac`'s `OP_Emote` (TAKP and Quarm, Mac 0x4015), both ways.
+pub const EQMAC_EMOTE_OPCODE: u16 = 0x1540;
 /// `OP_VoiceMacroOut`: a voice macro spoken to the player (Titanium).
 pub const VOICE_MACRO_OPCODE: u16 = 0x2ec6;
 /// `OP_InspectRequest`: another player asks to inspect the player
@@ -82,8 +84,21 @@ pub const EQMAC_REQUEST_DUEL_OPCODE: u16 = 0xcf40;
 pub const EQMAC_DUEL_ACCEPT_OPCODE: u16 = 0x5d41;
 /// TAKP's `OP_DuelResponse`: a client's answer turning a challenge down.
 pub const EQMAC_DUEL_RESPONSE_OPCODE: u16 = 0xd040;
-/// `OP_DuelDecline`: the player turns a challenge down (Titanium).
+/// `OP_DuelDecline` in `EQEmu`'s Titanium table: the player turns a
+/// challenge down (Titanium). The official program sends no decline of its
+/// own on it: it sends 0x3bad only when the player wins a duel, in 8 bytes
+/// it is not read what (R49-6e), which `EQEmu`'s 12-byte handler drops.
 pub const DUEL_DECLINE_OPCODE: u16 = 0x3bad;
+/// The Titanium program's own refusal of a challenge (R49-6a: handler
+/// 0x453231), 12 bytes. `EQEmu`'s Titanium table names no opcode 0x3ea0, so
+/// stock `EQEmu` drops it.
+pub const DUEL_AUTO_DECLINE_OPCODE: u16 = 0x3ea0;
+/// `OP_RandomReq` on TAKP and Quarm (Mac 0x41e7).
+pub const EQMAC_RANDOM_OPCODE: u16 = 0xe741;
+/// `OP_RandomReply` on TAKP and Quarm (Mac 0x4016).
+pub const EQMAC_ROLL_OPCODE: u16 = 0x1640;
+/// `OP_Assist` on TAKP and Quarm (Mac 0x4200), both ways.
+pub const EQMAC_ASSIST_OPCODE: u16 = 0x0042;
 
 /// The emote's text field; the server reads at most 512 bytes of it.
 const EMOTE_TEXT: usize = 1024;
@@ -181,6 +196,15 @@ pub enum DuelUpdate {
         /// Why.
         reason: DuelRefusal,
     },
+    /// Another Titanium program turned the player's challenge down on its
+    /// own (0x3ea0, R49-6d: 0x45d5af). `EQEmu` doesn't map the opcode, so
+    /// it never passes one on; a server that does would send this.
+    AutoDeclined {
+        /// The one who turned it down.
+        by: u16,
+        /// Why, by the program's byte; None for a byte it has no line for.
+        reason: Option<DuelAutoDecline>,
+    },
 }
 
 /// A challenge to a duel the player may answer, once
@@ -195,6 +219,139 @@ pub struct DuelQuestion {
     pub id: crate::confirmations::ConsentId,
     /// The player who challenged.
     pub challenger: u16,
+}
+
+/// Why the Titanium program turns a challenge down on its own, by the
+/// byte it sends (R49-6a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DuelAutoDecline {
+    /// 0: the challenger is on the player's ignore list (the list test is
+    /// inferred, 0x49297b).
+    Ignored,
+    /// 1: the player is in a duel with someone else.
+    Dueling,
+    /// 2: another challenge is waiting, or the player challenged someone
+    /// else.
+    Considering,
+}
+
+impl DuelAutoDecline {
+    /// The byte the program sends.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Ignored => 0,
+            Self::Dueling => 1,
+            Self::Considering => 2,
+        }
+    }
+
+    /// The reason a byte names, if any.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Ignored),
+            1 => Some(Self::Dueling),
+            2 => Some(Self::Considering),
+            _ => None,
+        }
+    }
+}
+
+/// What a Titanium duel means to the player, as the official program words
+/// it (R49-6 a, e, h). Each names the line it shows; the host words it from
+/// the installed client's strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DuelNews {
+    /// Another player challenged the player (0x592, %1 their name).
+    Challenged {
+        /// Who.
+        by: u16,
+    },
+    /// The player the player challenged accepted, and the duel began
+    /// (0x590, %1 their name).
+    Begun {
+        /// The opponent.
+        with: u16,
+    },
+    /// The player challenged their target (`/duel`, 0x33c6, %1 its name).
+    Challenging {
+        /// Who.
+        target: u16,
+    },
+    /// The player accepted their target's challenge, and the duel began
+    /// (`/duel`, 0x33c4, %1 its name).
+    Accepting {
+        /// The opponent.
+        challenger: u16,
+    },
+    /// `/duel` with no target, or one that is not a player (0x33c0).
+    NoPlayerTarget,
+    /// `/duel` at the player themselves (0x33c1).
+    NotYourself,
+    /// `/duel` during a duel: at the opponent (0x33c2), or at someone else
+    /// (0x33c3).
+    AlreadyDueling {
+        /// Whether the target is the opponent.
+        at_opponent: bool,
+    },
+    /// `/duel` at one player while another's challenge waits (0x33c5).
+    ConsideringAnother,
+    /// The player won the duel (0x2f44, %1 the player's name, %2 the
+    /// opponent's).
+    Won {
+        /// The opponent who died.
+        over: u16,
+    },
+    /// The duel partner died otherwise: at another's hand, or before the
+    /// duel began (0x2f45, %1 and %2 their name).
+    Ended {
+        /// The partner who died.
+        opponent: u16,
+    },
+    /// The one the player challenged turned it down on their program's own
+    /// (R49-6d): 0x567 they ignore the player, 0x568 they are dueling, 0x569
+    /// another challenge waits for them (%1 their name, colour 15). No line
+    /// for None.
+    TurnedDown {
+        /// Who.
+        by: u16,
+        /// Why; None for a byte the program has no line for.
+        reason: Option<DuelAutoDecline>,
+    },
+    /// The one the player challenged left before accepting (0x581, %1 their
+    /// name, colour 15; R49-6d, 0x4581b7).
+    Lapsed {
+        /// Who.
+        target: u16,
+    },
+    /// The opponent left during the duel, which the player wins (0x580, %1
+    /// the player's name, %2 and %3 theirs, colour 0x10d; R49-6d).
+    Forfeited {
+        /// The opponent who left.
+        opponent: u16,
+    },
+}
+
+/// The Titanium program's own refusal of a challenge (R49-6a):
+/// `0x3ea0`, 12 bytes, the challenger and the player as 32 bits each, then
+/// the reason's byte. The program leaves the last three bytes unwritten;
+/// these are zero.
+#[must_use]
+pub fn titanium_duel_auto_decline(
+    challenger: u16,
+    own: u16,
+    reason: DuelAutoDecline,
+) -> EncodedCommand {
+    let mut body: Vec<u8> = [u32::from(challenger), u32::from(own)]
+        .iter()
+        .flat_map(|id| id.to_le_bytes())
+        .collect();
+    body.extend([reason.byte(), 0, 0, 0]);
+    EncodedCommand {
+        opcode: DUEL_AUTO_DECLINE_OPCODE,
+        body,
+    }
 }
 
 /// Why a client turned a duel down, by TAKP's numbers for it.
@@ -291,6 +448,59 @@ pub fn emote(text: &str) -> Result<EncodedCommand> {
     })
 }
 
+/// `EQMac`'s emote (6.604 E1): `Emote_Struct`, exactly 1026 bytes, a
+/// 16-bit word, 0 here, then the text, which starts with a space, as
+/// Titanium's does. TAKP's and Quarm's own `Handle_OP_Emote` drop any other
+/// length, put the player's name before the text, cut it at 512 bytes and
+/// pass the word on. What the `EQMac` program writes in the word, and
+/// whether it adds the space, is row 11a.
+///
+/// # Errors
+/// Rejects an empty emote, one the server would cut, and one with a NUL.
+pub fn eqmac_emote(text: &str) -> Result<EncodedCommand> {
+    let titanium = emote(text)?;
+    Ok(eqmac_body(0, &titanium.body[4..]))
+}
+
+/// `EQMac`'s social emote: the word 0xffff, as Titanium's social emote
+/// leads with 0xffffffff (read R47b; on `EQMac` inferred, row 11a), then
+/// the text as the worker built it.
+///
+/// # Errors
+/// Rejects an emote with no words, one the server would cut, and one with
+/// a NUL.
+pub fn eqmac_social_emote(text: &str) -> Result<EncodedCommand> {
+    let titanium = social_emote(text)?;
+    Ok(eqmac_body(u16::MAX, &titanium.body[4..]))
+}
+
+fn eqmac_body(word: u16, text: &[u8]) -> EncodedCommand {
+    let mut body = word.to_le_bytes().to_vec();
+    body.extend_from_slice(text);
+    EncodedCommand {
+        opcode: EQMAC_EMOTE_OPCODE,
+        body,
+    }
+}
+
+/// How the players near hear the player's emote on `EQMac`: the word, then
+/// the name and the text (TAKP's and Quarm's `Handle_OP_Emote`).
+#[must_use]
+pub fn eqmac_heard_emote(name: &str, text: &str) -> Vec<u8> {
+    heard_emote(name, text)[2..].to_vec()
+}
+
+/// `EQMac`'s `/yell` (6.604 E2): `OP_YellForHelp`, empty. TAKP's and
+/// Quarm's own `Handle_OP_YellForHelp` read no body; what the `EQMac`
+/// program sends is row 11b.
+#[must_use]
+pub fn eqmac_yell() -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_YELL_OPCODE,
+        body: Vec::new(),
+    }
+}
+
 /// A social emote (Titanium 0x49e0c1, read R47b): `0xffffffff`, then the
 /// text as the worker builds it, which already starts with the space after
 /// the name, so it is sent unchanged, a trailing space included.
@@ -361,8 +571,8 @@ pub fn titanium_yell() -> EncodedCommand {
 }
 
 /// Titanium's yes to a challenge: `OP_DuelAccept` (8 bytes), the
-/// challenger then the player, each 32 bits (`Duel_Struct`). The order is
-/// what `EQEmu`'s handler takes (inferred, 6.492, pending R49-6a).
+/// challenger then the player, each 32 bits (`Duel_Struct`), as `/duel`
+/// sends it after [`titanium_duel_request`] (R49-6h, 0x472a67).
 #[must_use]
 pub fn titanium_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
     EncodedCommand {
@@ -374,10 +584,25 @@ pub fn titanium_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
     }
 }
 
-/// Titanium's no to a challenge: `OP_DuelDecline` (12 bytes,
-/// `DuelResponse_Struct`), the challenger, the player and a zero word.
-/// `EQEmu` tells the challenger in either order; this one is inferred
-/// (6.492, pending R49-6a).
+/// The Titanium program's word that a duel is over, which it sends when
+/// the player kills the opponent or the opponent leaves (R49-6d: 0x4a8cd5,
+/// 0x4581b7): 0x3bad, 8 bytes, the opponent then the player, each 32 bits.
+/// `EQEmu` maps 0x3bad to its 12-byte decline, so it drops this one.
+#[must_use]
+pub fn titanium_duel_over(opponent: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: DUEL_DECLINE_OPCODE,
+        body: [u32::from(opponent), u32::from(own)]
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect(),
+    }
+}
+
+/// `EQEmu`'s Titanium decline: `OP_DuelDecline` (12 bytes,
+/// `DuelResponse_Struct`), the challenger, the player and a zero word. The
+/// official program has no decline command and never sends this (R49-6a),
+/// so no request encodes it on Titanium.
 #[must_use]
 pub fn titanium_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
     EncodedCommand {
@@ -390,11 +615,10 @@ pub fn titanium_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
 }
 
 /// Titanium's challenge to a duel: `OP_RequestDuel` (8 bytes,
-/// `Duel_Struct`), the other player then the player, each 32 bits.
-/// `EQEmu`'s `Handle_OP_RequestDuel` swaps the two words and looks up the
-/// first as the one challenged, so it must name a spawn in the zone; the
-/// order the official program writes is inferred from that handler
-/// (checklist 6.492b, pending R49-6h).
+/// `Duel_Struct`), the other player then the player, each 32 bits, as the
+/// official program writes it (R49-6h, 0x472a67). `EQEmu`'s
+/// `Handle_OP_RequestDuel` swaps the two words and looks up the first as
+/// the one challenged, so it must name a spawn in the zone.
 #[must_use]
 pub fn titanium_duel_request(other: u16, own: u16) -> EncodedCommand {
     EncodedCommand {
@@ -450,6 +674,47 @@ pub fn assist(spawn_id: u16) -> EncodedCommand {
     }
 }
 
+/// Rolls a die on TAKP and Quarm: the same 8 bytes as Titanium's, low then
+/// high, on the `EQMac` opcode. Both servers' `Handle_OP_RandomReq` drop
+/// another size, order the ends, and roll 0 to 100 for two zeros (Quarm
+/// fc75fcf, TAKP 44afcbf).
+#[must_use]
+pub fn eqmac_random(low: u32, high: u32) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_RANDOM_OPCODE,
+        ..random(low, high)
+    }
+}
+
+/// Asks TAKP or Quarm for the target of the spawn assisted: the `EQMac`
+/// `EntityId_Struct`, the spawn in 2 bytes, the only size both servers'
+/// `Handle_OP_Assist` read.
+#[must_use]
+pub fn eqmac_assist(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_ASSIST_OPCODE,
+        body: spawn_id.to_le_bytes().to_vec(),
+    }
+}
+
+/// Reads TAKP's or Quarm's answer to an assist: the request sent back with
+/// one spawn in it. Both servers always answer: with the assistee's target
+/// when it has one and stands within 250 (any distance for a GM), else the
+/// player's own spawn, or -1 when `Combat:AssistNoTargetSelf` is off. The
+/// player's own spawn is the target named, as the server names it; -1 is
+/// none (whether the `EQMac` program treats its own spawn otherwise is
+/// unread, 6.585a).
+///
+/// # Errors
+/// Rejects any length but 2.
+pub(crate) fn eqmac_assist_answer(body: &[u8]) -> Result<Assisted> {
+    ensure!(body.len() == 2, "invalid EQMac assist length");
+    let target = u16::from_le_bytes([body[0], body[1]]);
+    Ok(Assisted {
+        target: (target != 0 && target != u16::MAX).then_some(target),
+    })
+}
+
 /// Decodes a die rolled nearby; None for any other opcode.
 ///
 /// # Errors
@@ -458,15 +723,26 @@ pub fn decode_roll(opcode: u16, body: &[u8]) -> Result<Option<Roll>> {
     if opcode != ROLL_OPCODE {
         return Ok(None);
     }
+    roll(body).map(Some)
+}
+
+/// Reads a roll's result, the server's 76-byte `RandomReply_Struct`, which
+/// stock `EQEmu` sends Titanium and `RoF2` alike with no encoder
+/// (`Client::Handle_OP_RandomRequest`): the low and high ends, the result,
+/// and the roller's name in 64 bytes.
+///
+/// # Errors
+/// Rejects any length but 76.
+pub(crate) fn roll(body: &[u8]) -> Result<Roll> {
     ensure!(body.len() == 12 + NAME, "invalid roll length");
     let field = &body[12..12 + NAME];
     let end = field.iter().position(|byte| *byte == 0).unwrap_or(NAME);
-    Ok(Some(Roll {
+    Ok(Roll {
         name: String::from_utf8_lossy(&field[..end]).into_owned(),
         low: word(body, 0),
         high: word(body, 4),
         result: word(body, 8),
-    }))
+    })
 }
 
 /// Decodes the server's answer to an assist; None for any other opcode.
@@ -477,11 +753,22 @@ pub fn decode_assist(opcode: u16, body: &[u8]) -> Result<Option<Assisted>> {
     if opcode != ASSIST_OPCODE {
         return Ok(None);
     }
+    assist_answer(body).map(Some)
+}
+
+/// Reads the server's answer to an assist, the 4-byte `EntityId_Struct`
+/// stock `EQEmu` sends Titanium and `RoF2` alike with no encoder
+/// (`Client::Handle_OP_Assist`, `Client::Handle_OP_AssistGroup`): the new
+/// target, or 0 for none.
+///
+/// # Errors
+/// Rejects any length but 4 and a target past 16 bits.
+pub(crate) fn assist_answer(body: &[u8]) -> Result<Assisted> {
     ensure!(body.len() == 4, "invalid assist length");
     let target = u16::try_from(word(body, 0))?;
-    Ok(Some(Assisted {
+    Ok(Assisted {
         target: (target != 0).then_some(target),
-    }))
+    })
 }
 
 /// What Titanium's messages from other players say: a yell for help, a
@@ -500,6 +787,7 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         REQUEST_DUEL_OPCODE => WorldEvent::Duel(titanium_challenge(body)?),
         DUEL_ACCEPT_OPCODE => WorldEvent::Duel(titanium_accepted(body)?),
+        DUEL_AUTO_DECLINE_OPCODE => WorldEvent::Duel(titanium_auto_declined(body)?),
         _ => return Ok(None),
     }))
 }
@@ -586,6 +874,20 @@ fn titanium_accepted(body: &[u8]) -> Result<DuelUpdate> {
     })
 }
 
+/// Decodes another Titanium program's own refusal, 0x3ea0 (12 bytes): a
+/// word, the one refusing's spawn at +4 and the reason's byte at +8, as
+/// 0x45d5af reads them (R49-6d).
+///
+/// # Errors
+/// Rejects a wrong length and a spawn that is zero or past 16 bits.
+fn titanium_auto_declined(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 12, "invalid duel refusal length");
+    Ok(DuelUpdate::AutoDeclined {
+        by: spawn(body, 4, "duel refusal")?,
+        reason: DuelAutoDecline::from_byte(body[8]),
+    })
+}
+
 /// Decodes `EQMac`'s `OP_RequestDuel` (4 bytes): two spawns, each 16 bits,
 /// the second the other player. Quarm names them in both; TAKP passes the
 /// sender's record on, whose first is the player's own spawn.
@@ -630,6 +932,29 @@ pub(crate) fn eqmac_refused(body: &[u8]) -> Result<DuelUpdate> {
 mod tests {
     use super::*;
     use crate::world::titanium_update;
+
+    #[test]
+    fn eqmac_rolls_and_assists_are_the_sizes_both_mac_servers_read() {
+        let roll = eqmac_random(5, 1);
+        assert_eq!(roll.opcode, 0xe741);
+        assert_eq!(roll.body, [5, 0, 0, 0, 1, 0, 0, 0]);
+        let assist = eqmac_assist(0x1234);
+        assert_eq!(assist.opcode, 0x0042);
+        assert_eq!(assist.body, [0x34, 0x12]);
+    }
+
+    #[test]
+    fn an_eqmac_assist_answer_names_a_spawn_the_player_or_none() {
+        assert_eq!(
+            eqmac_assist_answer(&[0x34, 0x12]).unwrap().target,
+            Some(0x1234)
+        );
+        // The player's own spawn, as the server names it.
+        assert_eq!(eqmac_assist_answer(&[7, 0]).unwrap().target, Some(7));
+        assert_eq!(eqmac_assist_answer(&[0xff, 0xff]).unwrap().target, None);
+        assert_eq!(eqmac_assist_answer(&[0, 0]).unwrap().target, None);
+        assert!(eqmac_assist_answer(&[1, 0, 0, 0]).is_err());
+    }
 
     #[test]
     fn a_titanium_challenge_names_the_other_player_then_the_player() {
@@ -831,6 +1156,34 @@ mod tests {
         }
         assert!(titanium_challenge(&words(300, 300)[..7]).is_err());
         assert!(titanium_accepted(&words(300, 7)[..7]).is_err());
+        // Another program's own refusal: the one refusing at +4, the reason
+        // at +8 (0x45d5af), the very bytes this program sends.
+        for (byte, reason) in [
+            (1, Some(DuelAutoDecline::Dueling)),
+            (2, Some(DuelAutoDecline::Considering)),
+            (9, None),
+        ] {
+            let mut sent = titanium_duel_auto_decline(7, 300, DuelAutoDecline::Ignored);
+            sent.body[8] = byte;
+            assert_eq!(
+                titanium_update(DUEL_AUTO_DECLINE_OPCODE, &sent.body).unwrap(),
+                Some(WorldEvent::Duel(DuelUpdate::AutoDeclined {
+                    by: 300,
+                    reason
+                }))
+            );
+        }
+        assert!(titanium_auto_declined(&[0; 11]).is_err());
+        assert!(titanium_auto_declined(&[0; 12]).is_err());
+        // The program's word that the duel is over: the opponent, then the
+        // player.
+        assert_eq!(
+            titanium_duel_over(300, 7),
+            EncodedCommand {
+                opcode: 0x3bad,
+                body: words(300, 7),
+            }
+        );
     }
 
     #[test]

@@ -1,11 +1,12 @@
-//! `EQMac` ground-object placement, disappearance and pickup refusal.
+//! `EQMac` ground-object placement, disappearance and pickup refusal, and
+//! the world container's open and close (6.598).
 //!
-//! TAKP and Quarm use the packed `Object_Struct` and `ClickObject_Struct`
-//! directly; the Mac patch does not translate them. The placement's model
+//! TAKP and Quarm use the packed `Object_Struct`, `ClickObject_Struct` and
+//! `ClickObjectAction_Struct` directly; the Mac patch does not translate them. The placement's model
 //! and type do not prove that a player can obtain an item. Only the inventory
 //! owner consumes the separate item packets; no item is synthesized here.
 
-use super::{GroundObject, ObjectUpdate};
+use super::{ContainerView, GroundObject, ObjectUpdate};
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 
@@ -13,6 +14,37 @@ use anyhow::{ensure, Result};
 pub const SPAWN_OPCODE: u16 = 0x2c40;
 /// `OP_ClickObject`: a request, disappearance or refusal.
 pub const CLICK_OPCODE: u16 = 0x2b40;
+/// `OP_ClickObjectAction`: a world container's answer to a click, the
+/// client's close, and the server's empty answer to that close.
+pub const ACTION_OPCODE: u16 = 0xd740;
+/// The length of `ClickObjectAction_Struct`; both servers drop a close of
+/// any other length.
+const ACTION_LENGTH: usize = 20;
+/// The places a world container has, which both servers always send.
+const PLACES: u8 = 10;
+
+/// `EQMac`'s `OP_ClickObjectAction` closing a world container: the server's
+/// own answer repeated with `open` cleared.
+///
+/// TAKP's and Quarm's `Handle_OP_ClickObjectAction` read only the drop ID
+/// and `open`; Quarm closes only for the container's user, and TAKP for
+/// anyone. The other fields repeat what the server sent (player, type,
+/// places and icon); what the `EQMac` program writes there is unread
+/// (row 6.598a).
+#[must_use]
+pub fn close(player_id: u16, drop_id: u32, object_type: u32, icon: u32) -> EncodedCommand {
+    let mut body = vec![0; ACTION_LENGTH];
+    body[..4].copy_from_slice(&u32::from(player_id).to_le_bytes());
+    body[4..8].copy_from_slice(&drop_id.to_le_bytes());
+    // The server's fields are a byte and a 16-bit value; it sent no more.
+    body[10] = object_type.to_le_bytes()[0];
+    body[12] = PLACES;
+    body[16..18].copy_from_slice(&icon.to_le_bytes()[..2]);
+    EncodedCommand {
+        opcode: ACTION_OPCODE,
+        body,
+    }
+}
 
 /// Encodes an already checked pickup using the `EQMac` click layout.
 /// The response never substitutes for authoritative cursor item packets.
@@ -80,8 +112,41 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ObjectUpdate>> {
                 }
             }
         }
+        ACTION_OPCODE => ObjectUpdate::Container(container(body)?),
         _ => return Ok(None),
     }))
+}
+
+/// A world container's answer to a click (`Object::HandleClick`): the
+/// player, the container, whether it opened for them (0 when another
+/// player uses it), its type at +10, its places at +12 and its icon at +16.
+/// The Mac answer carries no name. The server's empty answer to a close is
+/// read by [`crate::message`], not here.
+fn container(body: &[u8]) -> Result<ContainerView> {
+    ensure!(
+        body.len() == ACTION_LENGTH,
+        "invalid EQMac container answer length"
+    );
+    let word = |offset: usize| {
+        u32::from_le_bytes([
+            body[offset],
+            body[offset + 1],
+            body[offset + 2],
+            body[offset + 3],
+        ])
+    };
+    ensure!(body[8] <= 1, "unknown EQMac container answer state");
+    ensure!(body[12] == PLACES, "unknown EQMac container size");
+    let drop_id = word(4);
+    ensure!(drop_id != 0, "EQMac container answer without an ID");
+    Ok(ContainerView {
+        player_id: word(0),
+        drop_id,
+        open: body[8] == 1,
+        object_type: u32::from(body[10]),
+        icon: u32::from(u16::from_le_bytes([body[16], body[17]])),
+        name: String::new(),
+    })
 }
 
 #[cfg(test)]
@@ -143,6 +208,47 @@ mod tests {
         assert_eq!(decode(super::super::SPAWN_OPCODE, &fixture).unwrap(), None);
         assert_eq!(pickup(71, 7).body, [71, 0, 0, 0, 7, 0, 0, 0]);
         assert_eq!(pickup(71, 7).opcode, CLICK_OPCODE);
+    }
+
+    /// TAKP's and Quarm's answer to a forge click (`Object::HandleClick`).
+    fn answer(open: u8) -> [u8; 20] {
+        let mut body = [0; 20];
+        body[..4].copy_from_slice(&7_u32.to_le_bytes());
+        body[4..8].copy_from_slice(&72_u32.to_le_bytes());
+        body[8] = open;
+        body[10] = 17;
+        body[12] = 10;
+        body[16..18].copy_from_slice(&1100_u16.to_le_bytes());
+        body
+    }
+
+    #[test]
+    fn a_container_answer_opens_or_says_it_is_in_use_and_a_close_repeats_it() {
+        for (open, expected) in [(1, true), (0, false)] {
+            let update = decode(ACTION_OPCODE, &answer(open)).unwrap().unwrap();
+            assert_eq!(
+                update,
+                ObjectUpdate::Container(ContainerView {
+                    player_id: 7,
+                    drop_id: 72,
+                    open: expected,
+                    object_type: 17,
+                    icon: 1100,
+                    name: String::new(),
+                })
+            );
+        }
+        let sent = close(7, 72, 17, 1100);
+        assert_eq!(sent.opcode, 0xd740);
+        assert_eq!(sent.body, answer(0));
+        for length in [0, 19, 21] {
+            assert!(decode(ACTION_OPCODE, &vec![0; length]).is_err());
+        }
+        for (offset, value) in [(8, 2), (12, 9), (4, 0)] {
+            let mut odd = answer(1);
+            odd[offset] = value;
+            assert!(decode(ACTION_OPCODE, &odd).is_err());
+        }
     }
 
     #[test]

@@ -406,14 +406,16 @@ mod tests {
             titanium_sacrifice_answer(&offer, false).body[CONFIRM..],
             [0; 4]
         );
+        // The Mac answer is the 12-byte offer with only the answer set
+        // (`Handle_OP_Sacrifice` at TAKP 44afcbf and Quarm fc75fcf, 6.596).
         let yes = eqmac_sacrifice_answer(&offer, true);
         assert_eq!(
-            (yes.opcode, &yes.body[CONFIRM..]),
-            (EQMAC_SACRIFICE_OPCODE, &[1, 0, 0, 0][..])
+            (yes.opcode, yes.body),
+            (EQMAC_SACRIFICE_OPCODE, sacrifice_record(581, 1))
         );
         assert_eq!(
-            eqmac_sacrifice_answer(&offer, false).body[CONFIRM..],
-            [0; 4]
+            eqmac_sacrifice_answer(&offer, false).body,
+            sacrifice_record(581, 0)
         );
         for length in [11, 13] {
             assert!(sacrifice(&vec![0; length]).is_err());
@@ -478,6 +480,9 @@ mod tests {
             eqmac_translocate_answer(&offer, true).body[COMPLETE..],
             [1, 0, 0, 0]
         );
+        // Quarm's `Handle_OP_Translocate` (fc75fcf) drops an answer of any
+        // size but its 92-byte `Translocate_Struct`, and moves on 1.
+        assert_eq!(eqmac_translocate_answer(&offer, true).body.len(), 92);
         assert!(titanium_translocate(&body[..91]).is_err());
     }
 

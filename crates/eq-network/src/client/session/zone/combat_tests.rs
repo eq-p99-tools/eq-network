@@ -241,9 +241,11 @@ fn ranged_refuses_stale_target_loadout_and_admission_and_unavailable_actions() {
             }
             "old admission" => attack.session_id -= 1,
             "dead" => world.lifecycle.mark_dead(),
-            "sitting" => world
-                .posture
-                .observed(eq_network_game::world::PostureState::Sitting),
+            "sitting" => {
+                world
+                    .posture
+                    .observed(eq_network_game::world::PostureState::Sitting);
+            }
             "near" | "far" => {
                 let mut target = testing::spawn(8, SpawnKind::Npc);
                 target.position.x = if case == "near" { 20.0 } else { 300.0 };

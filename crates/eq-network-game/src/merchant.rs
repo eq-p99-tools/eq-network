@@ -30,6 +30,9 @@ pub const END_CONFIRM_OPCODE: u16 = 0x20b2;
 pub const DELETE_OPCODE: u16 = 0x0da9;
 /// `ItemPacketMerchant` inside `OP_ItemPacket`.
 pub const ITEM_PACKET_KIND: u32 = 0x64;
+/// Titanium's `OP_ItemPacket`, which carries a merchant's item among
+/// others.
+pub const ITEM_PACKET_OPCODE: u16 = 0x3397;
 
 /// How a client generation's merchant packets price trades: with the
 /// merchant's rate in each list price and each echo priced, as `EQEmu`'s
@@ -285,7 +288,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<MerchantUpdate>> {
             }
         }
         END_CONFIRM_OPCODE => MerchantUpdate::Closed,
-        0x3397 if body.get(..4) == Some(&ITEM_PACKET_KIND.to_le_bytes()) => {
+        ITEM_PACKET_OPCODE if body.get(..4) == Some(&ITEM_PACKET_KIND.to_le_bytes()) => {
             let header = merchant_header(&body[4..])?;
             let mut items = crate::inventory::parse_items(&body[4..])?;
             ensure!(items.len() == 1, "merchant view must hold one item");
@@ -298,6 +301,29 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<MerchantUpdate>> {
         }
         _ => return Ok(None),
     }))
+}
+
+/// Whether a Titanium packet is a merchant item packet
+/// (`OP_ItemPacket`, `ItemPacketMerchant`).
+#[must_use]
+pub fn is_item_packet(opcode: u16, body: &[u8]) -> bool {
+    opcode == ITEM_PACKET_OPCODE && body.get(..4) == Some(&ITEM_PACKET_KIND.to_le_bytes()[..])
+}
+
+/// The serial number in a Titanium merchant item packet's header (its
+/// seventh field), which a trader's list is keyed by: Titanium's
+/// `SerializeItem` writes the item's serial there, or its merchant slot,
+/// which for a trader's item is its serial too
+/// (`Client::BulkSendTraderInventory`). `None` where the packet is not a
+/// merchant item or the field is not a number.
+#[must_use]
+pub fn view_serial(body: &[u8]) -> Option<u32> {
+    let rest = body.strip_prefix(&ITEM_PACKET_KIND.to_le_bytes()[..])?;
+    let header = &rest[..rest.len().min(128)];
+    let text = std::str::from_utf8(header)
+        .or_else(|error| std::str::from_utf8(&header[..error.valid_up_to()]))
+        .ok()?;
+    text.split('|').nth(6)?.parse().ok()
 }
 
 /// Reads the merchant slot, price and count from the serialized item header.
@@ -409,6 +435,13 @@ mod tests {
         };
         assert_eq!((stock.slot, stock.price, stock.quantity), (4, 12, 0));
         assert_eq!(stock.item.details.id, 13005);
+        // The seventh field is the serial a trader's list is keyed by.
+        assert_eq!(view_serial(&wire(4, 12, -1)), Some(4));
+        assert_eq!(view_serial(&wire(90_210, 12, 3)), Some(90_210));
+        assert_eq!(view_serial(&0x66u32.to_le_bytes()), None);
+        let mut short = ITEM_PACKET_KIND.to_le_bytes().to_vec();
+        short.extend_from_slice(b"1|0|4|12|1|0");
+        assert_eq!(view_serial(&short), None);
         let mut purchase = buy(900, 7, 4, 2).unwrap();
         purchase[20..].copy_from_slice(&24u32.to_le_bytes());
         assert_eq!(

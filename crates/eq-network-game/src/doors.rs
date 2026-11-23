@@ -18,6 +18,9 @@ const STATIC_ID: u8 = 255;
 /// The most doors `EQEmu` lists in one table.
 const MOST_DOORS: usize = 500;
 
+/// The length of a Titanium door record, with its size in the 16 bits at 52.
+const TITANIUM_RECORD: usize = 80;
+
 /// A server-defined door or interactive zone object; open types are not all hinged doors.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Door {
@@ -303,23 +306,41 @@ fn distance(from: Position, to: Position) -> f32 {
     (to.x - from.x).hypot(to.y - from.y).hypot(to.z - from.z)
 }
 
+/// What a door click names as held: the cursor item, and the skill the
+/// program sends with it (read R49-22b, 0x49812e).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldItem {
+    /// The server's item ID of the cursor item.
+    pub id: u32,
+    /// The player's Pick Lock value when the item is a lockpick (item type
+    /// 12, not a container), else 0. Keys carry 0.
+    pub skill: u32,
+}
+
+/// The item type of a lockpick, whose door click carries the Pick Lock value.
+pub const LOCKPICK_ITEM_TYPE: u8 = 12;
+
+/// The most a door click's skill carries (0x4906c5 clamps it to 0xfe).
+const MOST_SKILL: u32 = 0xfe;
+
 /// Titanium's `OP_ClickDoor` for the player using a door, already checked,
-/// with the server's item ID of what the cursor holds, if any (6.537).
+/// with what the cursor holds, if anything (6.537, read R49-22b).
+///
+/// The program writes 16 bytes (0x4906c5): the door at +0, the skill at +4
+/// (at most 254), the cursor item's ID at +8 (-1 for an empty cursor) and the
+/// clicker at +12. Bytes 1 to 3 are never written: they are left over from
+/// the stack, and the official client's recordings show 3 in byte 1, which
+/// this keeps. No server reads them.
 #[must_use]
-pub fn titanium_click(id: u8, player_id: u16, held: Option<u32>) -> EncodedCommand {
+pub fn titanium_click(id: u8, player_id: u16, held: Option<HeldItem>) -> EncodedCommand {
     let mut body = vec![0; 16];
     body[0] = id;
-    // The official client sends 3 here for an ordinary open or close; what
-    // the 3 means, and whether it differs with an item held, is unread.
     body[1] = 3;
-    // Bytes 4 to 7 (EQEmu's `picklockskill`) stay zero: unread.
-    // The held item's ID, or -1 with nothing held, as recorded for an
-    // ordinary click. That a click holding an item carries the item's ID is
-    // inferred (eqgame.exe 0x4906c5 takes an item argument; a type 57
-    // door's contact click carries the cursor item) until the click
-    // builder is read. Stock EQEmu reads none of it: it takes the key from
-    // its own copy of the inventory.
-    body[8..12].copy_from_slice(&held.unwrap_or(u32::MAX).to_le_bytes());
+    let (item, skill) = held.map_or((u32::MAX, 0), |held| (held.id, held.skill.min(MOST_SKILL)));
+    body[4..8].copy_from_slice(&skill.to_le_bytes());
+    // Stock EQEmu reads none of this: it takes the key from its own copy of
+    // the inventory.
+    body[8..12].copy_from_slice(&item.to_le_bytes());
     body[12..14].copy_from_slice(&player_id.to_le_bytes());
     EncodedCommand {
         opcode: CLICK_OPCODE,
@@ -338,61 +359,88 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
             ensure!(body.is_empty(), "invalid door removal length");
             Ok(Some(DoorUpdate::RemoveAll))
         }
-        0x700d => {
-            ensure!(body.len() == 2, "invalid door movement length");
-            Ok(Some(DoorUpdate::Move {
-                id: body[0],
-                action: body[1],
-            }))
-        }
-        0x4c24 => {
-            ensure!(
-                body.len().is_multiple_of(80) && body.len() <= MOST_DOORS * 80,
-                "invalid door table length"
-            );
-            let mut ids = std::collections::BTreeSet::new();
-            let mut doors = Vec::with_capacity(body.len() / 80);
-            for record in body.as_chunks::<80>().0 {
-                let word = |offset| {
-                    u32::from_le_bytes([
-                        record[offset],
-                        record[offset + 1],
-                        record[offset + 2],
-                        record[offset + 3],
-                    ])
-                };
-                let position = Position {
-                    x: f32::from_bits(word(36)),
-                    y: f32::from_bits(word(32)),
-                    z: f32::from_bits(word(40)),
-                    heading: f32::from_bits(word(44)),
-                };
-                ensure!(
-                    [position.x, position.y, position.z, position.heading]
-                        .iter()
-                        .all(|v| v.is_finite()),
-                    "non-finite door placement"
-                );
-                let id = record[60];
-                ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
-                let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
-                doors.push(Door {
-                    id,
-                    model: String::from_utf8_lossy(&record[..end]).into_owned(),
-                    position,
-                    incline: word(48),
-                    size: u16::from_le_bytes([record[52], record[53]]),
-                    open_type: record[61],
-                    state_at_spawn: record[62],
-                    invert_state: record[63],
-                    parameter: word(64),
-                    action: None,
-                });
-            }
-            Ok(Some(DoorUpdate::Spawn(doors)))
-        }
+        0x700d => door_move(body).map(Some),
+        0x4c24 => door_table(body, TITANIUM_RECORD, |record| {
+            Ok(u16::from_le_bytes([record[52], record[53]]))
+        })
+        .map(Some),
         _ => Ok(None),
     }
+}
+
+/// Decodes a door's move: the server's 2-byte `MoveDoor_Struct`, the door
+/// and the action, which stock `EQEmu` sends Titanium and `RoF2` alike with
+/// no encoder (`Doors::Open`, `ForceOpen`, `ForceClose`, `ToggleState` in
+/// `zone/doors.cpp`).
+///
+/// # Errors
+/// Rejects any length but 2.
+pub(crate) fn door_move(body: &[u8]) -> Result<DoorUpdate> {
+    ensure!(body.len() == 2, "invalid door movement length");
+    Ok(DoorUpdate::Move {
+        id: body[0],
+        action: body[1],
+    })
+}
+
+/// Decodes a door table of `record_length`-byte records, whose fields up to
+/// the parameter at 64 sit where Titanium's do, with the size as `size`
+/// reads it from a record; a malformed table is refused whole.
+///
+/// # Errors
+/// Rejects partial records, tables of more than 500 doors, a repeated ID other
+/// than a static object's, non-finite placement coordinates, and a size
+/// `size` refuses.
+pub(crate) fn door_table(
+    body: &[u8],
+    record_length: usize,
+    size: impl Fn(&[u8]) -> Result<u16>,
+) -> Result<DoorUpdate> {
+    ensure!(
+        body.len().is_multiple_of(record_length) && body.len() <= MOST_DOORS * record_length,
+        "invalid door table length"
+    );
+    let mut ids = std::collections::BTreeSet::new();
+    let mut doors = Vec::with_capacity(body.len() / record_length);
+    for record in body.chunks_exact(record_length) {
+        let word = |offset| {
+            u32::from_le_bytes([
+                record[offset],
+                record[offset + 1],
+                record[offset + 2],
+                record[offset + 3],
+            ])
+        };
+        let position = Position {
+            x: f32::from_bits(word(36)),
+            y: f32::from_bits(word(32)),
+            z: f32::from_bits(word(40)),
+            heading: f32::from_bits(word(44)),
+        };
+        ensure!(
+            [position.x, position.y, position.z, position.heading]
+                .iter()
+                .all(|v| v.is_finite()),
+            "non-finite door placement"
+        );
+        let id = record[60];
+        ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
+        let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
+        let size = size(record)?;
+        doors.push(Door {
+            id,
+            model: String::from_utf8_lossy(&record[..end]).into_owned(),
+            position,
+            incline: word(48),
+            size,
+            open_type: record[61],
+            state_at_spawn: record[62],
+            invert_state: record[63],
+            parameter: word(64),
+            action: None,
+        });
+    }
+    Ok(DoorUpdate::Spawn(doors))
 }
 
 #[cfg(test)]

@@ -22,6 +22,32 @@ pub const OFFER_OPCODE: u16 = 0x238f;
 pub const TRAIN_OPCODE: u16 = 0x11d2;
 /// `OP_GMEndTraining`: leaving training.
 pub const END_OPCODE: u16 = 0x613d;
+/// `EQMac`'s `OP_GMTraining` (0x409c swapped): asking a guildmaster to
+/// train, which TAKP and Quarm answer with the same 244 bytes filled in
+/// (`GMTrainee_Struct`, `Client::OPGMTraining` at TAKP 44afcbf and Quarm
+/// fc75fcf).
+pub const EQMAC_OFFER_OPCODE: u16 = 0x9c40;
+/// `EQMac`'s `OP_GMTrainSkill` (0x4140 swapped): one practice, the 12-byte
+/// `GMSkillChange_Struct`.
+pub const EQMAC_TRAIN_OPCODE: u16 = 0x4041;
+/// `EQMac`'s `OP_GMEndTraining` (0x409d swapped): leaving training, the
+/// 4-byte `GMTrainEnd_Struct`.
+pub const EQMAC_END_OPCODE: u16 = 0x9d40;
+
+/// `EQMac`'s `OP_SkillUpdate2` (0x41be swapped): a skill's new value that
+/// prints no line, which TAKP and Quarm send for a practice
+/// (`Client::SetSkill` with `silent`), as `SkillUpdate2_Struct`: the spawn,
+/// two bytes of padding, then the skill and its value as 32-bit integers.
+pub const EQMAC_SKILL_OPCODE: u16 = 0xbe41;
+
+/// The length of `EQMac`'s request and of the guildmaster's answer.
+const EQMAC_OFFER_LENGTH: usize = 244;
+/// Where the `EQMac` answer keeps the guildmaster's price scale (`greed`,
+/// `Client::CalcPriceMod`), whether it admitted the player (`success`), and
+/// the 32 language flags.
+const EQMAC_GREED: usize = 204;
+const EQMAC_SUCCESS: usize = 208;
+const EQMAC_LANGUAGES: usize = 209;
 
 /// How far from a guildmaster the server lets the player train: within 200
 /// units (`USE_NPC_RANGE2`), up and down as well as across.
@@ -178,6 +204,35 @@ pub struct TrainingOffer {
     /// and the session's source-backed eligibility rules. The wire carries
     /// flags rather than numeric language caps (native eqgame 0x56b897).
     pub language_caps: Vec<u32>,
+    /// `EQMac`'s price scale for this guildmaster, by which TAKP and Quarm
+    /// multiply a practice's cost; None on Titanium, whose `EQEmu` prices a
+    /// practice without one.
+    pub price_scale: Option<PriceScale>,
+}
+
+/// A guildmaster's price scale as the `EQMac` answer carries it: a 32-bit
+/// float, kept by its bits so offers compare exactly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PriceScale(u32);
+
+impl PriceScale {
+    /// The scale from its float.
+    #[must_use]
+    pub const fn new(scale: f32) -> Self {
+        Self(scale.to_bits())
+    }
+
+    /// The scale.
+    #[must_use]
+    pub const fn get(self) -> f32 {
+        f32::from_bits(self.0)
+    }
+}
+
+impl Serialize for PriceScale {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f32(self.get())
+    }
 }
 
 impl TrainingOffer {
@@ -304,6 +359,25 @@ pub fn practice_cost(value: u32) -> u64 {
     u64::try_from(u128::from(over).pow(3) / 100).unwrap_or(u64::MAX)
 }
 
+/// What a practice costs on TAKP and Quarm, in copper, from the skill's
+/// value before it and the guildmaster's price scale: nothing up to 10, and
+/// then the cube of the value over 10, times the scale, times 0.0099999998,
+/// cut to a whole number, as `Client::OPGMTrainSkill` computes it in double
+/// precision (TAKP 44afcbf, Quarm fc75fcf). A new skill costs nothing.
+#[must_use]
+pub fn eqmac_practice_cost(value: u32, scale: PriceScale) -> u64 {
+    let over = f64::from(value.saturating_sub(10));
+    let cost = over * over * over * f64::from(scale.get()) * 0.009_999_999_8;
+    if cost.is_finite() && cost >= 1.0 {
+        // Truncated as the server's cast to int does.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let whole = cost.trunc() as u64;
+        whole
+    } else {
+        0
+    }
+}
+
 /// Decodes a Titanium training packet from the server: the guildmaster's
 /// answer to an open request; None for any other opcode.
 ///
@@ -350,6 +424,7 @@ pub fn titanium_offer(body: &[u8]) -> Result<TrainingOffer> {
         trainer,
         caps: (0..100).map(|skill| word(8 + skill * 4)).collect(),
         language_caps: Vec::new(),
+        price_scale: None,
     })
 }
 
@@ -363,6 +438,76 @@ pub fn titanium_reply(body: &[u8]) -> Result<TrainingReply> {
         trainee: u32::from_le_bytes(body[4..8].try_into()?),
         accepted: body[412] != 0,
         language_flags: body[413..445].try_into()?,
+    })
+}
+
+/// Encodes asking a guildmaster to train on TAKP and Quarm: the
+/// guildmaster's and the player's spawns as 16-bit IDs, and room for the
+/// answer. Both servers drop any other length.
+#[must_use]
+pub fn eqmac_open(trainer: u16, player: u16) -> EncodedCommand {
+    let mut body = vec![0; EQMAC_OFFER_LENGTH];
+    body[..2].copy_from_slice(&trainer.to_le_bytes());
+    body[2..4].copy_from_slice(&player.to_le_bytes());
+    EncodedCommand {
+        opcode: EQMAC_OFFER_OPCODE,
+        body,
+    }
+}
+
+/// Reads TAKP's and Quarm's answer to an open request: the guildmaster,
+/// the player, each skill's most as a 16-bit value, the price scale, whether
+/// the guildmaster admitted the player, and the language flags. A refusal
+/// for faction is the request sent back with `success` 0.
+///
+/// # Errors
+/// Rejects an answer of the wrong length, and one without a guildmaster.
+pub fn eqmac_reply(body: &[u8]) -> Result<TrainingReply> {
+    ensure!(
+        body.len() == EQMAC_OFFER_LENGTH,
+        "invalid EQMac training offer length"
+    );
+    let short = |at: usize| u16::from_le_bytes([body[at], body[at + 1]]);
+    let trainer = short(0);
+    ensure!(trainer != 0, "training offer without a guildmaster");
+    let scale = f32::from_le_bytes(body[EQMAC_GREED..EQMAC_GREED + 4].try_into()?);
+    Ok(TrainingReply {
+        trainee: u32::from(short(2)),
+        accepted: body[EQMAC_SUCCESS] != 0,
+        language_flags: body[EQMAC_LANGUAGES..EQMAC_LANGUAGES + 32].try_into()?,
+        offer: TrainingOffer {
+            trainer,
+            caps: (0..100)
+                .map(|skill| u32::from(short(4 + skill * 2)))
+                .collect(),
+            language_caps: Vec::new(),
+            price_scale: Some(PriceScale::new(scale)),
+        },
+    })
+}
+
+/// A skill's new value for a spawn, as `EQMac`'s silent update names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpawnSkill {
+    /// The spawn whose skill it is.
+    pub spawn_id: u16,
+    /// The skill.
+    pub skill_id: u32,
+    /// Its value now.
+    pub value: u32,
+}
+
+/// Reads `EQMac`'s silent skill update.
+///
+/// # Errors
+/// Rejects a body other than 12 bytes, and a negative skill or value.
+pub fn eqmac_skill(body: &[u8]) -> Result<SpawnSkill> {
+    ensure!(body.len() == 12, "invalid EQMac silent skill update length");
+    let int = |at: usize| i32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    Ok(SpawnSkill {
+        spawn_id: u16::from_le_bytes([body[0], body[1]]),
+        skill_id: u32::try_from(int(4)).map_err(|_| anyhow::anyhow!("negative skill"))?,
+        value: u32::try_from(int(8)).map_err(|_| anyhow::anyhow!("negative skill value"))?,
     })
 }
 
@@ -408,6 +553,36 @@ pub fn titanium_practice(trainer: u16, subject: TrainingSubject) -> Result<Encod
         opcode: TRAIN_OPCODE,
         body,
     })
+}
+
+/// Encodes one practice on TAKP and Quarm: Titanium's 12 bytes with the
+/// player's spawn at +2, as `GMSkillChange_Struct` names it, on the Mac
+/// opcode.
+///
+/// # Errors
+/// As [`titanium_practice`].
+pub fn eqmac_practice(
+    trainer: u16,
+    player: u16,
+    subject: TrainingSubject,
+) -> Result<EncodedCommand> {
+    let mut practice = titanium_practice(trainer, subject)?;
+    practice.opcode = EQMAC_TRAIN_OPCODE;
+    practice.body[2..4].copy_from_slice(&player.to_le_bytes());
+    Ok(practice)
+}
+
+/// Encodes leaving training on TAKP and Quarm: the guildmaster's and the
+/// player's spawns as 16-bit IDs.
+#[must_use]
+pub fn eqmac_end(trainer: u16, player: u16) -> EncodedCommand {
+    let mut body = vec![0; 4];
+    body[..2].copy_from_slice(&trainer.to_le_bytes());
+    body[2..].copy_from_slice(&player.to_le_bytes());
+    EncodedCommand {
+        opcode: EQMAC_END_OPCODE,
+        body,
+    }
 }
 
 /// Encodes leaving training with a guildmaster.
@@ -571,5 +746,97 @@ mod tests {
         assert_eq!(practice_cost(11), 0, "one cubed is under a hundred");
         assert_eq!(practice_cost(15), 1);
         assert_eq!(practice_cost(110), 10_000);
+    }
+
+    #[test]
+    fn eqmac_training_is_the_mac_program_s_own_bytes() {
+        let open = eqmac_open(0x0123, 0x0456);
+        assert_eq!(open.opcode, EQMAC_OFFER_OPCODE);
+        let mut expected = vec![0; 244];
+        expected[..4].copy_from_slice(&[0x23, 0x01, 0x56, 0x04]);
+        assert_eq!(open.body, expected);
+
+        let skill = eqmac_practice(0x0123, 0x0456, TrainingSubject::Skill(33)).unwrap();
+        assert_eq!(
+            (skill.opcode, skill.body),
+            (
+                EQMAC_TRAIN_OPCODE,
+                vec![0x23, 0x01, 0x56, 0x04, 0, 0, 0, 0, 33, 0, 0, 0]
+            )
+        );
+        let language = eqmac_practice(0x0123, 0x0456, TrainingSubject::Language(25)).unwrap();
+        assert_eq!(
+            language.body,
+            [0x23, 0x01, 0x56, 0x04, 1, 0, 0, 0, 25, 0, 0, 0]
+        );
+        assert!(eqmac_practice(1, 2, TrainingSubject::Skill(100)).is_err());
+        assert!(eqmac_practice(1, 2, TrainingSubject::Language(26)).is_err());
+
+        let end = eqmac_end(0x0123, 0x0456);
+        assert_eq!(
+            (end.opcode, end.body),
+            (EQMAC_END_OPCODE, vec![0x23, 0x01, 0x56, 0x04])
+        );
+    }
+
+    #[test]
+    fn an_eqmac_answer_reads_sixteen_bit_caps_its_scale_and_admission() {
+        let mut body = eqmac_open(0x0123, 0x0456).body;
+        body[4 + 2 * 33..4 + 2 * 33 + 2].copy_from_slice(&200u16.to_le_bytes());
+        body[4 + 2 * 99..4 + 2 * 99 + 2].copy_from_slice(&5u16.to_le_bytes());
+        body[204..208].copy_from_slice(&1.25f32.to_le_bytes());
+        body[208] = 1;
+        body[209..241].fill(201);
+        let reply = eqmac_reply(&body).unwrap();
+        assert_eq!((reply.trainee, reply.accepted), (0x0456, true));
+        assert_eq!(reply.language_flags, [201; 32]);
+        assert_eq!(reply.offer.trainer, 0x0123);
+        assert_eq!(
+            (reply.offer.cap(33), reply.offer.cap(99), reply.offer.cap(0)),
+            (200, 5, 0)
+        );
+        assert_eq!(reply.offer.caps.len(), 100);
+        assert_eq!(reply.offer.price_scale.map(PriceScale::get), Some(1.25));
+        body[208] = 0;
+        assert!(!eqmac_reply(&body).unwrap().accepted);
+        assert!(eqmac_reply(&body[..243]).is_err());
+        let mut nobody = body.clone();
+        nobody[..2].fill(0);
+        assert!(eqmac_reply(&nobody).is_err());
+    }
+
+    #[test]
+    fn an_eqmac_practice_costs_the_server_s_scaled_cube() {
+        let scale = |value: f32| PriceScale::new(value);
+        // Up to 10 is free, whatever the scale.
+        assert_eq!(eqmac_practice_cost(0, scale(1.25)), 0);
+        assert_eq!(eqmac_practice_cost(10, scale(1.25)), 0);
+        // 1 * 0.8 * 0.0099999998 and 1 * 1.25 * 0.0099999998 cut to 0.
+        assert_eq!(eqmac_practice_cost(11, scale(0.8)), 0);
+        assert_eq!(eqmac_practice_cost(11, scale(1.25)), 0);
+        // 40^3 = 64000: 64000 * 0.8 (as f32) * 0.0099999998 = 511.99...
+        assert_eq!(eqmac_practice_cost(50, scale(0.8)), 511);
+        assert_eq!(eqmac_practice_cost(50, scale(1.25)), 799);
+        // 190^3 = 6859000.
+        assert_eq!(eqmac_practice_cost(200, scale(0.8)), 54871);
+        assert_eq!(eqmac_practice_cost(200, scale(1.25)), 85737);
+        assert_eq!(eqmac_practice_cost(200, scale(f32::NAN)), 0);
+    }
+
+    #[test]
+    fn an_eqmac_silent_skill_update_names_its_spawn() {
+        let body = [7, 0, 0xaa, 0xbb, 33, 0, 0, 0, 201, 0, 0, 0];
+        assert_eq!(
+            eqmac_skill(&body).unwrap(),
+            SpawnSkill {
+                spawn_id: 7,
+                skill_id: 33,
+                value: 201
+            }
+        );
+        assert!(eqmac_skill(&body[..11]).is_err());
+        let mut negative = body;
+        negative[11] = 0x80;
+        assert!(eqmac_skill(&negative).is_err());
     }
 }

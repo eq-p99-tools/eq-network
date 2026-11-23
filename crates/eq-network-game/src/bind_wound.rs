@@ -132,9 +132,19 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<BindWoundUpdate>> {
     if opcode != OPCODE {
         return Ok(None);
     }
+    answer(body).map(Some)
+}
+
+/// Reads the server's answer about a bandaging, the 8-byte
+/// `BindWound_Struct` stock `EQEmu` sends Titanium and `RoF2` alike with no
+/// encoder (`Client::BindWound`): the one bandaged, then the type.
+///
+/// # Errors
+/// Rejects any length but 8 and a type no server is known to send.
+pub(crate) fn answer(body: &[u8]) -> Result<BindWoundUpdate> {
     ensure!(body.len() == 8, "invalid bind wound length");
     let ended = BindWoundUpdate::Ended;
-    Ok(Some(match u32::from_le_bytes(body[4..8].try_into()?) {
+    Ok(match u32::from_le_bytes(body[4..8].try_into()?) {
         0 => BindWoundUpdate::Bandaged,
         1 => ended(BindWoundEnd::Complete),
         3 => BindWoundUpdate::Unlocked,
@@ -144,7 +154,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<BindWoundUpdate>> {
         7 => ended(BindWoundEnd::YouMoved),
         8 => BindWoundUpdate::Released,
         other => bail!("unknown bind wound answer {other}"),
-    }))
+    })
 }
 
 #[cfg(test)]

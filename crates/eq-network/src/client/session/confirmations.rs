@@ -134,7 +134,7 @@ impl<T: Clone + PartialEq> Pending<T> {
 
 /// Both open questions and accepted continuations lose their admission
 /// context on any transfer or own death.
-fn interrupted(message: &Message, world: &World) -> bool {
+pub(super) fn interrupted(message: &Message, world: &World) -> bool {
     world.lifecycle.blocks_motion()
         || matches!(
             message,
@@ -345,14 +345,35 @@ impl Feature for Translocate {
 /// ours, inferred (checklist 6.492b). `EQEmu` tells the challenger a
 /// decline only in a line of text, so nothing else may end it; the
 /// official program's own bound is pending R49-6h.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Mac-era duel, held for 11g; Titanium has its own"
+    )
+)]
 const CHALLENGE_REMEMBERED: Duration = Duration::from_secs(60);
 
 /// The shortest wait between two challenges the player sends, so a held
 /// hotbutton cannot send a stream of them: ours, inferred (checklist
 /// 6.492b, pending R49-6h).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Mac-era duel, held for 11g; Titanium has its own"
+    )
+)]
 const CHALLENGE_PACE: Duration = Duration::from_secs(5);
 
 /// A challenge the player sent and nothing has ended yet.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Mac-era duel, held for 11g; Titanium has its own"
+    )
+)]
 #[derive(Clone, Copy, Debug)]
 struct Challenged {
     /// The player challenged.
@@ -372,6 +393,13 @@ struct Challenged {
 /// So the challenge the player sent is remembered, and that record from the
 /// one challenged opens no question and sends nothing; the duel begins
 /// only on the server's `OP_DuelAccept`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Mac-era duel, held for 11g; Titanium has its own"
+    )
+)]
 pub(super) struct Duel {
     sequence: u64,
     current: Option<DuelQuestion>,
@@ -385,6 +413,13 @@ pub(super) struct Duel {
     last_challenge: Option<Instant>,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Mac-era duel, held for 11g; Titanium has its own"
+    )
+)]
 impl Duel {
     /// A duel answered on a server type's wire; `echoes_challenge` as the
     /// field says.
@@ -597,7 +632,8 @@ impl Feature for Duel {
                 self.challenged
                     .take_if(|challenged| challenged.target == from);
             }
-            DuelUpdate::Challenge { .. } => (),
+            // Titanium's own refusal, which the Mac-era duel never sees.
+            DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => (),
         }
         Ok(())
     }
@@ -986,7 +1022,10 @@ mod tests {
 
     #[test]
     fn a_challenge_is_asked_once_and_answered_once_on_the_players_word() {
-        use eq_network_game::socials::{titanium_duel_accept, titanium_duel_decline};
+        // The Mac-era duel (held for 11g); Titanium's is `duel.rs`, which has
+        // no decline (R49-6a).
+        use eq_network_game::socials::{eqmac_duel_accept, eqmac_duel_decline};
+        let wire = &super::super::wire::EqMac;
         let mut feature = Duel::new(false);
         let mut world = duel_world();
         let question = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 })
@@ -1003,18 +1042,20 @@ mod tests {
             session_id: 4,
             ..question.id
         };
-        let outcome =
-            testing::run(|out| feature.handle(&duel_answer(stale, true), &mut world, out));
+        let outcome = testing::run_on(wire, |out| {
+            feature.handle(&duel_answer(stale, true), &mut world, out)
+        });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert!(outcome.events.iter().any(|event| matches!(
             event,
             ClientEvent::World(WorldEvent::DuelRefused { offer_id, .. }) if *offer_id == stale
         )));
-        let outcome =
-            testing::run(|out| feature.handle(&duel_answer(question.id, false), &mut world, out));
+        let outcome = testing::run_on(wire, |out| {
+            feature.handle(&duel_answer(question.id, false), &mut world, out)
+        });
         outcome.result.unwrap();
-        assert_eq!(outcome.sent, [titanium_duel_decline(12, 7)]);
+        assert_eq!(outcome.sent, [eqmac_duel_decline(12, 7)]);
         assert!(outcome.events.iter().any(|event| matches!(
             event,
             ClientEvent::World(WorldEvent::ConsentClosed {
@@ -1023,15 +1064,17 @@ mod tests {
             }) if *id == question.id
         )));
         // The question is spent.
-        let outcome =
-            testing::run(|out| feature.handle(&duel_answer(question.id, true), &mut world, out));
+        let outcome = testing::run_on(wire, |out| {
+            feature.handle(&duel_answer(question.id, true), &mut world, out)
+        });
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         // A new challenge is a new question, and a yes accepts it.
         let next = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
         assert_ne!(next.id, question.id);
-        let outcome =
-            testing::run(|out| feature.handle(&duel_answer(next.id, true), &mut world, out));
-        assert_eq!(outcome.sent, [titanium_duel_accept(12, 7)]);
+        let outcome = testing::run_on(wire, |out| {
+            feature.handle(&duel_answer(next.id, true), &mut world, out)
+        });
+        assert_eq!(outcome.sent, [eqmac_duel_accept(12, 7)]);
     }
 
     #[test]

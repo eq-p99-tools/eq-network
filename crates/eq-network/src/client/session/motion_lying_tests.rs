@@ -77,7 +77,7 @@ fn titanium_moves_no_lying_player_and_stands_no_one_to_move() {
     for mode in [
         MovementMode::Forward,
         MovementMode::Backward,
-        MovementMode::Strafe,
+        MovementMode::Strafe(eq_network_game::movement::Pace::Run),
         MovementMode::Walk,
     ] {
         let output = testing::run(|out| {

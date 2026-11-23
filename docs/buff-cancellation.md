@@ -15,7 +15,12 @@ Titanium EQEmu and P99 offer `CancellingBuffs`. P99 sends the two-record
 sequence built by `buffs::cancel::project1999_packets`: the first record names
 the old spell with cleared buff fields, the second names an empty slot with its
 clear flag. Its source is not yet cited in this repository (recording checklist
-6.396). Quarm and TAKP are deferred.
+6.396). Quarm and TAKP offer it from their own handlers (6.604 E3,
+source-derived, not yet checked live): one 20-byte `SpellBuffFade_Struct` at
+`0x3241`, the own spawn, the received buff record, the slot and `bufffade` 1.
+Both servers read only the spell. Quarm fades only a beneficial spell that
+does not persist through death; TAKP fades any spell, harmful ones too, but
+the session keeps to the same beneficial-only rule on both.
 
 The initialized request uses Titanium `OP_Buff` (`0x6a53`), 32 bytes: own entity
 at 0, the received 20-byte buff record at 4, slot at 24 and zero at 28. The unused

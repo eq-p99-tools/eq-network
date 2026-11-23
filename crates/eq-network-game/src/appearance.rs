@@ -14,7 +14,7 @@
 //! (`common/eq_packet_structs.h`) and Titanium `Illusion_Struct`
 //! (`common/patches/titanium_structs.h`); and TAKP's `Illusion_Struct` and
 //! `FaceChange_Struct` (`common/eq_packet_structs.h`).
-use crate::world::WorldEvent;
+use crate::{command::EncodedCommand, world::WorldEvent};
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -145,6 +145,44 @@ pub struct Appearance {
     /// What the spawn holds or suffers that shapes how it stands and moves,
     /// from Titanium's record and updates.
     pub states: SpawnStates,
+}
+
+/// The bit of the player's state word that Titanium's `/sheathe` and
+/// `/aggressive` flip (read R49-6n: 2 and 8).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Stance {
+    /// `/sheathe`: [`SpawnStates::WEAPON_SHEATHED`], 2.
+    Sheathed,
+    /// `/aggressive`: [`SpawnStates::FORCED_AGGRESSIVE`], 8.
+    Aggressive,
+}
+
+impl Stance {
+    /// The state it flips.
+    #[must_use]
+    pub const fn states(self) -> SpawnStates {
+        match self {
+            Self::Sheathed => SpawnStates::WEAPON_SHEATHED,
+            Self::Aggressive => SpawnStates::FORCED_AGGRESSIVE,
+        }
+    }
+}
+
+/// Titanium's word that the player took on (`on`) or left `states`:
+/// `OP_PlayerStateAdd` or `OP_PlayerStateRemove`, 8 bytes, the player's
+/// spawn then the states, each 32 bits (read R49-6n).
+#[must_use]
+pub fn titanium_player_state(own: u16, states: SpawnStates, on: bool) -> EncodedCommand {
+    let mut body = u32::from(own).to_le_bytes().to_vec();
+    body.extend(states.bits().to_le_bytes());
+    EncodedCommand {
+        opcode: if on {
+            STATES_ADDED_OPCODE
+        } else {
+            STATES_REMOVED_OPCODE
+        },
+        body,
+    }
 }
 
 /// What a spawn holds or suffers that shapes how it stands and moves: a set

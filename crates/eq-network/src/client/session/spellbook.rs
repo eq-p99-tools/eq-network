@@ -390,6 +390,7 @@ impl Feature for Spellbook {
                 | ClientCommand::UseKnightAbility { .. }
                 | ClientCommand::UseDiscipline { .. }
                 | ClientCommand::UseItem(_)
+                | ClientCommand::UseBeltItem(_)
                 | ClientCommand::SetPosture { .. }
         ) {
             self.cancel("Movement, casting or posture changed", out)?;

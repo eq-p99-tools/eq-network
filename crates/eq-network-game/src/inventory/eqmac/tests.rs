@@ -589,6 +589,31 @@ fn the_server_empties_slots_and_uses_up_units() {
 }
 
 #[test]
+fn a_world_container_s_items_land_in_its_places_and_a_combine_empties_it() {
+    // Place 0 is the container's first place, not the cursor.
+    for (place, slot) in [(0, 4000), (9, 4009)] {
+        let held = record(0, 99, place);
+        assert!(matches!(
+            decode(WORLD_ITEM_OPCODE, &held).unwrap(),
+            Some(InventoryUpdate::Set(items))
+                if items.len() == 1 && items[0].slot == InventorySlot(slot) && items[0].details.id == 99
+        ));
+    }
+    for place in [-1, 10, 22, 4000] {
+        assert!(decode(WORLD_ITEM_OPCODE, &record(0, 99, place)).is_err());
+    }
+    assert!(decode(WORLD_ITEM_OPCODE, &record(0, 99, 0)[..359]).is_err());
+    // Both servers send `Clear` = 1 and seven unused bytes.
+    assert_eq!(
+        decode(CLEAR_OBJECT_OPCODE, &[1, 0, 0, 0, 0, 0, 0, 0]).unwrap(),
+        Some(InventoryUpdate::WorldEmptied)
+    );
+    for body in [&[0_u8; 8][..], &[1; 7], &[1; 9]] {
+        assert!(decode(CLEAR_OBJECT_OPCODE, body).is_err());
+    }
+}
+
+#[test]
 fn moves_go_out_in_eqmac_numbers() {
     let words = |command: &EncodedCommand| -> Vec<u32> {
         command

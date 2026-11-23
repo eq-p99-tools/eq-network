@@ -833,6 +833,13 @@ impl Script {
             .chain(rof2_chat())
             .chain(rof2_casting())
             .chain(rof2_buffs())
+            .chain(rof2_spellbook())
+            .chain(rof2_pools())
+            .chain(rof2_world())
+            .chain(rof2_socials())
+            .chain(rof2_answers())
+            .chain(rof2_notices())
+            .chain(rof2_loot_titles())
         {
             script.packet(opcode, body);
         }
@@ -1053,6 +1060,183 @@ fn rof2_buffs() -> Vec<(u16, Vec<u8>)> {
         (0x3377, icons(4321, 0, u32::MAX, 0)),
         (0x4f4b, icons(77, 1, 2345, 5)),
         (0x5882, icons(312, 1, 3456, 0)),
+    ]
+}
+
+/// A memorize, a spell bar refresh, a swap and a deletion past Titanium's
+/// book (6.532), as `RoF2` messages.
+fn rof2_spellbook() -> Vec<(u16, Vec<u8>)> {
+    let words = |values: [u32; 4]| values.map(u32::to_le_bytes).concat();
+    vec![
+        (0x217c, words([2, 1234, 1, 0])),
+        (0x217c, words([11, 1234, 3, 1500])),
+        (0x0efa, [12u32, 650].map(u32::to_le_bytes).concat()),
+        (
+            0x3358,
+            [&650u16.to_le_bytes()[..], &[0, 0, 1, 0, 0, 0]].concat(),
+        ),
+    ]
+}
+
+/// The player's mana and endurance pools, and a group member's two
+/// percents (6.538), as `RoF2` messages.
+fn rof2_pools() -> Vec<(u16, Vec<u8>)> {
+    let pool = |current: u32, maximum: u32| {
+        [
+            &current.to_le_bytes()[..],
+            &maximum.to_le_bytes(),
+            &4321u16.to_le_bytes(),
+        ]
+        .concat()
+    };
+    vec![
+        (0x3791, pool(300, 1200)),
+        (0x5f42, pool(200, 900)),
+        (0x2404, [&77u16.to_le_bytes()[..], &[40]].concat()),
+        (0x1c81, [&77u16.to_le_bytes()[..], &[60]].concat()),
+    ]
+}
+
+/// A door table of one door, its move, a ground object, its click, the
+/// zone-in weather and a weather change, as stock `EQEmu` writes them for
+/// `RoF2` (6.539), with filler where the encoders write nothing from the
+/// server.
+fn rof2_world() -> Vec<(u16, Vec<u8>)> {
+    let mut door = vec![0xa5; 100];
+    door[..32].fill(0);
+    door[..10].copy_from_slice(b"TESTDOOR01");
+    for (at, value) in [(32, -12.5f32), (36, 27.25), (40, 9.0), (44, 128.0)] {
+        door[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    door[48..52].copy_from_slice(&0u32.to_le_bytes());
+    door[52..56].copy_from_slice(&100u32.to_le_bytes());
+    door[60..64].copy_from_slice(&[7, 58, 0, 0]);
+    door[64..68].copy_from_slice(&0u32.to_le_bytes());
+    door[80..87].copy_from_slice(&[0, 1, 0, 1, 0, 0, 0]);
+    let floats: Vec<u8> = [256.0f32, 0.5, -0.25, 1.0, -40.5, 120.25, 3.75]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    let object = [
+        &4321u32.to_le_bytes()[..],
+        b"IT63_ACTORDEF\0",
+        &54u16.to_le_bytes(),
+        &0u16.to_le_bytes(),
+        &4321u32.to_le_bytes(),
+        &0u32.to_le_bytes(),
+        &floats,
+        &1u32.to_le_bytes(),
+        &[0x5a; 52],
+    ]
+    .concat();
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    vec![
+        (0x7291, door),
+        (0x08e8, vec![7, 2]),
+        (0x6fca, object),
+        (0x4aa1, words(&[4321, 4321])),
+        (0x661e, words(&[0, 5, 0])),
+        (0x661e, words(&[1, 3])),
+    ]
+}
+
+/// A roll, an assist, a yell for help, particles, a camera shake, a sound
+/// file and a spell's nimbus, as stock `EQEmu` sends them to `RoF2` (6.541).
+fn rof2_socials() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let mut roll = words(&[1, 100, 42]);
+    let mut name = vec![0; 64];
+    name[..10].copy_from_slice(b"Testroller");
+    roll.extend(name);
+    let mut particles = vec![77];
+    particles.extend([88, 1, 0]);
+    particles.extend([0; 12]);
+    let mut nimbus = words(&[1234, 4321, 77, 6000, 0, 3000]);
+    nimbus.extend([1, 1, 0, 0]);
+    vec![
+        (0x106b, roll),
+        (0x4478, words(&[77])),
+        (0x4e56, words(&[77])),
+        (0x3bc9, words(&particles)),
+        (0x127f, words(&[1500, 0.25f32.to_bits()])),
+        (0x5770, b"testsound.mp3\0".to_vec()),
+        (0x5936, nimbus),
+    ]
+}
+
+/// A target, a target's target, a charm, a cash reward, a linked reuse
+/// timer, a beg's and a pick's answers and a bandage's, as stock `EQEmu`
+/// sends them to `RoF2` (6.544).
+fn rof2_answers() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let mut pick = words(&[4321, 77, 150, 5, 0]);
+    let mut item = vec![0; 64];
+    item[..11].copy_from_slice(b"Test Dagger");
+    pick.extend(item);
+    vec![
+        (0x58e2, words(&[77])),
+        (0x0272, words(&[553])),
+        (0x5d92, words(&[4321, 77, 1])),
+        (0x5f7a, words(&[4, 3, 2, 1])),
+        (0x1619, words(&[7, 5030, 5000])),
+        (0x6703, words(&[0, 0, 0, 3, 7])),
+        (0x39e8, pick),
+        (0x0386, words(&[77, 1])),
+    ]
+}
+
+/// A quest reward, a rename, the new titles notice and the banker's change,
+/// as stock `EQEmu` sends them to `RoF2` (6.549).
+fn rof2_notices() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let mut reward = vec![77, 4321, 1500, 0, 0, 8, 7, 6, 5, 1001];
+    reward.extend([u32::MAX; 7]);
+    let mut rename = vec![0; 200];
+    rename[..7].copy_from_slice(b"Testmob");
+    rename[64..71].copy_from_slice(b"Testmob");
+    rename[128..142].copy_from_slice(b"Testmob_corpse");
+    rename[196..200].copy_from_slice(&1u32.to_le_bytes());
+    vec![
+        (0x1a30, words(&reward)),
+        (0x2c57, rename),
+        (0x0d32, Vec::new()),
+        (0x791e, words(&[1, 2, 3, 4, 10, 20, 30, 40])),
+    ]
+}
+
+/// Corpse money, the Loot All marker after it, the loot close, a surname
+/// answer, a title list and a title change, as stock `EQEmu` sends them to
+/// `RoF2` (6.552).
+fn rof2_loot_titles() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let money = |response: u8, platinum: u32| {
+        let mut body = vec![response, 0x42, 0xef, 0];
+        body.extend(words(&[platinum, 0, 0, 0]));
+        body
+    };
+    let mut surname = vec![0; 100];
+    surname[..10].copy_from_slice(b"Testplayer");
+    surname[64..68].copy_from_slice(&1u32.to_le_bytes());
+    surname[68..79].copy_from_slice(b"Testsurname");
+    let mut titles = words(&[1, 3]);
+    titles.extend(b"Testprefix\0\0");
+    let mut title = words(&[1]);
+    let mut field = vec![0; 32];
+    field[..10].copy_from_slice(b"Testsuffix");
+    title.extend(field);
+    title.extend(words(&[77]));
+    vec![
+        (0x5f44, money(1, 12)),
+        (0x5f44, money(6, 0)),
+        (0x55c4, Vec::new()),
+        (0x0423, surname),
+        (0x2d08, titles),
+        (0x4c21, title),
     ]
 }
 
@@ -1445,6 +1629,373 @@ fn an_admitted_rof2_session_hands_the_host_its_buffs() {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_spell_book_and_gems() {
+    use eq_network_game::spells::SpellUpdate;
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let book: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: 1234,
+                mode: 1,
+            }) => Some("memorized"),
+            WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot: 11,
+                reduction_ms: 1500,
+                ..
+            }) => Some("bar"),
+            WorldEvent::Spell(SpellUpdate::BookSwap { from: 12, to: 650 }) => Some("swap"),
+            WorldEvent::Spell(SpellUpdate::BookDeletion {
+                slot: 650,
+                success: true,
+            }) => Some("deleted"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(book, ["memorized", "bar", "swap", "deleted"]);
+    // The session's spell book is Titanium's and `EQMac`'s alone: an
+    // admitted RoF2 session keeps no book and answers nothing (6.532).
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, WorldEvent::SpellBook(_) | WorldEvent::BookAction(_))));
+    for opcode in ["0x217c", "0x0efa", "0x3358"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_mana_and_endurance_pools() {
+    use eq_network_game::rof2_pools::Pool;
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let pools: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::ResourcePool {
+                spawn_id: 4321,
+                pool: Pool::Mana,
+                current: 300,
+                maximum: 1200,
+            } => Some("mana"),
+            WorldEvent::ResourcePool {
+                spawn_id: 4321,
+                pool: Pool::Endurance,
+                current: 200,
+                maximum: 900,
+            } => Some("endurance"),
+            WorldEvent::ResourcePercent {
+                spawn_id: 77,
+                pool: Pool::Mana,
+                percent: 40,
+            } => Some("mana percent"),
+            WorldEvent::ResourcePercent {
+                spawn_id: 77,
+                pool: Pool::Endurance,
+                percent: 60,
+            } => Some("endurance percent"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pools,
+        ["mana", "endurance", "mana percent", "endurance percent"]
+    );
+    // RoF2 gets OP_ManaChange's current pair too, for the same change, and
+    // both reach the host, in order.
+    let resources = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                WorldEvent::Resources {
+                    mana: 300,
+                    endurance: 200
+                }
+            )
+        })
+        .unwrap();
+    let pool = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                WorldEvent::ResourcePool {
+                    pool: Pool::Mana,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(resources < pool);
+    for opcode in ["0x3791", "0x5f42", "0x2404", "0x1c81"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_doors_objects_and_weather() {
+    use eq_network_game::{clock::Weather, doors::DoorUpdate, objects::ObjectUpdate};
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let world: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Doors(DoorUpdate::Spawn(doors))
+                if doors.len() == 1
+                    && doors[0].id == 7
+                    && doors[0].model == "TESTDOOR01"
+                    && doors[0].size == 100
+                    && doors[0].open_type == 58 =>
+            {
+                Some("doors")
+            }
+            WorldEvent::Doors(DoorUpdate::Move { id: 7, action: 2 }) => Some("move"),
+            WorldEvent::Objects(ObjectUpdate::Spawn(object))
+                if object.drop_id == 4321
+                    && object.model == "IT63_ACTORDEF"
+                    && object.object_type == 1 =>
+            {
+                Some("object")
+            }
+            WorldEvent::Objects(ObjectUpdate::Remove {
+                drop_id: 4321,
+                taken_by: Some(4321),
+            }) => Some("click"),
+            WorldEvent::Weather(Weather::Snow { intensity: 3 }) => Some("weather"),
+            WorldEvent::Weather(_) => Some("other weather"),
+            _ => None,
+        })
+        .collect();
+    // The zone-in form gives nothing, as on Titanium.
+    assert_eq!(world, ["doors", "move", "object", "click", "weather"]);
+    for opcode in ["0x7291", "0x08e8", "0x6fca", "0x4aa1", "0x661e"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_rolls_assists_and_effects() {
+    use eq_network_game::{
+        effects::{Cue, Effect},
+        socials::{Assisted, Roll},
+    };
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Roll(Roll {
+                name,
+                low: 1,
+                high: 100,
+                result: 42,
+            }) if name == "Testroller" => Some("roll"),
+            WorldEvent::Assisted(Assisted { target: Some(77) }) => Some("assist"),
+            WorldEvent::YellForHelp { spawn_id: 77 } => Some("yell"),
+            WorldEvent::Effect(Effect::Particles {
+                spawn_id: 77,
+                effects,
+            }) if effects.len() == 1 && effects[0].effect == 88 => Some("particles"),
+            WorldEvent::Effect(Effect::CameraShake { intensity, .. })
+                if intensity.to_bits() == 0.25f32.to_bits() =>
+            {
+                Some("camera")
+            }
+            WorldEvent::Effect(Effect::Sound(Cue::File(file))) if file == "testsound.mp3" => {
+                Some("sound")
+            }
+            WorldEvent::Effect(Effect::Nimbus {
+                effect: 1234,
+                caster_id: 4321,
+                target_id: 77,
+                ..
+            }) => Some("nimbus"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            "roll",
+            "assist",
+            "yell",
+            "particles",
+            "camera",
+            "sound",
+            "nimbus"
+        ]
+    );
+    for opcode in [
+        "0x106b", "0x4478", "0x4e56", "0x3bc9", "0x127f", "0x5770", "0x5936",
+    ] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The roller's name reaches the host in the event only.
+    assert!(!diagnostics.iter().any(|line| line.contains("Testroller")));
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_targets_rewards_and_answers() {
+    use eq_network_game::{
+        abilities::{Ability, AskAnswer, AskOutcome},
+        bind_wound::{BindWoundEnd, BindWoundUpdate},
+    };
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Target(Some(77)) => Some("target"),
+            WorldEvent::TargetOfTarget(Some(553)) => Some("target of target"),
+            WorldEvent::Charm(charm) if charm.owner_id == Some(4321) && charm.pet_id == 77 => {
+                Some("charm")
+            }
+            WorldEvent::Reward(reward) if reward.coins.platinum == 1 => Some("reward"),
+            WorldEvent::LinkedReuse(reuse) if reuse.timer == 7 => Some("reuse"),
+            WorldEvent::AskAnswered(AskAnswer {
+                ability: Ability::Begging,
+                ..
+            }) => Some("beg"),
+            WorldEvent::AskAnswered(AskAnswer {
+                ability: Ability::PickPockets,
+                outcome: AskOutcome::Item(item),
+            }) if item == "Test Dagger" => Some("pick"),
+            WorldEvent::BindWound(BindWoundUpdate::Ended(BindWoundEnd::Complete)) => {
+                Some("bandage")
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            "target",
+            "target of target",
+            "charm",
+            "reward",
+            "reuse",
+            "beg",
+            "pick",
+            "bandage"
+        ]
+    );
+    for opcode in [
+        "0x58e2", "0x0272", "0x5d92", "0x5f7a", "0x1619", "0x6703", "0x39e8", "0x0386",
+    ] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The item's name reaches the host in the event only.
+    assert!(!diagnostics.iter().any(|line| line.contains("Test Dagger")));
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_rewards_renames_titles_and_change() {
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Reward(reward)
+                if reward.giver_id == Some(77)
+                    && reward.experience == 1500
+                    && reward.coins.platinum == 5
+                    && reward.items == [1001] =>
+            {
+                Some("reward")
+            }
+            WorldEvent::Renamed {
+                spawn_id: None,
+                old_name,
+                new_name,
+            } if old_name == "Testmob" && new_name == "Testmob_corpse" => Some("rename"),
+            WorldEvent::NewTitles => Some("titles"),
+            WorldEvent::CoinsChanged(change)
+                if change.purse.platinum == 1 && change.bank.copper == 40 =>
+            {
+                Some("change")
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(read, ["reward", "rename", "titles", "change"]);
+    for opcode in ["0x1a30", "0x2c57", "0x0d32", "0x791e"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The spawn names reach the host in the event only.
+    assert!(!diagnostics.iter().any(|line| line.contains("Testmob")));
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_loot_titles_and_surname() {
+    use eq_network_game::{
+        loot::{LootResponse, LootUpdate},
+        names::TitleChange,
+    };
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Loot(LootUpdate::Opened {
+                response: LootResponse::Normal,
+                coins,
+            }) if coins.platinum == 12 => Some("money"),
+            WorldEvent::Loot(LootUpdate::Opened { .. }) => Some("another opening"),
+            WorldEvent::Loot(LootUpdate::Closed) => Some("close"),
+            WorldEvent::SurnameAnswer {
+                accepted: true,
+                last_name,
+            } if last_name == "Testsurname" => Some("surname"),
+            WorldEvent::TitleList(titles)
+                if titles.len() == 1 && titles[0].id == 3 && titles[0].prefix == "Testprefix" =>
+            {
+                Some("titles")
+            }
+            WorldEvent::TitleChanged {
+                spawn_id: 77,
+                change: TitleChange::Suffix(suffix),
+            } if suffix == "Testsuffix" => Some("title"),
+            _ => None,
+        })
+        .collect();
+    // The Loot All marker gives no event.
+    assert_eq!(read, ["money", "close", "surname", "titles", "title"]);
+    for opcode in ["0x55c4", "0x0423", "0x2d08", "0x4c21"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The last name and the titles reach the host in the event only.
+    for text in ["Testplayer", "Testsurname", "Testprefix", "Testsuffix"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(text)),
+            "{text}"
         );
     }
 }

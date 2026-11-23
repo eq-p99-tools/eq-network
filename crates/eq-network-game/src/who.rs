@@ -12,6 +12,8 @@ use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
+pub mod eqmac;
+
 /// `OP_WhoAllRequest`: who is online, and where.
 pub const REQUEST_OPCODE: u16 = 0x5cdd;
 /// `OP_WhoAllResponse`: the players the world found.
@@ -89,8 +91,9 @@ pub struct WhoList {
     pub players: Vec<WhoPlayer>,
 }
 
-/// One player in a `/who all` answer.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+/// One player in a `/who all` answer. Its `Debug` leaves out the
+/// account's name, which only a game master is sent.
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct WhoPlayer {
     /// The line's string: 5025 shows level, class, race and zone; 5024 hides
     /// them for an anonymous player and 5023 for a roleplaying one, who shows
@@ -120,6 +123,24 @@ pub struct WhoPlayer {
     pub account: Option<(u32, String)>,
     /// For a game master asking: the player's account status.
     pub status: Option<u32>,
+}
+
+impl std::fmt::Debug for WhoPlayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WhoPlayer")
+            .field("line", &self.line)
+            .field("name", &self.name)
+            .field("rank", &self.rank)
+            .field("guild", &self.guild)
+            .field("tag", &self.tag)
+            .field("zone", &self.zone)
+            .field("class", &self.class)
+            .field("level", &self.level)
+            .field("race", &self.race)
+            .field("account", &self.account.as_ref().map(|(words, _)| words))
+            .field("status", &self.status)
+            .finish()
+    }
 }
 
 /// A string number, unless the answer leaves it out.

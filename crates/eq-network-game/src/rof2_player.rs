@@ -941,6 +941,7 @@ pub fn player(profile_body: &[u8], spawn_body: &[u8], revolution: f32) -> Result
         skills: Some(profile.skills),
         practice_points: Some(profile.practice_points),
         languages: Some(profile.languages),
+        intoxication: None,
         disciplines: Some(profile.disciplines),
         gender: u32::from(profile.gender),
         level: profile.level,

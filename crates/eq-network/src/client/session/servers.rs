@@ -19,6 +19,7 @@ use anyhow::Result;
 
 use super::{
     abilities::Abilities,
+    bandolier::Bandolier,
     bleeding::{BleedingOut, ItemCount},
     buffs::Buffs,
     camp::Camp,
@@ -26,7 +27,7 @@ use super::{
     character::Character,
     clock::Clock,
     combat::Combat,
-    confirmations::{Duel, Sacrifice, Translocate},
+    confirmations::{Sacrifice, Translocate},
     control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
@@ -61,7 +62,7 @@ use super::{
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
-    who::{FriendsWho, Who},
+    who::{FriendsWho, PacedWho, Who},
     wire::{EqMac, Rof2, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
@@ -509,6 +510,35 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Searching the Bazaar, read only. P99's era has no Bazaar, and
+    /// `RoF2`'s search is unread. TAKP and Quarm offer the Mac-era search
+    /// from their source (6.580, [`shared::eqmac_bazaar`]), not live yet:
+    /// its row 6.580a stays open, and its first use on either server is
+    /// attended. Stock `EQEmu` offers `offer(Box::new(Bazaar::titanium()))`
+    /// once its local live row passes (6.550a).
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Browsing a trader's wares in the Bazaar, read only. It comes before
+    /// the inventory, which takes a merchant's list from the same packets.
+    /// Stock `EQEmu` alone has it on Titanium, as [`ServerType::bazaar`].
+    /// No server offers it until the local live row passes (6.558a); then
+    /// stock `EQEmu` offers `offer(Box::<Browsing>::default())`.
+    fn trader_browsing(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// The profile's bandolier sets and potion belt, told at admission on
+    /// Titanium, and saving and clearing them. No server takes the four
+    /// commands until their local live rows pass (6.564 rows 1 to 5); then
+    /// stock `EQEmu` alone offers `Bandolier::sending`, the swap once read
+    /// R49-45 d too (6.566), and P99, whose era
+    /// has no bandolier, never does.
+    fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -539,6 +569,12 @@ pub(super) trait ServerType: Sync {
 
     /// Saying the player looks for a group, `/lfg` (checklist 6.515).
     fn looking(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// The task journal stock `EQEmu` keeps (gap list section 5, checklist
+    /// 6.546). P99, TAKP and Quarm have no tasks.
+    fn journal(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -597,6 +633,7 @@ pub(super) trait ServerType: Sync {
             self.casting(setup),
             self.buff_cancellation(setup),
             self.spellbook(setup),
+            self.trader_browsing(setup),
             self.inventory(setup),
             self.motion(setup),
             self.posture(setup),
@@ -638,12 +675,15 @@ pub(super) trait ServerType: Sync {
             self.surnames(setup),
             self.shielding(setup),
             self.titles(setup),
+            self.bazaar(setup),
+            self.bandolier(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
             self.ticks(setup),
             self.helm(setup),
             self.looking(setup),
+            self.journal(setup),
             self.reports(setup),
             self.dialogs(),
             self.channels(setup),
@@ -742,17 +782,13 @@ impl Shield for WorldCodec {
 /// them; each server type still lists the ones it provides.
 mod shared {
     use super::{
-        Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
-        Combat, Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect,
-        GroundObjects, Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing,
-        Looking, Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes,
-        Raids, Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
-        Targeting, Ticks, Tradeskills, Training, Transfers, Translocate, Who,
+        Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Character, Clock, Combat,
+        Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
+        Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looking, Looting, Map, Marks,
+        MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading, Resurrection,
+        Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills,
+        Training, Transfers, Translocate, Who,
     };
-
-    pub(super) fn casting() -> Box<dyn Feature> {
-        Box::<Casting>::default()
-    }
 
     pub(super) fn spellbook(edits: Edits) -> Box<dyn Feature> {
         Box::new(Spellbook::new(edits))
@@ -833,6 +869,13 @@ mod shared {
         Box::<GroundObjects>::default()
     }
 
+    /// The Mac-era Bazaar search, source-derived and not live (6.580):
+    /// TAKP's and Quarm's `Client::Handle_OP_BazaarSearch` and
+    /// `Client::SendBazaarResults` are the same.
+    pub(super) fn eqmac_bazaar() -> Box<dyn Feature> {
+        Box::new(super::super::bazaar::Bazaar::eqmac())
+    }
+
     pub(super) fn eqmac_doors() -> Box<dyn Feature> {
         Box::new(Doors::eqmac())
     }
@@ -861,7 +904,7 @@ mod shared {
     }
 
     pub(super) fn corpses() -> Box<dyn Feature> {
-        Box::new(Corpses)
+        Box::<Corpses>::default()
     }
 
     pub(super) fn pets(orders: PetOrderSet) -> Box<dyn Feature> {
@@ -884,10 +927,6 @@ mod shared {
         Box::new(Translocate::new(timeout))
     }
 
-    pub(super) fn duel(echoes_challenge: bool) -> Box<dyn Feature> {
-        Box::new(Duel::new(echoes_challenge))
-    }
-
     pub(super) fn reading() -> Box<dyn Feature> {
         Box::new(Reading)
     }
@@ -898,6 +937,12 @@ mod shared {
 
     pub(super) fn forge_combines() -> Box<dyn Feature> {
         Box::new(Tradeskills::forge())
+    }
+
+    /// TAKP's and Quarm's combines and world containers, from both servers'
+    /// `Object::HandleCombine` and `Object::HandleClick` (6.598).
+    pub(super) fn eqmac_tradeskills() -> Box<dyn Feature> {
+        Box::new(Tradeskills::eqmac())
     }
 
     pub(super) fn map() -> Box<dyn Feature> {
@@ -945,22 +990,27 @@ mod shared {
     }
 }
 
-/// The hazards a local `EQEmu` takes from the client: falls, whose damage it
-/// lowers by the player's fall damage reductions from spells, items and AAs,
-/// and drowning and lava, whose amounts it takes as sent
-/// (`Client::Handle_OP_EnvDamage`). Titanium's 0x4bdb3c and 0x41d4ba
-/// build types 251 and 250, sent by 0x41c905 as 31-byte `OP_EnvDamage`.
-/// Deployed P99 liquid report handling remains unverified.
-const LOCAL_EQEMU_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
-
-/// The hazard every Titanium server takes from the client so far: falls. The
-/// Titanium program works a fall's damage out itself (0x420dec) and reports
-/// it as `OP_EnvDamage` type 252 from the player's own spawn (sitting 6, T2;
-/// R-s). P99's own module hooks that routine and is not read, so that P99's
-/// server takes our report as it takes the official client's is inferred
-/// (recording checklist item 6.332). Remote `EQEmu` takes falls only until
-/// the liquid reports are recorded.
-const TITANIUM_FALLS: [Hazard; 1] = [Hazard::Falling];
+/// The hazards the Titanium program reports itself, on any server it plays
+/// on: falls, drowning and lava. It works a fall's damage out (0x420dec) and
+/// reports it as `OP_EnvDamage` type 252 from the player's own spawn
+/// (sitting 6, T2; R-s); 0x4bdb3c and 0x41d4ba build drowning (251) and
+/// lava (250), and 0x41c905 sends each as a 31-byte `OP_EnvDamage` (R25).
+/// `EQEmu` lowers a fall by the player's fall damage reductions and takes
+/// drowning and lava as sent (`Client::Handle_OP_EnvDamage`).
+///
+/// The liquid amounts and their timing are the program's (read R49-3); the
+/// host works them out. Inferred: that P99's server takes our reports, and
+/// the damage record after each liquid one, as it takes the official
+/// client's, since its own module hooks the fall routine and is not read
+/// (recording checklist 6.332 for falls, 6.491 for drowning and lava; its
+/// first use there is the attended liquid row). R25's door contact report
+/// is not sent (6.491).
+const TITANIUM_HAZARDS: [Hazard; 4] = [
+    Hazard::Falling,
+    Hazard::Drowning,
+    Hazard::Lava,
+    Hazard::ZoneHeat,
+];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`
 /// program reports one as `OP_EnvDamage` and then `OP_Damage` (from the
@@ -1162,10 +1212,18 @@ impl ServerType for Project1999 {
         ))
     }
 
-    /// Falls only (6.332).
+    /// Falls, drowning and lava, as the Titanium program reports them
+    /// (6.332, 6.491).
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
-        // Deployed P99 liquid report handling awaits validation.
-        offer(shared::hazards(&TITANIUM_FALLS, false))
+        offer(shared::hazards(&TITANIUM_HAZARDS, false))
+    }
+
+    /// The AA facts the air counter reads, as on `EQEmu`. That P99's
+    /// profile carries its AA bytes as `EQEmu`'s does is inferred (6.491);
+    /// a selection whose definition never comes leaves the counter
+    /// unworked, so nothing is reported from it.
+    fn environmental_aa(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
     }
 
     fn control(&self, _setup: &Setup<'_>) -> Provided {
@@ -1252,6 +1310,12 @@ impl ServerType for Project1999 {
     fn map(&self, _setup: &Setup<'_>) -> Provided {
         leave_to_player(shared::map())
     }
+
+    /// The Titanium profile's copy, told and never sent (6.559): P99's era
+    /// has no bandolier, and its bytes there are unverified.
+    fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Bandolier::reading()))
+    }
 }
 
 /// A stock `EQEmu` server speaking Titanium, which takes the player's jumps
@@ -1272,11 +1336,18 @@ impl ServerType for EqEmu {
         true
     }
 
+    /// The AA requests, local only until the local live rows pass (6.547,
+    /// 6.556; checklist 6.581); then a one-line follow-up lists them on
+    /// every stock `EQEmu` session. Every session reads the facts, unlisted,
+    /// so that the air counter works drowning out as on any Titanium server
+    /// ([`TITANIUM_HAZARDS`], 6.491).
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
-            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+            offer(Box::new(
+                super::alternate_advancement::AlternateAdvancement::listed(),
+            ))
         } else {
-            None
+            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
         }
     }
 
@@ -1471,11 +1542,11 @@ impl ServerType for EqEmu {
         offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
     }
 
-    /// Answered on the player's word as `Client::Handle_OP_DuelAccept` and
-    /// `Handle_OP_DuelDecline` read it, from source; not yet checked live
-    /// (checklist 6.492). P99, TAKP and Quarm wait for their checks.
+    /// The Titanium program's duel (R49-6 a, e, h), from the read; not
+    /// yet checked live (checklist 6.492). P99 waits for an attended row,
+    /// and TAKP and Quarm for theirs (11g).
     fn duel(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::duel(false))
+        offer(Box::<super::duel::TitaniumDuel>::default())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -1523,6 +1594,20 @@ impl ServerType for EqEmu {
     fn looking(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::looking())
     }
+    /// The task journal as `TaskManager::SendActiveTaskToClient` and the
+    /// senders around it build it, from source; not yet checked live
+    /// (checklist 6.546).
+    ///
+    /// The player's task requests (checklist 6.555) only on a local
+    /// session until the live row passes: a wrong acceptance can bring
+    /// down a zone other players share.
+    fn journal(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(if setup.local_only {
+            super::journal::Journal::with_requests()
+        } else {
+            super::journal::Journal::default()
+        }))
+    }
 
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
     /// no handler there.
@@ -1546,8 +1631,8 @@ impl ServerType for EqEmu {
     }
 
     /// Sent as `Client::Handle_OP_Shielding` reads it, from source; not
-    /// yet checked live (checklist 6.517). P99 waits for an attended check,
-    /// and TAKP and Quarm for theirs: no `EQMac` encoder is built.
+    /// yet checked live (checklist 6.517). P99 waits for an attended check.
+    /// TAKP and Quarm send their own 2-byte shield (6.603 G2).
     fn shielding(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Shielding>::default())
     }
@@ -1557,6 +1642,12 @@ impl ServerType for EqEmu {
     /// P99, TAKP and Quarm have no title list.
     fn titles(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Titles>::default())
+    }
+
+    /// The Titanium profile's copy, told at admission (6.559). The saves
+    /// and the belt, from source, wait for their live rows (6.564).
+    fn bandolier(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Bandolier::reading()))
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -1583,13 +1674,8 @@ impl ServerType for EqEmu {
         offer(Box::<Tracking>::default())
     }
 
-    fn hazards(&self, setup: &Setup<'_>) -> Provided {
-        let hazards: &[Hazard] = if setup.local_only {
-            &LOCAL_EQEMU_HAZARDS
-        } else {
-            &TITANIUM_FALLS
-        };
-        offer(shared::hazards(hazards, false))
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&TITANIUM_HAZARDS, false))
     }
 
     /// `EQEmu` regenerates the player's HP, mana and endurance on the tick
@@ -1608,6 +1694,11 @@ impl ServerType for Quarm {
     /// The native request and Quarm's `ReadBook` handler share `EQMac`'s layout.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::reading())
+    }
+
+    /// Source-derived, not live (6.580a open; first use attended).
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_bazaar())
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -1633,10 +1724,142 @@ impl ServerType for Quarm {
         offer(shared::combat(ServerProtocol::Quarm))
     }
 
+    /// `/who all` and friends in the `EQMac` program's packets
+    /// ([`eq_network_game::who::eqmac`], [`eq_network_game::friends::eqmac_request`]),
+    /// from Quarm's own handlers at SecretsOTheP/EQMacEmu fc75fcf: `Handle_OP_WhoAllRequest`
+    /// drops a body other than the 140-byte `Who_All_Struct`, and
+    /// `Handle_OP_FriendsWho` takes the comma list ending in NUL. The world's
+    /// `ClientList::SendWhoAll` and `SendFriendsWho` answer in one
+    /// `OP_WhoAllResponse`, or the zone sends string 5029 when nobody
+    /// matched. Quarm puts its challenge-mode
+    /// flags before a name (`[SF] Name`), searches those modes by the words
+    /// "solo", "selffound" and "hardcore", lets anyone look a zone up by
+    /// name, and gives zones its client's numbers (`GetClientZoneID`).
+    /// One query at a time, at least a second apart, a pace
+    /// of the session's own ([`PacedWho`]). Source-derived, not live (6.583).
+    fn who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(PacedWho::default()))
+    }
+
+    /// Rolls and assists in the `EQMac` program's packets
+    /// ([`eq_network_game::socials::eqmac_random`],
+    /// [`eq_network_game::socials::eqmac_assist`]), from Quarm's own
+    /// `Handle_OP_RandomReq` and `Handle_OP_Assist` at SecretsOTheP/EQMacEmu fc75fcf: an 8-byte
+    /// roll, answered by a 76-byte `OP_RandomReply` to the players within
+    /// 400, and a 2-byte assist, always answered on the same opcode with the
+    /// assistee's target, or the player's own spawn when it has none or
+    /// stands past 250. Ends of 0 to 32000, in order, and one assist at a
+    /// time for 5 s are the session's own ([`Socials::eqmac`]; 6.585b,
+    /// 6.585c), and emotes and yells from their own `Handle_OP_Emote` and
+    /// `Handle_OP_YellForHelp` (6.604 E1, E2). Source-derived, not live
+    /// (6.585, 6.604).
+    fn socials(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Socials::eqmac()))
+    }
+
+    /// Cancelling a beneficial buff in the 20-byte `OP_Buff` its own
+    /// `Handle_OP_Buff` reads (6.604 E3), source-derived, not live.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Buffs::eqmac()))
+    }
+
+    /// Asked and answered as its own `Handle_OP_Surname` reads it
+    /// (6.604 E5), source-derived, not live.
+    fn surnames(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Surnames::eqmac()))
+    }
+
+    /// Petitions and bug reports as its own `Handle_OP_Petition` and
+    /// `Handle_OP_Bug` read them (6.604 E6), source-derived, not live.
+    fn reports(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::reports::Reports::new(
+            super::reports::Listed::EQMAC,
+        )))
+    }
+
+    /// Corpses in the `EQMac` program's packets
+    /// ([`eq_network_game::corpses`]), from Quarm's own `Handle_OP_Consent`,
+    /// `Handle_OP_GMSummon` and `Handle_OP_CorpseDrag` at SecretsOTheP/EQMacEmu fc75fcf: a consent
+    /// of the name and its NUL, which toggles (so `/deny` is refused, 6.591a),
+    /// and the 152-byte summon and drag records. Quarm alone takes `/corpsedrop`, on an opcode of its own (0x1337 on
+    /// its wire, [`eq_network_game::corpses::quarm_drop`]), labelled as Quarm's,
+    /// not the program's.
+    /// `/corpse` goes only for a player's corpse in the zone, at most every
+    /// 250 ms (ours, 6.591c; its Mac opcode is row 6.591b). Source-derived,
+    /// not live (6.591).
+    fn corpses(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Corpses::eqmac(true)))
+    }
+
+    /// Pet commands in the `EQMac` program's packets
+    /// ([`eq_network_game::pets::eqmac_command`]), from Quarm's own
+    /// `Handle_OP_PetCommands` at SecretsOTheP/EQMacEmu fc75fcf: the 8-byte command and target,
+    /// whose numbers are Titanium's for each command it knows; taunt on, no
+    /// cast and focus fall to its default and are refused
+    /// ([`PetOrderSet::EqMac`]). Hold and feign go as asked, and the server
+    /// decides by the player's AAs. A spawn's owner comes from its record
+    /// (`petOwnerId`) and from charm.
+    /// Quarm refuses every command but get lost while the player is
+    /// invisible or hidden, with the pet's own line; the session sends the
+    /// command and lets it answer. No pace (6.595a). Source-derived, not
+    /// live (6.595).
+    fn pets(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::pets(PetOrderSet::EqMac))
+    }
+
+    /// Resurrection in the `EQMac` program's packets
+    /// ([`eq_network_game::resurrection::eqmac_offer`]), from Quarm's own
+    /// handlers at SecretsOTheP/EQMacEmu fc75fcf: `Handle_OP_RezzAnswer`
+    /// takes the 228-byte offer back, every byte as it came but the answer,
+    /// and takes the zone and place from it. On a yes Quarm moves the player
+    /// itself (`MovePCGuildID`). Quarm keeps an offer with no limit and
+    /// refuses any other while one waits; the session declines after an
+    /// hour, as the `EQMac` program's dialog is said to (inferred, 6.596a).
+    /// Source-derived, not live (6.596).
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Resurrection::eqmac(EQMAC_CONSENT_WINDOW)))
+    }
+
+    /// `Handle_OP_Sacrifice` at fc75fcf takes the 12-byte offer back, and
+    /// any answer but 0 gives the player's life; answered only on the
+    /// player's word. Source-derived, not live (6.596).
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::sacrifice())
+    }
+
+    /// Training at a guildmaster in the `EQMac` program's packets
+    /// ([`eq_network_game::training::eqmac_open`]), from Quarm's own handlers
+    /// at SecretsOTheP/EQMacEmu fc75fcf: `Client::OPGMTraining` answers the
+    /// 244-byte request with each skill's most, its price scale and whether
+    /// faction admits the player; `OPGMTrainSkill` raises a skill by the
+    /// 12-byte practice and says so with a silent skill update, and takes
+    /// the scaled cost and a point without a word, which the session
+    /// projects as the server takes them. Languages are held until the
+    /// `EQMac` program's rule is read (6.597a). Source-derived, not live
+    /// (6.597).
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Training::eqmac()))
+    }
+
+    /// Combines in a carried kit or an open world container, and opening and
+    /// closing a world container such as a forge, from Quarm's own
+    /// `Object::HandleCombine`, `Object::HandleClick` and
+    /// `Handle_OP_ClickObjectAction` at SecretsOTheP/EQMacEmu fc75fcf. A close
+    /// leaves the container's items in it. Moves into and out of it follow
+    /// Quarm's `SwapItem`: in from the cursor, out onto the empty cursor.
+    /// Source-derived, not live (6.598).
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_tradeskills())
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
-    /// for delivery and coins. Public-server validation remains pending.
+    /// for delivery and coins, with item requests paced to its 10 ms
+    /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
+    /// Public-server validation remains pending.
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Looting::requiring_empty_cursor()))
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     fn item_rules(&self) -> ItemRules {
@@ -1645,16 +1868,30 @@ impl ServerType for Quarm {
 
     /// Quarm's cast handler reads the shared 12-byte `EQMac` request and
     /// answers through its spell bar and interruption messages. Its own
-    /// class, zone and expansion restrictions remain authoritative.
+    /// class, zone and expansion restrictions remain authoritative. `/disc`
+    /// goes by number as Quarm's own `Handle_OP_Discipline` at fc75fcf reads
+    /// it (6.603 G1), source-derived, not yet checked live.
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::default().with_eqmac_disciplines()))
+    }
+
+    /// Sent as Quarm's own `Handle_OP_Shielding` at fc75fcf reads it, in 2
+    /// bytes (6.603 G2), source-derived, not yet checked live.
+    fn shielding(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Shielding>::default())
     }
 
     /// Quarm's `OPMemorizeSpell` handles scribing, memorizing and forgetting
-    /// with the shared book packet. Moving and deleting book entries remain
-    /// unchecked, as on TAKP (see `docs/public-server-gaps.md`).
+    /// with the shared book packet. Moving and deleting book entries follow
+    /// Quarm's own `Handle_OP_SwapSpell` and `Handle_OP_DeleteSpell`
+    /// (6.604 E4): each waits for the echo, and a deletion changes the book
+    /// only on success 1. The server leaves the live profile holding a
+    /// deleted spell until the next load (a gap fact).
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::spellbook(Edits::default()))
+        offer(shared::spellbook(Edits {
+            deleting: true,
+            moving: true,
+        }))
     }
 
     /// Source-backed `EQMac` abilities, with Frenzy and unfinished exchanges excluded.
@@ -1673,6 +1910,12 @@ impl ServerType for Quarm {
     /// Quarm's own move handlers accept the shared `EQMac` item/coin layouts.
     /// Keep the same inventory owner used for movement, with placement and
     /// banker checks, independent of merchants, meals and exchanges.
+    /// `/split` and `/autosplit` follow Quarm's own `Handle_OP_Split` and
+    /// appearance type 28 at fc75fcf
+    /// ([`eq_network_game::split::eqmac_split`]); the purse after a split is
+    /// known only as the server's take and four additions prove it, and a
+    /// self-found splitter, whom Quarm pays nothing, is left unknown.
+    /// Source-derived, not live (6.585).
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
             self.inventory_move_rules()?,
@@ -1683,7 +1926,7 @@ impl ServerType for Quarm {
                 coins: true,
                 merchants: true,
                 meals: true,
-                splitting: false,
+                splitting: true,
                 banker_change: false,
                 destroying_coins: false,
             },
@@ -1759,7 +2002,54 @@ impl ServerType for Quarm {
     fn talk(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::talk(setup))
     }
+
+    /// Giving items to NPCs and trading with players. Source-derived, not
+    /// live (6.576): Quarm's `Handle_OP_TradeRequest`, `TradeRequestAck`,
+    /// `TradeAcceptClick`, `CancelTrade` and `TradeRefused`
+    /// (SecretsOTheP/EQMacEmu fc75fcf, `zone/client_packet.cpp`) take the
+    /// 4-byte request and acknowledgement {to u16, from u16}, which they
+    /// check names the player, and the 6-byte refusal, as
+    /// [`eq_network_game::exchange::eqmac`] sends them. Quarm adds its own
+    /// refusals (self-found, Iksar zones, GM checks, an engaged NPC) and
+    /// paces requests itself; its `OP_TradeReset` before an NPC's
+    /// acknowledgement stays an unread planned gap.
+    fn exchange(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::exchange())
+    }
+
+    /// Groups. Source-derived, not live (6.576): Quarm's
+    /// `Handle_OP_GroupInvite2`, `GroupFollow`, `GroupCancelInvite` and
+    /// `GroupDisband` (fc75fcf) check the same 193-, 128-, 129- and 128-byte
+    /// records as TAKP, and add their own refusals (solo and challenge
+    /// modes, GM checks).
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::groups())
+    }
+
+    /// Anonymous and roleplaying. Source-derived, not live (6.576):
+    /// Quarm's `Handle_OP_SpawnAppearance` (fc75fcf) takes the 8-byte
+    /// appearance update and its anonymous type 0, 1 or 2, paced by its own
+    /// toggle timer. The away update stays refused, as on TAKP.
+    fn listing(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::listing(false))
+    }
+
+    /// Answered only on the player's word. Source-derived, not live
+    /// (6.576): Quarm's `Handle_OP_Translocate` (fc75fcf) takes the 92-byte
+    /// offer back with `Complete` 1 for a yes. Unlike TAKP it sends no
+    /// second offer: it moves the player itself (`MovePCGuildID`, or
+    /// `GoToBind` for a bind port in the bind zone), which reaches the
+    /// session as its zone change. Quarm's own time limit is a rule, 0 (none)
+    /// by default; the session's hour is ours, as on TAKP.
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::translocate(EQMAC_CONSENT_WINDOW))
+    }
 }
+
+/// How long the session leaves a Mac server's question open before it
+/// declines: the hour TAKP gives the `EQMac` program's dialogs
+/// (`PendingConfirmationTimeoutMs`, "client dialogs expire after one hour").
+const EQMAC_CONSENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// The HP at which TAKP takes a player as dead: below -10 (`zone/attack.cpp`
 /// `Mob::HasDied`).
@@ -1773,6 +2063,26 @@ impl ServerType for Takp {
     /// TAKP answers a kind and server-owned text, without a window byte.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::reading())
+    }
+
+    /// Source-derived, not live (6.580a open; first use attended).
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_bazaar())
+    }
+
+    /// TAKP's AA ranks, points, experience and timers (checklist 6.548),
+    /// and the split request (6.562), local only until a local TAKP row
+    /// passes; Train and Activate stay refused on the Mac client until
+    /// R49-41b (checklist 6.581). Quarm shares the decoding "assumed as
+    /// TAKP" but isn't offered it until its own attended row.
+    fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
+        if setup.local_only {
+            offer(Box::new(
+                super::alternate_advancement::AlternateAdvancement::listed(),
+            ))
+        } else {
+            None
+        }
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -1836,20 +2146,32 @@ impl ServerType for Takp {
 
     /// Casting from the gems and items' click effects, in `EQMac`'s cast
     /// request; the cast is held until TAKP brings the spell bar back or
-    /// interrupts it.
+    /// interrupts it. `/disc` goes by number as TAKP's own
+    /// `Handle_OP_Discipline` at 44afcbf reads it (6.603 G1),
+    /// source-derived, not yet checked live.
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_luclin_port_begins()))
+        offer(Box::new(
+            Casting::with_luclin_port_begins().with_eqmac_disciplines(),
+        ))
+    }
+
+    /// Sent as TAKP's own `Handle_OP_Shielding` at 44afcbf reads it, in 2
+    /// bytes (6.603 G2), source-derived, not yet checked live.
+    fn shielding(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Shielding>::default())
     }
 
     /// Memorizing, forgetting and scribing spells in TAKP's 256-slot book.
-    /// Moving a spell in the book waits for its check on TAKP. Deleting
-    /// stays off: TAKP reports a deletion done even for an empty slot and
-    /// keeps the spell memorizable until the player zones
-    /// (`Client::Handle_OP_DeleteSpell`), unchecked live.
+    /// Moving and deleting book entries follow TAKP's own
+    /// `Handle_OP_SwapSpell` and `Handle_OP_DeleteSpell` at 44afcbf
+    /// (6.604 E4): each waits for the echo, and a deletion changes the book
+    /// only on success 1, which TAKP sends only for a slot that held a
+    /// spell. The server leaves the live profile holding a deleted spell
+    /// until the next load (a gap fact).
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::spellbook(Edits {
-            deleting: false,
-            moving: false,
+            deleting: true,
+            moving: true,
         }))
     }
 
@@ -1861,12 +2183,19 @@ impl ServerType for Takp {
     /// TAKP's rules, which disconnect a player whose move they refuse, coin
     /// moves, which TAKP answers no more than `EQEmu` does, merchants, whose
     /// lists TAKP quotes before their rate, and eating and drinking when
-    /// TAKP's own client would.
+    /// TAKP's own client would. `/split` and `/autosplit` follow TAKP's own
+    /// `Handle_OP_Split` and appearance type 28 at 44afcbf
+    /// ([`eq_network_game::split::eqmac_split`]); the purse after a split is
+    /// known only as the server's take and four additions prove it.
+    /// Source-derived, not live (6.585).
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
             self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
-            Allowances::STANDARD,
+            Allowances {
+                splitting: true,
+                ..Allowances::STANDARD
+            },
             setup,
         ))
     }
@@ -1916,7 +2245,142 @@ impl ServerType for Takp {
     /// ([`eq_network_game::confirmations`]); the client asks as the `EQMac`
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate(std::time::Duration::from_secs(3600)))
+        offer(shared::translocate(EQMAC_CONSENT_WINDOW))
+    }
+
+    /// `/who all` and friends in the `EQMac` program's packets
+    /// ([`eq_network_game::who::eqmac`], [`eq_network_game::friends::eqmac_request`]),
+    /// from TAKP's own handlers at EQMacEmu/Server 44afcbf: `Handle_OP_WhoAllRequest`
+    /// drops a body other than the 140-byte `Who_All_Struct`, and
+    /// `Handle_OP_FriendsWho` takes the comma list ending in NUL. The world's
+    /// `ClientList::SendWhoAll` and `SendFriendsWho` answer in one
+    /// `OP_WhoAllResponse`, or the zone sends string 5029 when nobody
+    /// matched. TAKP lets only a game master look a
+    /// zone up by name. One query at a time, at least a second apart, a pace
+    /// of the session's own ([`PacedWho`]). Source-derived, not live (6.583).
+    fn who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(PacedWho::default()))
+    }
+
+    /// Rolls and assists in the `EQMac` program's packets
+    /// ([`eq_network_game::socials::eqmac_random`],
+    /// [`eq_network_game::socials::eqmac_assist`]), from TAKP's own
+    /// `Handle_OP_RandomReq` and `Handle_OP_Assist` at EQMacEmu/Server 44afcbf: an 8-byte
+    /// roll, answered by a 76-byte `OP_RandomReply` to the players within
+    /// 400, and a 2-byte assist, always answered on the same opcode with the
+    /// assistee's target, or the player's own spawn when it has none or
+    /// stands past 250. Ends of 0 to 32000, in order, and one assist at a
+    /// time for 5 s are the session's own ([`Socials::eqmac`]; 6.585b,
+    /// 6.585c), and emotes and yells from their own `Handle_OP_Emote` and
+    /// `Handle_OP_YellForHelp` (6.604 E1, E2). Source-derived, not live
+    /// (6.585, 6.604).
+    fn socials(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Socials::eqmac()))
+    }
+
+    /// Cancelling a beneficial buff in the 20-byte `OP_Buff` its own
+    /// `Handle_OP_Buff` reads (6.604 E3), source-derived, not live.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Buffs::eqmac()))
+    }
+
+    /// Asked and answered as its own `Handle_OP_Surname` reads it
+    /// (6.604 E5), source-derived, not live.
+    fn surnames(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Surnames::eqmac()))
+    }
+
+    /// Petitions and bug reports as its own `Handle_OP_Petition` and
+    /// `Handle_OP_Bug` read them (6.604 E6), source-derived, not live.
+    fn reports(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::reports::Reports::new(
+            super::reports::Listed::EQMAC,
+        )))
+    }
+
+    /// Corpses in the `EQMac` program's packets
+    /// ([`eq_network_game::corpses`]), from TAKP's own `Handle_OP_Consent`,
+    /// `Handle_OP_GMSummon` and `Handle_OP_CorpseDrag` at EQMacEmu/Server 44afcbf: a consent
+    /// of the name and its NUL, which toggles (so `/deny` is refused, 6.591a),
+    /// and the 152-byte summon and drag records. TAKP has no `/corpsedrop`, which is refused.
+    /// `/corpse` goes only for a player's corpse in the zone, at most every
+    /// 250 ms (ours, 6.591c; its Mac opcode is row 6.591b). Source-derived,
+    /// not live (6.591).
+    fn corpses(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Corpses::eqmac(false)))
+    }
+
+    /// Pet commands in the `EQMac` program's packets
+    /// ([`eq_network_game::pets::eqmac_command`]), from TAKP's own
+    /// `Handle_OP_PetCommands` at EQMacEmu/Server 44afcbf: the 8-byte command and target,
+    /// whose numbers are Titanium's for each command it knows; taunt on, no
+    /// cast and focus fall to its default and are refused
+    /// ([`PetOrderSet::EqMac`]). Hold and feign go as asked, and the server
+    /// decides by the player's AAs. A spawn's owner comes from its record
+    /// (`petOwnerId`) and from charm. No pace (6.595a). Source-derived, not
+    /// live (6.595).
+    fn pets(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::pets(PetOrderSet::EqMac))
+    }
+
+    /// Resurrection in the `EQMac` program's packets
+    /// ([`eq_network_game::resurrection::eqmac_offer`]), from TAKP's own
+    /// handlers at EQMacEmu/Server 44afcbf: `Handle_OP_RezzAnswer` takes the
+    /// 228-byte offer back, and on a yes TAKP sends its kept offer again on
+    /// `OP_RezzComplete` for the client to move itself, which the session
+    /// follows only for the offer it accepted in this admission. TAKP's own
+    /// rez effect, which the `EQMac` program applies itself, is not shown
+    /// (6.596b). TAKP keeps an offer 3,610 s; the session declines after an
+    /// hour (inferred, 6.596a). Source-derived, not live (6.596).
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Resurrection::eqmac(EQMAC_CONSENT_WINDOW)))
+    }
+
+    /// `Handle_OP_Sacrifice` at 44afcbf takes the 12-byte offer back while
+    /// it is pending (3,610 s), and any answer but 0 gives the player's life
+    /// if the caster is still the same; answered only on the player's word.
+    /// Source-derived, not live (6.596).
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::sacrifice())
+    }
+
+    /// Training at a guildmaster in the `EQMac` program's packets
+    /// ([`eq_network_game::training::eqmac_open`]), from TAKP's own handlers
+    /// at EQMacEmu/Server 44afcbf, which match Quarm's: the 244-byte
+    /// request and answer, the 12-byte practice answered by a silent skill
+    /// update, the scaled cost and the point taken without a word, and the
+    /// 4-byte goodbye. Languages are held until the `EQMac` program's rule
+    /// is read (6.597a). Source-derived, not live (6.597).
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Training::eqmac()))
+    }
+
+    /// Combines in a carried kit or an open world container, and opening and
+    /// closing a world container such as a forge, from TAKP's own
+    /// `Object::HandleCombine`, `Object::HandleClick` and
+    /// `Handle_OP_ClickObjectAction` at EQMacEmu/Server 44afcbf. A close
+    /// leaves the container's items in it. Moves keep to Quarm's stricter
+    /// rule, which TAKP also accepts. Source-derived, not live (6.598).
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_tradeskills())
+    }
+
+    /// Corpse looting in the `EQMac` program's packets
+    /// ([`eq_network_game::loot::eqmac`]), from TAKP's own handlers at
+    /// EQMacEmu/Server 44afcbf: `Handle_OP_LootRequest` and
+    /// `Handle_OP_EndLootRequest` take a 2-byte corpse ID,
+    /// `Handle_OP_LootItem` the 12-byte item request, and
+    /// `Corpse::LootCorpseItem` echoes the request before its checks.
+    /// TAKP's `CheckCursorEmptyWhenLooting` defaults true
+    /// (`common/ruletypes.h`), so an item request waits for an empty
+    /// cursor, as on Quarm. Its `loot_cooldown_timer` is 10 ms, as Quarm's,
+    /// so item requests are paced ([`super::looting::EQMAC_ITEM_PACE`]).
+    /// Delivery and coins stay with the inventory owner. Source-derived, not
+    /// live (6.577).
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     /// Giving items to NPCs and trading with players, in the `EQMac`
@@ -2029,17 +2493,80 @@ mod tests {
     }
 
     #[test]
-    fn environmental_aa_observations_are_only_enabled_for_local_eqemu() {
+    fn aa_facts_are_read_on_every_titanium_session_and_requests_listed_only_locally() {
         let mut setup = Setup::new("Tester", AutoEat::default());
-        assert!(EqEmu.environmental_aa(&setup).is_none());
-        setup.local_only = true;
-        assert!(EqEmu.environmental_aa(&setup).is_some());
-        for protocol in [
-            ServerProtocol::Project1999,
-            ServerProtocol::Quarm,
-            ServerProtocol::Takp,
-        ] {
-            assert!(server_type(protocol).environmental_aa(&setup).is_none());
+        // The air counter needs the facts on every Titanium server (6.491);
+        // TAKP reads them only locally, and Quarm and RoF2 not at all.
+        for local_only in [false, true] {
+            setup.local_only = local_only;
+            for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+                assert!(
+                    server_type(protocol).environmental_aa(&setup).is_some(),
+                    "{protocol:?} local {local_only}"
+                );
+            }
+            assert_eq!(Takp.environmental_aa(&setup).is_some(), local_only);
+            for protocol in [ServerProtocol::Quarm, ServerProtocol::EqEmuRof2] {
+                assert!(server_type(protocol).environmental_aa(&setup).is_none());
+            }
+        }
+        // The AA requests share the facts' gate (6.581): listed only on
+        // local `EQEmu` and local TAKP, never on public sessions, P99,
+        // Quarm or RoF2, local or not.
+        for local_only in [false, true] {
+            setup.local_only = local_only;
+            for protocol in [
+                ServerProtocol::EqEmu,
+                ServerProtocol::Project1999,
+                ServerProtocol::Takp,
+                ServerProtocol::Quarm,
+                ServerProtocol::EqEmuRof2,
+            ] {
+                let lists = server_type(protocol)
+                    .features(&setup)
+                    .iter()
+                    .flat_map(|provided| provided.feature.capabilities())
+                    .any(|capability| capability == Capability::AlternateAdvancement);
+                let expected =
+                    local_only && matches!(protocol, ServerProtocol::EqEmu | ServerProtocol::Takp);
+                assert_eq!(lists, expected, "{protocol:?} local {local_only}");
+            }
+        }
+    }
+
+    /// The hazards a server type's policy takes reports of, with the
+    /// session on the local network or not.
+    fn hazard_capabilities(protocol: ServerProtocol, local_only: bool) -> Vec<Capability> {
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        setup.local_only = local_only;
+        server_type(protocol)
+            .hazards(&setup)
+            .map(|provided| provided.feature.capabilities())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn every_titanium_server_takes_falls_drowning_and_lava_as_the_program_reports_them() {
+        for local_only in [false, true] {
+            for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+                assert_eq!(
+                    hazard_capabilities(protocol, local_only),
+                    [
+                        Capability::EnvironmentalDamage,
+                        Capability::Drowning,
+                        Capability::LavaHeat
+                    ],
+                    "{protocol:?} local {local_only}"
+                );
+            }
+            // The Mac-era program's liquid reports are not read.
+            for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+                assert_eq!(
+                    hazard_capabilities(protocol, local_only),
+                    [Capability::EnvironmentalDamage],
+                    "{protocol:?} local {local_only}"
+                );
+            }
         }
     }
 
@@ -2073,6 +2600,63 @@ mod tests {
     /// What a server type offers, each once.
     fn offers(server: &dyn ServerType) -> Vec<Capability> {
         listed(server, false)
+    }
+
+    #[test]
+    fn only_stock_eqemu_keeps_a_task_journal() {
+        use crate::client::ServerProtocol;
+        let setup = Setup::new("Tester", AutoEat::default());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            let keeps = match protocol {
+                ServerProtocol::EqEmu => true,
+                ServerProtocol::Project1999
+                | ServerProtocol::Quarm
+                | ServerProtocol::Takp
+                | ServerProtocol::EqEmuRof2 => false,
+            };
+            assert_eq!(
+                server_type(protocol).journal(&setup).is_some(),
+                keeps,
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_local_stock_eqemu_session_takes_task_requests() {
+        use crate::client::ServerProtocol;
+        use crate::world::Capability;
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        for local in [false, true] {
+            setup.local_only = local;
+            for protocol in [
+                ServerProtocol::Project1999,
+                ServerProtocol::EqEmu,
+                ServerProtocol::Quarm,
+                ServerProtocol::Takp,
+                ServerProtocol::EqEmuRof2,
+            ] {
+                let takes = match protocol {
+                    ServerProtocol::EqEmu => local,
+                    ServerProtocol::Project1999
+                    | ServerProtocol::Quarm
+                    | ServerProtocol::Takp
+                    | ServerProtocol::EqEmuRof2 => false,
+                };
+                let offered = server_type(protocol)
+                    .journal(&setup)
+                    .is_some_and(|journal| {
+                        journal.feature.capabilities().contains(&Capability::Tasks)
+                    });
+                assert_eq!(offered, takes, "{protocol:?} local {local}");
+            }
+        }
     }
 
     #[test]
@@ -2267,10 +2851,19 @@ mod tests {
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
         // posture/camp lifecycle, abilities, casting, basic spellbook and
-        // personal inventory actions. Other features await their own evidence.
+        // personal inventory actions, and, each from its own handlers, its
+        // giving, groups, listing and translocate (6.576); both search the
+        // Bazaar from source (6.580), and each answers `/who all` and friends
+        // from its own handlers (6.583), and rolls, assists and splits the
+        // same way (6.585), corpses (6.591), pets (6.595), and resurrection and
+        // sacrifice answers (6.596), training (6.597), tradeskills and
+        // world containers (6.598), `/disc` and `/shield` (6.603), and emotes,
+        // yells, buff cancels, book edits, surnames, petitions and bug reports
+        // (6.604). Other
+        // features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 18);
+        assert_eq!(quarm.features(&setup).len(), 35);
         assert_eq!(
             offers(quarm),
             [
@@ -2278,6 +2871,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -2289,46 +2883,52 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
+                Capability::Corpses,
+                Capability::Pets,
+                Capability::Training,
+                Capability::Resurrection,
                 Capability::Reading,
-                Capability::EnvironmentalDamage,
-                Capability::Jumping,
-                Capability::Posture,
-                Capability::Meals,
-                Capability::ApplyingPoison,
-            ]
-        );
-        let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 23);
-        assert_eq!(
-            offers(takp),
-            [
-                Capability::Casting,
-                Capability::Spellbook,
-                Capability::Inventory,
-                Capability::Trading,
-                Capability::Giving,
-                Capability::Moving,
-                Capability::Falling,
-                Capability::Targeting,
-                Capability::Combat,
-                Capability::Talking,
-                Capability::Camping,
-                Capability::Doors,
-                Capability::GroundItems,
-                Capability::Zoning,
-                Capability::Abilities,
-                Capability::Reading,
+                Capability::Tradeskills,
+                Capability::DeletingSpells,
+                Capability::MovingSpells,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Emoting,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
-                Capability::BleedingOut,
+                Capability::Sacrifice,
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
+                Capability::CancellingBuffs,
+                Capability::UsingDisciplines,
+                Capability::FriendsWho,
+                Capability::Splitting,
+                Capability::Yelling,
                 Capability::ApplyingPoison,
+                Capability::Surnaming,
+                Capability::Petitioning,
+                Capability::ReportingBugs,
+                Capability::Shielding,
+                Capability::BazaarSearching,
+                Capability::DisciplineReuse,
             ]
         );
+        let takp = server_type(ServerProtocol::Takp);
+        assert_eq!(takp.features(&setup).len(), 37);
+        // TAKP offers what Quarm does, and the bleed-out report after the
+        // environmental damage.
+        let mut expected = offers(quarm);
+        let at = expected
+            .iter()
+            .position(|offered| *offered == Capability::EnvironmentalDamage)
+            .unwrap();
+        expected.insert(at + 1, Capability::BleedingOut);
+        assert_eq!(offers(takp), expected);
         for server in [quarm, takp] {
             assert_eq!(
                 server.wire().encode(&Request::Camp, SENDER).unwrap(),
@@ -2588,11 +3188,14 @@ mod tests {
         // the Titanium program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; only EQEmu takes the show-helm option; and only
-        // EQEmu lists petitions and bug reports (6.511) and titles (6.516).
-        // Both Titanium policies retain the verified own-player stun timer.
+        // EQEmu lists petitions and bug reports (6.511) and titles (6.516),
+        // and keeps a task journal (6.546). Both tell the profile's bandolier
+        // sets and belt (6.559).
+        // Both Titanium policies retain the verified own-player stun timer,
+        // and both read the AA facts the air counter needs (6.491).
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 51),
+            (ServerProtocol::Project1999, 40),
+            (ServerProtocol::EqEmu, 54),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2677,17 +3280,90 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_lists_the_surname_request() {
-        // A surname stays for good, or days: each server type is listed
-        // after its own live check (6.507), and only EQEmu's handler waits
-        // for it next. P99 needs an attended run, and TAKP and Quarm theirs.
-        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Surnaming));
+    fn only_the_mac_era_servers_offer_the_bazaar_search_from_source() {
+        // TAKP and Quarm from their source (6.580); stock EQEmu once its
+        // local live row passes (6.550a); P99's era has no Bazaar.
+        for (protocol, offered) in [
+            (ServerProtocol::EqEmu, false),
+            (ServerProtocol::Project1999, false),
+            (ServerProtocol::Quarm, true),
+            (ServerProtocol::Takp, true),
+            (ServerProtocol::EqEmuRof2, false),
+        ] {
+            assert_eq!(
+                offers(server_type(protocol)).contains(&Capability::BazaarSearching),
+                offered,
+                "{protocol:?}"
+            );
+        }
+        for bazaar in [
+            super::super::bazaar::Bazaar::titanium(),
+            super::super::bazaar::Bazaar::eqmac(),
+        ] {
+            assert_eq!(bazaar.capabilities(), [Capability::BazaarSearching]);
+        }
+    }
+
+    #[test]
+    fn no_server_offers_trader_browsing_before_its_live_row() {
+        // Built and tested from source (6.558); stock EQEmu offers it once
+        // the local live row passes.
         for protocol in [
+            ServerProtocol::EqEmu,
             ServerProtocol::Project1999,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
             ServerProtocol::EqEmuRof2,
         ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::BazaarBrowsing),
+                "{protocol:?}"
+            );
+        }
+        assert_eq!(
+            super::super::bazaar::Browsing::default().capabilities(),
+            [Capability::BazaarBrowsing]
+        );
+    }
+
+    #[test]
+    fn no_server_offers_the_bandoliers_sets_or_belt_before_their_live_rows() {
+        // Built and tested from source (6.564, 6.566, 6.568); stock EQEmu offers each once
+        // its local live rows pass, and P99 never does.
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            let offered = offers(server_type(protocol));
+            assert!(
+                !offered.contains(&Capability::Bandoliers)
+                    && !offered.contains(&Capability::PotionBelt)
+                    && !offered.contains(&Capability::BandolierSwap)
+                    && !offered.contains(&Capability::UsingPotionBelt),
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eqemu_and_the_mac_servers_list_the_surname_request() {
+        // A surname stays for good, or days: EQEmu after its own live check
+        // (6.507), and TAKP and Quarm from their own handlers (6.604 E5,
+        // source-derived). P99 needs an attended run.
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                offers(server_type(protocol)).contains(&Capability::Surnaming),
+                "{protocol:?}"
+            );
+        }
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmuRof2] {
             assert!(
                 !offers(server_type(protocol)).contains(&Capability::Surnaming),
                 "{protocol:?}"
@@ -2696,16 +3372,21 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_lists_shielding() {
-        // From `EQEmu`'s source alone (6.517): P99 waits for an attended
-        // run, TAKP and Quarm for theirs, and RoF2 for its own wire.
-        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Shielding));
+    fn eqemu_takp_and_quarm_list_shielding_from_their_own_source() {
+        // `EQEmu` from its source (6.517), TAKP and Quarm from theirs
+        // (6.603 G2): P99 waits for an attended run, and RoF2 for its own
+        // wire.
         for protocol in [
-            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
-            ServerProtocol::EqEmuRof2,
         ] {
+            assert!(
+                offers(server_type(protocol)).contains(&Capability::Shielding),
+                "{protocol:?}"
+            );
+        }
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmuRof2] {
             assert!(
                 !offers(server_type(protocol)).contains(&Capability::Shielding),
                 "{protocol:?}"

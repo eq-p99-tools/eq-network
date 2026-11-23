@@ -124,9 +124,13 @@ impl Features {
 
     /// Lets every feature explain a message its own action caused.
     fn explain(&mut self, message: &mut Message, world: &World) {
+        own_skill(message, world);
         for feature in &mut self.provided {
             feature.explain(message, world);
         }
+        // Where no feature keeps the inventory, a merchant's item is still
+        // the merchant's.
+        super::inventory::merchant_view(message);
     }
 
     /// Lets every feature record a message from before the zone admitted the
@@ -645,6 +649,32 @@ fn run_connected(
     }
 }
 
+/// `EQMac`'s silent skill update is the player's own skill news when it
+/// names their spawn. TAKP and Quarm send it only to the player it names
+/// (`Client::SetSkill`), so any other is rejected.
+fn own_skill(message: &mut Message, world: &World) {
+    let Message::SpawnSkill(update) = message else {
+        return;
+    };
+    *message = if world
+        .own_spawn
+        .is_some_and(|own| own != 0 && own == update.spawn_id)
+    {
+        Message::Event(WorldEvent::Skill {
+            skill_id: update.skill_id,
+            value: update.value,
+        })
+    } else {
+        Message::Unreadable {
+            part: Part::World,
+            error: format!(
+                "a silent skill update for spawn {}, not the player's",
+                update.spawn_id
+            ),
+        }
+    };
+}
+
 /// A listener can repeat the entry position only until the zone supersedes it.
 fn supersedes_entry_position(message: &Message, world: &World) -> bool {
     let own_spawn = world.own_spawn.filter(|&id| id != 0);
@@ -944,7 +974,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 127;
+    const KINDS: usize = 148;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1015,6 +1045,26 @@ mod tests {
             ClientCommand::Shield { .. } => 124,
             ClientCommand::RequestTitles { .. } => 125,
             ClientCommand::SetTitle { .. } => 126,
+            ClientCommand::BazaarSearch { .. } => 127,
+            ClientCommand::BazaarWelcome { .. } => 128,
+            ClientCommand::AcceptTask { .. } => 129,
+            ClientCommand::DeclineTasks { .. } => 130,
+            ClientCommand::CancelTask { .. } => 131,
+            ClientCommand::AskTaskHistory { .. } => 132,
+            ClientCommand::ListTaskTimers { .. } => 133,
+            ClientCommand::TrainAlternateAdvancement { .. } => 134,
+            ClientCommand::ActivateAlternateAdvancement { .. } => 135,
+            ClientCommand::SetAlternateAdvancementSplit { .. } => 136,
+            ClientCommand::BrowseTrader { .. } => 137,
+            ClientCommand::EndBrowse { .. } => 138,
+            ClientCommand::SaveBandolier { .. } => 139,
+            ClientCommand::ClearBandolier { .. } => 140,
+            ClientCommand::SetPotionBelt { .. } => 141,
+            ClientCommand::ClearPotionBelt { .. } => 142,
+            ClientCommand::SwapBandolier { .. } => 143,
+            ClientCommand::UseBeltItem(_) => 144,
+            ClientCommand::AskDisciplineReuse { .. } => 145,
+            ClientCommand::ToggleStance { .. } => 146,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1024,6 +1074,7 @@ mod tests {
             ClientCommand::DropCorpse { .. } => 39,
             ClientCommand::Pet { .. } => 40,
             ClientCommand::AutoEat { .. } => 41,
+            ClientCommand::PoisonWait { .. } => 147,
             ClientCommand::AnswerListPolls { .. } => 76,
             ClientCommand::SetMovementOptions { .. } => 77,
             ClientCommand::SetBookOptions { .. } => 78,
@@ -1166,6 +1217,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseItem(ItemUse {
+                installed_class_spell: None,
                 request_id: 1,
                 session_id,
                 revision: 1,
@@ -1446,6 +1498,38 @@ mod tests {
                 spawn_id: 9,
                 created,
             },
+            ClientCommand::AskDisciplineReuse {
+                session_id,
+                created,
+            },
+            ClientCommand::ToggleStance {
+                session_id,
+                stance: eq_network_game::appearance::Stance::Sheathed,
+                created,
+            },
+            ClientCommand::AcceptTask {
+                session_id,
+                task_id: 9,
+                created,
+            },
+            ClientCommand::DeclineTasks { session_id },
+            ClientCommand::CancelTask {
+                session_id,
+                at: eq_network_game::tasks::TaskSlot {
+                    kind: eq_network_game::tasks::TaskKind::Quest,
+                    slot: 0,
+                },
+                created,
+            },
+            ClientCommand::AskTaskHistory {
+                session_id,
+                index: 0,
+                created,
+            },
+            ClientCommand::ListTaskTimers {
+                session_id,
+                created,
+            },
             ClientCommand::UseAbility {
                 in_liquid: false,
                 target: None,
@@ -1493,6 +1577,10 @@ mod tests {
             ClientCommand::AutoEat {
                 session_id,
                 auto_eat: eq_network_game::food::AutoEat::Anything,
+            },
+            ClientCommand::PoisonWait {
+                session_id,
+                total_ms: Some(5000),
             },
             ClientCommand::WhoAll {
                 session_id,
@@ -1611,6 +1699,53 @@ mod tests {
                 session_id,
                 title_id: 7,
                 suffix: false,
+            },
+            ClientCommand::TrainAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+            },
+            ClientCommand::ActivateAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+                target: Some(300),
+            },
+            ClientCommand::SetAlternateAdvancementSplit {
+                session_id,
+                percentage: 50,
+            },
+            ClientCommand::BazaarSearch {
+                session_id,
+                criteria: eq_network_game::bazaar::BazaarCriteria::default(),
+            },
+            ClientCommand::BazaarWelcome { session_id },
+            ClientCommand::BrowseTrader {
+                session_id,
+                trader: 40,
+            },
+            ClientCommand::EndBrowse { session_id },
+            ClientCommand::SaveBandolier {
+                session_id,
+                set: 0,
+                name: "Tank".into(),
+            },
+            ClientCommand::ClearBandolier { session_id, set: 0 },
+            ClientCommand::SwapBandolier { session_id, set: 0 },
+            ClientCommand::UseBeltItem(eq_network_game::bandolier::BeltUse {
+                request_id: 1,
+                session_id,
+                belt_slot: 0,
+                target_id: 7,
+                created,
+                installed_class_spell: None,
+            }),
+            ClientCommand::SetPotionBelt {
+                session_id,
+                slot: 0,
+                item_id: 1,
+            },
+            ClientCommand::ClearPotionBelt {
+                session_id,
+                slot: 0,
             },
             ClientCommand::Emote {
                 session_id,
@@ -1766,19 +1901,20 @@ mod tests {
     }
 
     #[test]
-    fn public_and_remote_providers_cannot_send_liquid_damage() {
+    fn every_titanium_server_takes_liquid_damage_and_the_mac_era_ones_do_not() {
         use super::super::feature::testing;
         use crate::client::{ClientConfig, ServerProtocol};
-        use eq_network_game::hazards::{LiquidHazard, LiquidObservation};
+        use eq_network_game::hazards::{self, Hazard, LiquidHazard, LiquidObservation};
         use eq_network_game::world::Capability;
 
-        for (protocol, local_only) in [
-            (ServerProtocol::Project1999, false),
-            (ServerProtocol::EqEmu, false),
-            (ServerProtocol::Quarm, false),
-            (ServerProtocol::Takp, false),
-            (ServerProtocol::Quarm, true),
-            (ServerProtocol::Takp, true),
+        for (protocol, local_only, taken) in [
+            (ServerProtocol::Project1999, false, true),
+            (ServerProtocol::EqEmu, false, true),
+            (ServerProtocol::EqEmu, true, true),
+            (ServerProtocol::Quarm, false, false),
+            (ServerProtocol::Takp, false, false),
+            (ServerProtocol::Quarm, true, false),
+            (ServerProtocol::Takp, true, false),
         ] {
             let mut config = ClientConfig::new("Example", "Fixture", "Server", "Tester");
             config.protocol = protocol;
@@ -1796,8 +1932,8 @@ mod tests {
             let server = servers::server_type(protocol);
             let mut features = Features::from_setup(server, &setup);
             let capabilities = features.capabilities();
-            assert!(!capabilities.contains(&Capability::Drowning));
-            assert!(!capabilities.contains(&Capability::LavaHeat));
+            assert_eq!(capabilities.contains(&Capability::Drowning), taken);
+            assert_eq!(capabilities.contains(&Capability::LavaHeat), taken);
             let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
                 out.log.send(ClientEvent::World(WorldEvent::Entered {
                     capabilities,
@@ -1825,7 +1961,20 @@ mod tests {
                 Ok(())
             });
             outcome.result.unwrap();
-            assert!(outcome.sent.is_empty(), "{protocol:?}");
+            let sent: Vec<_> = if taken {
+                [Hazard::Drowning, Hazard::Lava]
+                    .into_iter()
+                    .flat_map(|hazard| {
+                        [
+                            hazards::titanium_damage(7, hazard, 13).unwrap(),
+                            hazards::titanium_damage_record(7, hazard, 13).unwrap(),
+                        ]
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            assert_eq!(outcome.sent, sent, "{protocol:?} local {local_only}");
             assert!(outcome.unreliable.is_empty(), "{protocol:?}");
         }
     }
@@ -1944,8 +2093,11 @@ mod tests {
             outcome.sent,
             [
                 hazards::titanium_damage(7, Hazard::Drowning, 13).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Drowning, 13).unwrap(),
                 hazards::titanium_damage(7, Hazard::Lava, 13).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Lava, 13).unwrap(),
                 hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Falling, 160).unwrap(),
             ]
         );
         assert_eq!(outcome.unreliable, []);
@@ -2056,12 +2208,26 @@ mod tests {
                     .contains(&crate::world::Capability::ServerFilters)));
                 continue;
             }
-            if matches!(command, ClientCommand::SendFeedback { .. }) {
-                // Built and tested, and listed by no server type until its
-                // own live check (6.511f).
-                assert!(!servers.iter().any(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::SendingFeedback)));
+            // Built and tested, and listed by no server type until each
+            // one's own live check: feedback (6.511f), browsing a trader
+            // (6.558a), and the bandolier's sets and belt (6.564), its swap
+            // (6.566) and belt use (6.568). AAs are listed on local EQEmu
+            // (6.581), so they take the owner check below, as does the
+            // Mac-era Bazaar search, offered on TAKP and Quarm (6.580).
+            if let Some(unlisted) = command.capability().filter(|capability| {
+                [
+                    crate::world::Capability::SendingFeedback,
+                    crate::world::Capability::BazaarBrowsing,
+                    crate::world::Capability::Bandoliers,
+                    crate::world::Capability::PotionBelt,
+                    crate::world::Capability::BandolierSwap,
+                    crate::world::Capability::UsingPotionBelt,
+                ]
+                .contains(capability)
+            }) {
+                assert!(!servers
+                    .iter()
+                    .any(|features| features.capabilities().contains(&unlisted)));
                 continue;
             }
             if Features::is_departure(&command) {
@@ -2757,7 +2923,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_quarm_inventory_capabilities_keep_one_owner_and_exchanges_disabled() {
+    fn combined_quarm_inventory_capabilities_keep_one_owner_with_giving() {
         use crate::client::ServerProtocol;
         use eq_network_game::{food::AutoEat, inventory::InventorySlot, world::Capability};
         let server = servers::server_type(ServerProtocol::Quarm);
@@ -2768,10 +2934,11 @@ mod tests {
             Capability::Meals,
             Capability::Trading,
             Capability::Reading,
+            // Quarm's own trade handlers (6.576).
+            Capability::Giving,
         ] {
             assert!(capabilities.contains(&capability), "{capability:?}");
         }
-        assert!(!capabilities.contains(&Capability::Giving));
         for command in [
             ClientCommand::AutoEat {
                 session_id: 5,
@@ -2961,15 +3128,16 @@ mod tests {
         assert!(eqemu.contains(&Capability::StoppingCasts));
         // Held off P99 until checked there.
         assert!(!p99.contains(&Capability::StoppingCasts));
+        // Both Mac servers take an empty yell (6.604 E2).
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let mac = offered(protocol);
-            assert!(!mac.contains(&Capability::Yelling), "{protocol:?}");
+            assert!(mac.contains(&Capability::Yelling), "{protocol:?}");
             assert!(!mac.contains(&Capability::StoppingCasts), "{protocol:?}");
         }
     }
 
     #[test]
-    fn emote_animations_and_disciplines_are_titanium_offers_only() {
+    fn every_generation_emotes_and_has_its_disciplines() {
         use crate::{client::ServerProtocol, world::Capability};
         let offered = |protocol| {
             Features::new(
@@ -2986,11 +3154,19 @@ mod tests {
                 titanium.contains(&Capability::UsingDisciplines),
                 "{protocol:?}"
             );
+            assert!(
+                !titanium.contains(&Capability::DisciplineReuse),
+                "{protocol:?}"
+            );
         }
+        // TAKP's and Quarm's `/disc` by number, and the bare `/disc`
+        // (6.603 G1).
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let mac = offered(protocol);
-            assert!(!mac.contains(&Capability::Emoting), "{protocol:?}");
-            assert!(!mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
+            // Mac emotes are words only (6.604 E1); animations stay Titanium.
+            assert!(mac.contains(&Capability::Emoting), "{protocol:?}");
+            assert!(mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
+            assert!(mac.contains(&Capability::DisciplineReuse), "{protocol:?}");
         }
     }
 
@@ -3088,8 +3264,8 @@ mod tests {
         .capabilities();
         assert!(local.contains(&Capability::GroundDropping));
         for liquid in [Capability::Drowning, Capability::LavaHeat] {
-            assert!(!p99.contains(&liquid));
-            assert!(!eqemu.contains(&liquid));
+            assert!(p99.contains(&liquid));
+            assert!(eqemu.contains(&liquid));
             assert!(local.contains(&liquid));
         }
         assert!(p99.contains(&Capability::AnsweringListPolls));
@@ -3134,8 +3310,9 @@ mod tests {
             .capabilities()
         };
         // Both EQMac policies move, jump, fall, zone, camp, cast spells and
-        // move inventory, read, shop and eat. TAKP also offers the social
-        // actions checked there.
+        // move inventory, read, shop, eat, give, group, list and answer a
+        // translocate (Quarm from its own handlers, 6.576). TAKP also offers
+        // the bleed-out report checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
@@ -3143,6 +3320,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -3154,48 +3332,50 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
+                Capability::Corpses,
+                Capability::Pets,
+                Capability::Training,
+                Capability::Resurrection,
                 Capability::Reading,
-                Capability::EnvironmentalDamage,
-                Capability::Jumping,
-                Capability::Posture,
-                Capability::Meals,
-                Capability::GameplayDepartures,
-                Capability::ApplyingPoison,
-                Capability::ServerFilters
-            ]
-        );
-        assert_eq!(
-            features(crate::client::ServerProtocol::Takp),
-            [
-                Capability::Casting,
-                Capability::Spellbook,
-                Capability::Inventory,
-                Capability::Trading,
-                Capability::Giving,
-                Capability::Moving,
-                Capability::Falling,
-                Capability::Targeting,
-                Capability::Combat,
-                Capability::Talking,
-                Capability::Camping,
-                Capability::Doors,
-                Capability::GroundItems,
-                Capability::Zoning,
-                Capability::Abilities,
-                Capability::Reading,
+                Capability::Tradeskills,
+                Capability::DeletingSpells,
+                Capability::MovingSpells,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Emoting,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
-                Capability::BleedingOut,
+                Capability::Sacrifice,
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
+                Capability::CancellingBuffs,
                 Capability::GameplayDepartures,
+                Capability::UsingDisciplines,
+                Capability::FriendsWho,
+                Capability::Splitting,
+                Capability::Yelling,
                 Capability::ApplyingPoison,
-                Capability::ServerFilters
+                Capability::ServerFilters,
+                Capability::Surnaming,
+                Capability::Petitioning,
+                Capability::ReportingBugs,
+                Capability::Shielding,
+                Capability::BazaarSearching,
+                Capability::DisciplineReuse
             ]
         );
+        let mut expected = features(crate::client::ServerProtocol::Quarm);
+        let at = expected
+            .iter()
+            .position(|offered| *offered == Capability::EnvironmentalDamage)
+            .unwrap();
+        expected.insert(at + 1, Capability::BleedingOut);
+        assert_eq!(features(crate::client::ServerProtocol::Takp), expected);
     }
 
     #[test]
@@ -3448,6 +3628,41 @@ mod tests {
         malformed.result.unwrap();
         assert_eq!(malformed.sent, []);
     }
+
+    #[test]
+    fn a_mac_silent_skill_update_is_the_player_s_only_for_their_spawn() {
+        use eq_network_game::training::{SpawnSkill, EQMAC_SKILL_OPCODE};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut own = eq_network_game::message::eqmac(
+            EQMAC_SKILL_OPCODE,
+            &[7, 0, 0, 0, 30, 0, 0, 0, 51, 0, 0, 0],
+        )
+        .remove(0);
+        assert!(matches!(
+            own,
+            Message::SpawnSkill(SpawnSkill {
+                spawn_id: 7,
+                skill_id: 30,
+                value: 51
+            })
+        ));
+        own_skill(&mut own, &world);
+        assert!(matches!(
+            own,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 30,
+                value: 51
+            })
+        ));
+        let mut other = Message::SpawnSkill(SpawnSkill {
+            spawn_id: 8,
+            skill_id: 30,
+            value: 51,
+        });
+        own_skill(&mut other, &world);
+        assert!(matches!(other, Message::Unreadable { .. }));
+    }
 }
 
 #[cfg(test)]
@@ -3499,6 +3714,14 @@ mod pet_tests;
 mod manual_combine_tests;
 
 #[cfg(test)]
+mod eqmac_tradeskill_tests;
+
+#[cfg(test)]
+mod eqmac_book_tests;
+#[cfg(test)]
+mod eqmac_discipline_tests;
+
+#[cfg(test)]
 mod terminal_tests;
 
 #[cfg(test)]
@@ -3507,6 +3730,8 @@ mod admission_tests;
 #[cfg(test)]
 mod command_batch_tests;
 
+#[cfg(test)]
+mod belt_use_tests;
 #[cfg(test)]
 mod cast_result_tests;
 

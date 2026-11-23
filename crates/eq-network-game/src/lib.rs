@@ -7,9 +7,13 @@ pub mod alternate_advancement;
 /// How spawns look: worn gear, features, lights and the like, and the
 /// updates, states and illusions that change them.
 pub mod appearance;
+/// The player's bandolier sets and potion belt, from the Titanium profile.
+pub mod bandolier;
 /// A banker's change of the purse's and the bank's coins into the fewest
 /// coins of the largest kinds.
 pub mod banker;
+/// The Bazaar's search on stock `EQEmu`, read only.
+pub mod bazaar;
 /// Binding wounds with bandages.
 pub mod bind_wound;
 /// Received Titanium boat-control packets and conservative echo correlation.
@@ -71,6 +75,8 @@ pub mod group;
 /// The player's guild: its member list, its members' changes and
 /// invitations.
 pub mod guild;
+/// The guild bank as the server tells of it, read only.
+pub mod guild_bank;
 /// Damage the world does to the player, which the client reports: falls,
 /// drowning, lava and freezing.
 pub mod hazards;
@@ -121,12 +127,18 @@ pub mod reports;
 pub mod resurrection;
 /// What a quest or a task gives the player.
 pub mod rewards;
-/// `RoF2`'s player profile and own spawn, as stock `EQEmu` writes them.
+pub mod rof2_answers;
 pub mod rof2_buffs;
 pub mod rof2_casting;
 pub mod rof2_looks;
+pub mod rof2_loot_titles;
 pub mod rof2_news;
+pub mod rof2_notices;
 pub mod rof2_player;
+pub mod rof2_pools;
+pub mod rof2_socials;
+pub mod rof2_spellbook;
+pub mod rof2_world;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.
@@ -148,6 +160,8 @@ pub mod stats;
 pub mod sysinfo;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
+/// The task journal stock `EQEmu` keeps for a Titanium player.
+pub mod tasks;
 /// The server's regeneration tick and how often it comes.
 pub mod ticks;
 /// Tracking: the server's list and following a spawn.
@@ -317,6 +331,18 @@ impl GameDialect {
             // Titanium's, inferred for RoF2 (6.489).
             Self::Rof2 => Self::Titanium.ducking(),
             Self::EqMac => feign::EQMAC_DUCK,
+        }
+    }
+
+    /// Which postures this generation's program lets the player jump from
+    /// ([`feign::JumpGate`]).
+    #[must_use]
+    pub const fn jump_gate(self) -> feign::JumpGate {
+        match self {
+            Self::Titanium => feign::TITANIUM_JUMP,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.jump_gate(),
+            Self::EqMac => feign::EQMAC_JUMP,
         }
     }
 

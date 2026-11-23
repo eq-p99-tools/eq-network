@@ -64,7 +64,9 @@ impl Feature for Stances {
             Message::Event(WorldEvent::Posture { spawn_id, posture })
                 if world.is_player(*spawn_id) =>
             {
-                world.posture.observed(*posture);
+                if world.posture.observed(*posture) {
+                    feign_released(out.log)?;
+                }
                 // The program applies a server's posture for the player as
                 // its own (read R19 f), so a lying report holds them still
                 // as the press does.
@@ -78,7 +80,9 @@ impl Feature for Stances {
             Message::Event(WorldEvent::Death(death))
                 if world.own_spawn.map(u32::from) == Some(death.spawn_id) =>
             {
-                world.posture.forget_owed_stand();
+                if world.posture.forget_owed_stand() {
+                    feign_released(out.log)?;
+                }
                 Ok(())
             }
             _ => Ok(()),
@@ -106,8 +110,7 @@ fn feign_landed(spawn_id: u16, world: &mut World, out: &mut Out<'_, '_>) -> Resu
         .options()
         .is_some_and(|options| options.posture.feign_standing);
     if standing {
-        world.posture.owe_stand();
-        return Ok(());
+        return world.posture.hold_feign(out.log);
     }
     world.posture.lie_for_feign(spawn_id, out)?;
     if out.wire.dialect().lying().holds_still {
@@ -171,6 +174,18 @@ pub(super) struct OwnPosture {
     /// player pressed standing (6.454), whose feign only a posture report
     /// ends, or a camp, whose timer only a Standing report stops.
     stand_owed: bool,
+    /// The owed stand is a feign's: the player holds a Feign Death standing
+    /// (6.454), reported to the host as [`WorldEvent::FeignHeld`].
+    feign_held: bool,
+    /// How many times the stance changed this admission, so that a wait
+    /// the program cancels on any posture change can tell a stand and
+    /// re-sit between two ticks from an unbroken seat.
+    changes: u64,
+}
+
+/// Tells the host the feign the player held standing has ended.
+fn feign_released(log: &mut Events<'_>) -> Result<()> {
+    log.send(ClientEvent::World(WorldEvent::FeignHeld(false)))
 }
 
 impl OwnPosture {
@@ -186,7 +201,11 @@ impl OwnPosture {
         }
         out.request(&Request::FeignDeathPosture)?;
         self.posture = Some(PostureState::Lying);
+        self.changes += 1;
         self.stand_owed = false;
+        if std::mem::take(&mut self.feign_held) {
+            feign_released(out.log)?;
+        }
         out.log.send(ClientEvent::World(WorldEvent::Posture {
             spawn_id,
             posture: PostureState::Lying,
@@ -197,11 +216,23 @@ impl OwnPosture {
     pub(super) fn current(&self) -> Option<PostureState> {
         self.posture
     }
+
+    /// How many times the stance changed this admission: each one this
+    /// session sent, and each server report naming another stance than the
+    /// one noted. A report repeating the noted stance is not counted.
+    pub(super) const fn changes(&self) -> u64 {
+        self.changes
+    }
     /// Notes a stance the server reported for the player, which ends a feign
-    /// pressed standing as any posture report does.
-    pub(super) fn observed(&mut self, posture: PostureState) {
+    /// pressed standing as any posture report does. True when that ended a
+    /// feign held standing, which the caller reports.
+    pub(super) fn observed(&mut self, posture: PostureState) -> bool {
+        if self.posture != Some(posture) {
+            self.changes += 1;
+        }
         self.posture = Some(posture);
         self.stand_owed = false;
+        std::mem::take(&mut self.feign_held)
     }
 
     /// Notes that the next stand must reach the server even if the player
@@ -211,15 +242,33 @@ impl OwnPosture {
         self.stand_owed = true;
     }
 
+    /// The player holds a Feign Death standing (6.454): the next stand is
+    /// owed, and the host hears the feign is held, once.
+    pub(super) fn hold_feign(&mut self, log: &mut Events<'_>) -> Result<()> {
+        self.stand_owed = true;
+        if std::mem::replace(&mut self.feign_held, true) {
+            return Ok(());
+        }
+        log.send(ClientEvent::World(WorldEvent::FeignHeld(true)))
+    }
+
+    /// Whether the player holds a Feign Death standing.
+    #[cfg(test)]
+    pub(super) const fn feign_held(&self) -> bool {
+        self.feign_held
+    }
+
     /// Whether the next stand still goes out though the player stands.
     #[cfg(test)]
     pub(super) const fn stand_owed(&self) -> bool {
         self.stand_owed
     }
 
-    /// Forgets an owed stand without a report, as death does.
-    pub(super) fn forget_owed_stand(&mut self) {
+    /// Forgets an owed stand without a posture report, as death does. True
+    /// when that ended a feign held standing, which the caller reports.
+    pub(super) fn forget_owed_stand(&mut self) -> bool {
         self.stand_owed = false;
+        std::mem::take(&mut self.feign_held)
     }
 
     /// Sits, stands or crouches the player: sends the stance, notes it and
@@ -249,7 +298,11 @@ impl OwnPosture {
     fn sent(&mut self, spawn_id: u16, posture: Posture, log: &mut Events<'_>) -> Result<()> {
         let posture = state(posture);
         self.posture = Some(posture);
+        self.changes += 1;
         self.stand_owed = false;
+        if std::mem::take(&mut self.feign_held) {
+            feign_released(log)?;
+        }
         log.send(ClientEvent::World(WorldEvent::Posture {
             spawn_id,
             posture,
@@ -552,6 +605,80 @@ mod tests {
         assert!(!world.posture.stand_owed());
     }
 
+    fn held(outcome_events: &[ClientEvent]) -> Vec<bool> {
+        outcome_events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::FeignHeld(held)) => Some(*held),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A feign held standing (6.454) is reported once when it starts and
+    /// once when anything ends it: a stand, a duck, a server's report or
+    /// death (6.599). A camp's owed stand is no feign and reports nothing.
+    #[test]
+    fn a_feign_held_standing_is_reported_as_it_starts_and_ends() {
+        let mut world = hit_world(PostureState::Standing);
+        let hold = |world: &mut World| {
+            let outcome = testing::run(|out| world.posture.hold_feign(out.log));
+            outcome.result.unwrap();
+            held(&outcome.events)
+        };
+        assert_eq!(hold(&mut world), [true]);
+        assert_eq!(hold(&mut world), Vec::<bool>::new(), "held already");
+        assert!(world.posture.feign_held());
+        // The stand ends it, before the stand's own report.
+        let outcome =
+            testing::run(|out| Stances.handle(&ask(command::Posture::Standing), &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::FeignHeld(false)),
+                ClientEvent::World(WorldEvent::Posture {
+                    posture: PostureState::Standing,
+                    ..
+                }),
+            ]
+        ));
+        assert!(!world.posture.feign_held());
+        // A duck ends it too.
+        assert_eq!(hold(&mut world), [true]);
+        let outcome =
+            testing::run(|out| Stances.handle(&ask(command::Posture::Ducking), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(held(&outcome.events), [false]);
+        // So does a posture the server reports.
+        let report = Message::Event(WorldEvent::Posture {
+            spawn_id: 7,
+            posture: PostureState::Standing,
+        });
+        assert_eq!(hold(&mut world), [true]);
+        let outcome = testing::run(|out| Stances.observe(&report, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(held(&outcome.events), [false]);
+        // And death.
+        assert_eq!(hold(&mut world), [true]);
+        let death = Message::Event(WorldEvent::Death(eq_network_game::zoning::Death {
+            spawn_id: 7,
+            killer_id: 42,
+            corpse_id: 7,
+            bind_zone_id: 1,
+            corpse_name: None,
+        }));
+        let outcome = testing::run(|out| Stances.observe(&death, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(held(&outcome.events), [false]);
+        // A camp's owed stand is no feign: its stand reports none.
+        world.posture.owe_stand();
+        let outcome =
+            testing::run(|out| Stances.handle(&ask(command::Posture::Standing), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(held(&outcome.events), Vec::<bool>::new());
+    }
+
     /// The Mac-era client's routine is unread, so every request but a second
     /// lie still goes.
     #[test]
@@ -685,7 +812,16 @@ mod tests {
         world.body.admit(motion);
         let outcome = testing::run(|out| Stances.handle(&landed(7), &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty() && outcome.events.is_empty());
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        // The host hears only that the feign is held (6.599).
+        assert!(
+            matches!(
+                outcome.events[..],
+                [ClientEvent::World(WorldEvent::FeignHeld(true))]
+            ),
+            "{:?}",
+            outcome.events
+        );
         assert_eq!(world.posture.current(), Some(PostureState::Standing));
         assert!(world.posture.stand_owed());
         let stand = |world: &mut World| {

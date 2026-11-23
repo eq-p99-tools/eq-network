@@ -416,7 +416,7 @@ impl Abilities {
                     .options()
                     .is_some_and(|options| options.posture.feign_standing);
                 if ability == Ability::FeignDeath && standing {
-                    world.posture.owe_stand();
+                    world.posture.hold_feign(out.log)?;
                 } else if ability == Ability::FeignDeath {
                     // All refusals precede this intentional stance change.
                     // Lying is visible even when the feign roll fails: both
@@ -807,13 +807,17 @@ mod tests {
             [eq_network_game::feign::titanium_request(7).unwrap()]
         );
         assert_ne!(world.posture.current(), Some(PostureState::Lying));
-        assert!(world.posture.stand_owed());
+        assert!(world.posture.stand_owed() && world.posture.feign_held());
+        // The host hears the feign is held (6.599), then the press.
         assert!(matches!(
             outcome.events[..],
-            [ClientEvent::World(WorldEvent::AbilityUsed {
-                ability: Ability::FeignDeath,
-                ..
-            })]
+            [
+                ClientEvent::World(WorldEvent::FeignHeld(true)),
+                ClientEvent::World(WorldEvent::AbilityUsed {
+                    ability: Ability::FeignDeath,
+                    ..
+                })
+            ]
         ));
     }
 

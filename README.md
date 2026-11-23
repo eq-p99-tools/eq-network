@@ -65,49 +65,51 @@ each.
 | `RangedCombat` | Firing a bow or throwing a weapon | Yes | Yes | – | – |
 | `Abilities` | Kick, bash, taunt, hide, sneak, forage and the like | Yes | Yes | Yes | Yes |
 | `KnightAbilities` | Lay on Hands and Harm Touch | Yes | Yes | – | – |
-| `UsingDisciplines` | Disciplines the server lists, for every melee class | Yes | Yes | – | – |
+| `UsingDisciplines` | Disciplines the server lists, for every melee class; on TAKP and Quarm by the server's number for the class (source-derived, not yet checked live) | Yes | Yes | Yes | Yes |
+| `DisciplineReuse` | A bare `/disc`, asking when a discipline may next be used (source-derived, not yet checked live) | – | – | Yes | Yes |
 | `Tracking` | The tracking window | Yes | Yes | – | – |
-| `Pets` | Commanding a pet | Yes | Yes | – | – |
+| `Pets` | Commanding a pet (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Casting` | Casting memorized spells | Yes | Yes | Yes | Yes |
 | `Spellbook` | Memorizing, scribing and forgetting spells | Yes | Yes | Yes | Yes |
-| `MovingSpells` | Moving a spell within the spellbook | Yes | Yes | – | – |
-| `DeletingSpells` | Deleting a spell from the spellbook | – | Yes | – | – |
-| `CancellingBuffs` | Cancelling a beneficial buff | Yes | Yes | – | – |
+| `MovingSpells` | Moving a spell within the spellbook (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `DeletingSpells` | Deleting a spell from the spellbook (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |
+| `CancellingBuffs` | Cancelling a beneficial buff (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `StoppingSongs` | Stopping a Bard song | Yes | Yes | – | – |
 | **Items and coin** | | | | | |
 | `Inventory` | Moving and using items in the inventory and the bank | Yes | Yes | Yes | Yes |
 | `Meals` | Eating and drinking | Yes | Yes | Yes | Yes |
 | `Trading` | Buying from and selling to merchants | Yes | Yes | Yes | Yes |
 | `MerchantOffers` | Showing what a merchant pays | – | Yes | – | – |
-| `Giving` | Handing items to NPCs and trading with players | Yes | Yes | – | Yes |
-| `Looting` | Looting corpses | Yes | Yes | Yes | – |
-| `Corpses` | Consenting, summoning and dragging corpses | Yes | Yes | – | – |
-| `Tradeskills` | Combining in your own containers | Yes | Yes | – | – |
-| `WorldContainers` | Combining in world containers such as forges | Yes | Yes | – | – |
+| `Giving` | Handing items to NPCs and trading with players | Yes | Yes | Yes | Yes |
+| `Looting` | Looting corpses | Yes | Yes | Yes | Yes |
+| `Corpses` | Consenting, summoning and dragging corpses (source-derived on TAKP and Quarm, not yet checked live; /corpsedrop on Quarm only, /deny on neither) | Yes | Yes | Yes | Yes |
+| `Tradeskills` | Combining in your own containers (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `WorldContainers` | Combining in world containers such as forges (source-derived on TAKP and Quarm, not yet checked live; a close leaves the items inside there) | Yes | Yes | Yes | Yes |
 | `Reading` | Reading books and notes | Yes | Yes | Yes | Yes |
 | `BankerChange` | Changing coins at a banker | Yes | Yes | – | – |
-| `Splitting` | Sharing coin with the group | Yes | Yes | – | – |
+| `Splitting` | Sharing coin with the group (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `BazaarSearching` | Searching the Bazaar's traders, read only (source-derived on TAKP and Quarm, not yet checked live) | – | – | Yes | Yes |
 | **People** | | | | | |
 | `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
-| `Who` | `/who` | Yes | Yes | – | – |
-| `FriendsWho` | Friends online | Yes | Yes | – | – |
-| `Grouping` | Groups | Yes | Yes | – | Yes |
+| `Who` | `/who` | Yes | Yes | Yes | Yes |
+| `FriendsWho` | Friends online | Yes | Yes | Yes | Yes |
+| `Grouping` | Groups | Yes | Yes | Yes | Yes |
 | `Raiding` | Raids | – | Yes | – | – |
-| `Listing` | AFK, anonymous and roleplaying | Yes | Yes | – | Yes |
-| `Rolling` | `/random` | Yes | Yes | – | – |
-| `Emoting` | `/emote` | Yes | Yes | – | – |
-| `Assisting` | `/assist` | Yes | Yes | – | – |
-| `Petitioning` | Petitions to the server's staff | – | Yes | – | – |
-| `ReportingBugs` | Bug reports | – | Yes | – | – |
+| `Listing` | AFK, anonymous and roleplaying | Yes | Yes | Yes | Yes |
+| `Rolling` | `/random` (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `Emoting` | `/emote` (source-derived on TAKP and Quarm, not yet checked live; animations Titanium only) | Yes | Yes | Yes | Yes |
+| `Assisting` | `/assist` (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `Petitioning` | Petitions to the server's staff (source-derived on TAKP and Quarm, not yet checked live; Quarm runs with petitions off and says so) | – | Yes | Yes | Yes |
+| `ReportingBugs` | Bug reports (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |
 | `SendingFeedback` | Feedback, which only TAKP-family servers read | – | – | – | – |
 | `PlayerInspection` | Inspecting other players | Yes | Yes | – | – |
 | `GuildRoster` | A guild member's side of a guild | Yes | Yes | – | – |
 | `GuildManagement` | An officer's and a leader's side of a guild | Yes | Yes | – | – |
 | **Server prompts and events** | | | | | |
-| `Training` | Training skills at a guildmaster | Yes | Yes | – | – |
-| `Resurrection` | Accepting or declining a resurrection | Yes | Yes | – | – |
-| `Translocate` | Accepting or declining a translocate | Yes | Yes | – | Yes |
-| `Sacrifice` | Accepting or declining a sacrifice | – | Yes | – | – |
+| `Training` | Training skills at a guildmaster (source-derived on TAKP and Quarm, not yet checked live; languages held there) | Yes | Yes | Yes | Yes |
+| `Resurrection` | Accepting or declining a resurrection (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `Translocate` | Accepting or declining a translocate | Yes | Yes | Yes | Yes |
+| `Sacrifice` | Accepting or declining a sacrifice (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |
 | `ServerDialogs` | Answering server dialogs | Yes | Yes | – | – |
 | `BleedingOut` | Reporting a death the server leaves to the client | – | – | – | Yes |
 | `ServerTicks` | Showing when the regeneration tick lands | – | Yes | – | – |
@@ -123,8 +125,10 @@ Some capabilities depend on the session, not only on the server type:
   across zones, and returning to character selection restores the startup
   option. Replies wait 3 to 60 seconds and never join a list; whether the
   deployed server accepts them is still unverified.
-- `Drowning`, `LavaHeat` and `GroundDropping`: offered on a stock EQEmu session
-  only when it is restricted to the local network.
+- `Drowning` and `LavaHeat`: offered on every Titanium session, EQEmu and
+  P99, as the Titanium program reports them on any server.
+- `GroundDropping`: offered on a stock EQEmu session only when it is
+  restricted to the local network.
 - `RaidGroupLeaders`: not offered by any server type yet.
 - `Talking`: all chat a host asks for is paced, at most 10 lines in any 5 s
   and 12 shout, auction, out-of-character, tell, channel messages and chat

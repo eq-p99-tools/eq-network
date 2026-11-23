@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527), and the chat rows from the
-//! chat parser (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538, 6.539, 6.541,
+//! 6.544, 6.549, 6.552), and the chat rows from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -16,7 +16,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::Rof2,
-    ROF2,
+    NIMBUS, RENAME, REWARD, ROF2,
 };
 
 /// What the entry leaves unread of `RoF2`'s zone description (6.501).
@@ -30,10 +30,18 @@ const DESCRIPTION: &[Part] = &[
         Needless("the session has it from its entry"),
     ),
 ];
+/// What the zone decoder leaves unread of `RoF2`'s corpse money (6.552):
+/// the record that ends a `SoD` and later listing, which gives no event until
+/// the loot listing is read.
+const LOOT_ALL: &[Part] = &[Part(
+    "the Loot All marker, a response of 6 that ends the listing (zone/corpse.cpp \
+     Corpse::MakeLootRequestPackets)",
+    Planned(Rof2),
+)];
 /// What the entry leaves unread of `RoF2`'s profile (6.502).
 const PROFILE: &[Part] = &[Part(
-    "gems 9 to 12, the spellbook, coins, buffs, alternate advancement, bandoliers and the \
-     rest of the profile",
+    "gems 9 to 12, the spellbook, coins, buffs, alternate advancement, the 20 bandoliers and \
+     5 potion belt slots (owed, as Titanium's 6.559), and the rest of the profile",
     Planned(Rof2),
 )];
 /// What the entry and the zone decoder leave unread of a spawn record:
@@ -85,6 +93,17 @@ const FACE_CHANGE: &[Part] = &[Part(
 const BUFF: &[Part] = &[Part(
     "the counters, which the encoder does not send, the hit count, the location and the slot \
      data",
+    Planned(Rof2),
+)];
+/// What the zone decoder leaves unread of a ground object (6.539).
+const GROUND_OBJECT: &[Part] = &[Part(
+    "the zone, the instance, the two tilts and the size, which Titanium's ground object has no \
+     field for",
+    Planned(Rof2),
+)];
+/// What the session leaves unread of the weather (6.539).
+const WEATHER: &[Part] = &[Part(
+    "the 12-byte form sent at zone-in, which Titanium's admission takes as a step",
     Planned(Rof2),
 )];
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
@@ -178,6 +197,67 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x3377 => sent("OP_BuffCreate", ROF2, Read(&[Zone])),
         0x4f4b => sent("OP_TargetBuffs", ROF2, Read(&[Zone])),
         0x5882 => sent("OP_PetBuffWindow", ROF2, Read(&[Zone])),
+        // The spell book and gems (6.532), unencoded: the server's own
+        // structs, with a 720-slot book. The deletion's padding is the
+        // client's own request echoed, so it is not a part.
+        0x217c => sent("OP_MemorizeSpell", ROF2, Read(&[Zone])),
+        0x0efa => sent("OP_SwapSpell", ROF2, Read(&[Zone])),
+        0x3358 => sent("OP_DeleteSpell", ROF2, Read(&[Zone])),
+        // The mana and endurance pools (6.538), unencoded and sent to SoD
+        // and later only.
+        0x3791 => sent("OP_ManaUpdate", ROF2, Read(&[Zone])),
+        0x5f42 => sent("OP_EnduranceUpdate", ROF2, Read(&[Zone])),
+        0x2404 => sent("OP_MobManaUpdate", ROF2, Read(&[Zone])),
+        0x1c81 => sent("OP_MobEnduranceUpdate", ROF2, Read(&[Zone])),
+        // Doors, ground objects and the weather (6.539). The door record's
+        // four bytes at 56 and everything from 68 are not parts: the
+        // encoder writes bytes 80 to 86 only, as 0, 1, 0, 1, 0, 0 and 0,
+        // and byte 87 and the 12 after it are not written. The ground
+        // object's 52-byte tail past its object type is not written either.
+        // The door's move, the click and the weather go out unencoded, the
+        // bytes Titanium gets.
+        0x7291 => sent("OP_SpawnDoor", ROF2, Read(&[Zone])),
+        0x08e8 => sent("OP_MoveDoor", ROF2, Read(&[Zone])),
+        0x6fca => sent("OP_GroundSpawn", ROF2, Partly(&[Zone], GROUND_OBJECT)),
+        0x4aa1 => sent("OP_ClickObject", ROF2, Read(&[Zone])),
+        0x661e => sent("OP_Weather", ROF2, Partly(&[Zone], WEATHER)),
+        // Rolls, assists, yells for help and effects (6.541), unencoded for
+        // both generations, the bytes Titanium gets. The spell effect's
+        // unread field and bytes are Titanium's part.
+        0x106b => sent("OP_RandomReply", ROF2, Read(&[Zone])),
+        0x4478 => sent("OP_Assist", ROF2, Read(&[Zone])),
+        0x4e56 => sent("OP_YellForHelp", ROF2, Read(&[Zone])),
+        0x3bc9 => sent("OP_LevelAppearance", ROF2, Read(&[Zone])),
+        0x127f => sent("OP_CameraEffect", ROF2, Read(&[Zone])),
+        0x5770 => sent("OP_PlayMP3", ROF2, Read(&[Zone])),
+        0x5936 => sent("OP_SpellEffect", ROF2, Partly(&[Zone], NIMBUS)),
+        // Targets, charms, cash rewards, linked reuse and the answers to
+        // begging, pick pocketing and bandaging (6.544), unencoded for both
+        // generations, the bytes Titanium gets.
+        0x58e2 => sent("OP_TargetCommand", ROF2, Read(&[Zone])),
+        0x0272 => sent("OP_TargetHoTT", ROF2, Read(&[Zone])),
+        0x5d92 => sent("OP_Charm", ROF2, Read(&[Zone])),
+        0x5f7a => sent("OP_CashReward", ROF2, Read(&[Zone])),
+        0x1619 => sent("OP_LinkedReuse", ROF2, Read(&[Zone])),
+        0x6703 => sent("OP_Begging", ROF2, Read(&[Zone])),
+        0x39e8 => sent("OP_PickPocket", ROF2, Read(&[Zone])),
+        0x0386 => sent("OP_Bind_Wound", ROF2, Read(&[Zone])),
+        // Quest rewards and their sound, renames, the new titles notice and
+        // the banker's change (6.549), unencoded for both generations, the
+        // bytes Titanium gets, with Titanium's parts.
+        0x1a30 => sent("OP_Sound", ROF2, Partly(&[Zone], REWARD)),
+        0x2c57 => sent("OP_MobRename", ROF2, Partly(&[Zone], RENAME)),
+        0x0d32 => sent("OP_NewTitlesAvailable", ROF2, Read(&[Zone])),
+        0x791e => sent("OP_BankerChange", ROF2, Read(&[Zone])),
+        // Corpse money and the loot close, the surname answer and titles
+        // (6.552), unencoded for both generations, the bytes Titanium gets.
+        // The corpse money's Loot All marker, which only SoD and later get,
+        // gives no event yet.
+        0x5f44 => sent("OP_MoneyOnCorpse", ROF2, Partly(&[Zone], LOOT_ALL)),
+        0x55c4 => sent("OP_LootComplete", ROF2, Read(&[Zone])),
+        0x0423 => sent("OP_Surname", ROF2, Read(&[Zone])),
+        0x2d08 => sent("OP_SendTitleList", ROF2, Read(&[Zone])),
+        0x4c21 => sent("OP_SetTitleReply", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the
@@ -226,5 +306,20 @@ mod tests {
             })
             .collect();
         assert_eq!(unread, skipped.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_corpse_money_leaves_the_loot_all_marker_as_a_gap() {
+        // Each arrival of RoF2's corpse money is a gap until the loot
+        // listing batch reads the Loot All marker (6.552).
+        let gap = super::super::gap_at(rof2(0x5f44).as_ref(), super::super::Stage::Zone, 20);
+        assert!(
+            matches!(
+                &gap,
+                Some(super::super::GapKind::PartlyRead { parts })
+                    if parts.len() == 1 && parts[0].starts_with("the Loot All marker")
+            ),
+            "{gap:?}"
+        );
     }
 }

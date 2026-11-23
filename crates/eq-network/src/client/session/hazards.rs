@@ -9,14 +9,16 @@
 //! the client.
 use super::{
     actions,
+    bleeding::ItemCount,
     feature::{Feature, Out, World},
     posture, ClientCommand, ClientEvent,
 };
 use anyhow::Result;
 use eq_network_game::{
-    hazards::{Hazard, LiquidHazard},
+    hazards::{self, Hazard, LiquidHazard},
+    message::Message,
     request::Request,
-    world::{Capability, Position, WorldEvent},
+    world::{Capability, Position, PostureState, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
@@ -62,9 +64,15 @@ impl Observations {
             WorldEvent::SpellEffect(effect) => *own == effect.target_id,
             WorldEvent::Death(death) => death.spawn_id == u32::from(*own),
             WorldEvent::AlternateAdvancement {
-                session_id: visit, ..
+                session_id: visit,
+                updates,
+            } => {
+                *visit == *session_id
+                    && updates
+                        .iter()
+                        .any(eq_network_game::alternate_advancement::Update::changes_effects)
             }
-            | WorldEvent::DeathBind { session_id: visit }
+            WorldEvent::DeathBind { session_id: visit }
             | WorldEvent::InventoryAction {
                 session_id: visit,
                 update: Some(_),
@@ -100,14 +108,31 @@ fn same_finite_xyz(current: [f32; 3], observed: Position) -> bool {
         && current.map(f32::to_bits) == [observed.x, observed.y, observed.z].map(f32::to_bits)
 }
 
+/// The HP below which the Titanium program takes the death path instead of
+/// sending its damage record: -10, less effect 328's total, which the
+/// session doesn't resolve (read R49-3 d, e; inferred, 6.491b).
+const DEATH_FLOOR: i64 = -10;
+
+/// The races whose spawn the Titanium program flags as a carrier (spawn
+/// +0x1b6, set at 0x47a741), which takes no environmental damage (read
+/// R49-3 d).
+const CARRIER_RACES: [u32; 5] = [0x8d, 0x48, 0x49, 0x72, 0x194];
+
 /// Reports the world's damage to the server.
 pub(super) struct Hazards {
     /// The hazards the server type takes from the client.
     taken: &'static [Hazard],
     /// Whether the client generation sends a notice before each report, as
-    /// the `EQMac` program does.
+    /// the `EQMac` program does. A generation without one is Titanium's,
+    /// which sends its damage record after each liquid report instead.
     notice: bool,
     last_liquid_sample: [Option<Instant>; 2],
+    /// The server's last word on the player's HP, which on both
+    /// generations leaves out what the player's items add.
+    hit_points: Option<i32>,
+    /// How the server type counts what the player's items add to their HP,
+    /// where the session can: none yet on Titanium (see [`Self::records`]).
+    items: Option<ItemCount>,
 }
 
 impl Hazards {
@@ -118,7 +143,67 @@ impl Hazards {
             taken,
             notice,
             last_liquid_sample: [None; 2],
+            hit_points: None,
+            items: None,
         }
+    }
+
+    /// Counts what the player's items add to their HP by this rule, so that
+    /// the death path's skip can place the player against the floor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "no Titanium count yet"))]
+    pub(super) const fn with_item_count(mut self, items: ItemCount) -> Self {
+        self.items = Some(items);
+        self
+    }
+
+    /// Keeps the server's last word on the player's HP.
+    fn note(&mut self, message: &Message, world: &World) {
+        if let Message::Event(WorldEvent::HitPoints {
+            spawn_id, current, ..
+        }) = message
+        {
+            if world.is_player(*spawn_id) {
+                self.hit_points = Some(*current);
+            }
+        }
+    }
+
+    /// Why the Titanium program would send nothing for a report now, of the
+    /// skips in 0x41c905 the session can see (read R49-3 d; falls share it,
+    /// R49-3a): the freeze stance, 102, and a carrier race. A linkdead
+    /// player isn't playing, and the mode byte 4 is unread (6.491c). The
+    /// `EQMac` program's skips are unread, so they apply to Titanium only.
+    fn skipped(&self, world: &World) -> Option<&'static str> {
+        if self.notice {
+            return None;
+        }
+        if world.posture.current() == Some(PostureState::Frozen) {
+            return Some("The program reports no damage in the freeze stance");
+        }
+        world
+            .player
+            .as_ref()
+            .is_some_and(|player| CARRIER_RACES.contains(&player.race))
+            .then_some("The program reports no damage for a carrier race")
+    }
+
+    /// Whether the Titanium damage record follows this report (R49-3 c,
+    /// R49-3a): unless the player's HP, less the amount, is below
+    /// [`DEATH_FLOOR`], where the program takes the death path and sends
+    /// none (read R49-3 e 7). The session drops no HP of its own, so the
+    /// server's last report, with what the items add, stands in for the
+    /// program's local HP (inferred, 6.491b). That report leaves the items
+    /// out, so where the session can't count them it can't place the player
+    /// below the floor, and the record goes: `EQEmu` only relays it.
+    fn records(&self, amount: u32, world: &World) -> bool {
+        if self.notice {
+            return false;
+        }
+        let known = self
+            .hit_points
+            .zip(self.items.and_then(|count| count(world).ok()))
+            .map(|(reported, items)| i64::from(reported) + i64::from(items));
+        known.is_none_or(|hp| hp - i64::from(amount) >= DEATH_FLOOR)
     }
 
     fn send_report(
@@ -143,25 +228,46 @@ impl Hazards {
         } else {
             None
         };
+        let record = if self.records(amount, world) {
+            Some(hazards::titanium_damage_record(
+                out.sender.spawn_id.unwrap_or_default(),
+                hazard,
+                amount,
+            ))
+        } else {
+            None
+        };
         match (
             notice.transpose(),
             out.encode(&Request::EnvironmentalDamage { hazard, amount }),
+            record.transpose(),
         ) {
-            (Ok(notice), Ok(packet)) => {
+            (Ok(notice), Ok(packet), Ok(record)) => {
                 if let Some(notice) = notice {
                     out.send(&notice)?;
                 }
                 out.send(&packet)?;
+                // The program's record goes after its report (R49-3 c).
+                if let Some(record) = &record {
+                    out.send(record)?;
+                }
                 // Only an accepted, submitted local report reaches the same
                 // posture policy as received damage (read R31 / 6.475).
                 // Submission establishes no received damage or HP authority.
                 posture::stand_for_own_damage(amount, world, out)?;
                 out.log
+                    .send(ClientEvent::World(WorldEvent::HazardReported {
+                        session_id: world.session_id,
+                        hazard,
+                        amount,
+                        record: record.is_some(),
+                    }))?;
+                out.log
                     .diagnostic(format!("Reported {amount} points of {hazard:?} damage"))
             }
             // The host works the amount out; one the packet cannot carry is
             // not worth the session.
-            (Err(error), _) | (_, Err(error)) => {
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                 out.log.diagnostic(format!("Damage not reported: {error}"))
             }
         }
@@ -178,6 +284,21 @@ impl Feature for Hazards {
             capabilities.push(Capability::LavaHeat);
         }
         capabilities
+    }
+
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        self.note(message, world);
+        Ok(())
+    }
+
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        self.note(message, world);
+        Ok(())
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -213,11 +334,14 @@ impl Feature for Hazards {
                 amount,
                 observation,
             } => {
+                // The program's liquid routine reports one type per tick,
+                // whichever the feet stand in (read R49-3 a).
                 let (hazard, index) = match hazard {
                     LiquidHazard::Drowning => (Hazard::Drowning, 0),
                     LiquidHazard::Lava => (Hazard::Lava, 1),
+                    LiquidHazard::ZoneHeat => (Hazard::ZoneHeat, 1),
                 };
-                if !self.taken.contains(&hazard) || !world.local_eqemu() {
+                if !self.taken.contains(&hazard) {
                     return actions::refuse(
                         command,
                         "Liquid reports are unavailable on this session",
@@ -238,6 +362,7 @@ impl Feature for Hazards {
                         out.log,
                     );
                 }
+
                 if amount == 0
                     || self.last_liquid_sample[index].is_some_and(|last| {
                         observation.sampled_at.saturating_duration_since(last)
@@ -258,6 +383,9 @@ impl Feature for Hazards {
                 out.log,
             );
         }
+        if let Some(reason) = self.skipped(world) {
+            return actions::refuse(command, reason, out.log);
+        }
         self.send_report(hazard, amount, safe_fall, world, out)
     }
 }
@@ -272,6 +400,7 @@ mod tests {
 
     #[test]
     fn environmental_aa_facts_advance_only_their_current_liquid_revision() {
+        use eq_network_game::alternate_advancement::{Timer, Update};
         let mut observations = Observations {
             current: Some((5, 7, 10)),
         };
@@ -292,6 +421,20 @@ mod tests {
                 revision: 11
             })
         );
+        // Points, experience and timers change no effect, so no revision.
+        let unchanged = ClientEvent::World(WorldEvent::AlternateAdvancement {
+            session_id: 5,
+            updates: vec![
+                Update::Points(None),
+                Update::Progress(None),
+                Update::Timer(Timer {
+                    begin: 0,
+                    ability: 9,
+                    end: 1,
+                }),
+            ],
+        });
+        assert!(observations.observe(&unchanged).is_none());
     }
 
     fn report(hazard: Hazard, amount: u32) -> ClientCommand {
@@ -330,6 +473,7 @@ mod tests {
             [
                 hazards::safe_fall(true),
                 hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Falling, 160).unwrap(),
             ]
         );
         assert!(world.inventory.ground_drop_pending());
@@ -344,12 +488,23 @@ mod tests {
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
-            [hazards::titanium_damage(7, Hazard::Falling, 160).unwrap()]
+            [
+                hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Falling, 160).unwrap(),
+            ]
         );
         assert_eq!(outcome.unreliable, []);
         assert!(matches!(
             &outcome.events[..],
-            [ClientEvent::Diagnostic(line)] if line.contains("160")
+            [
+                ClientEvent::World(WorldEvent::HazardReported {
+                    session_id: 5,
+                    hazard: Hazard::Falling,
+                    amount: 160,
+                    record: true,
+                }),
+                ClientEvent::Diagnostic(line),
+            ] if line.contains("160")
         ));
     }
 
@@ -400,6 +555,7 @@ mod tests {
             [
                 hazards::safe_fall(true),
                 hazards::titanium_damage(7, Hazard::Falling, 40).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Falling, 40).unwrap(),
             ]
         );
         let outcome = testing::run(|out| feature.handle(&lessened(0), &mut world, out));

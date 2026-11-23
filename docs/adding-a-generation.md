@@ -157,6 +157,35 @@ unreachable because validation refuses the generation:
   into Titanium's pet buffs. The server's buff slots are `RoF2`'s own. How the `RoF2` program
   applies the fade words, and what it does with the update's hit count, location and slot
   data, is a read still owed.
+- Its spell book and gems (`rof2_spellbook`, 6.532): the memorize, swap and deletion messages go
+  out unencoded, the server's own structs, and Titanium's readers read them with a 720-slot book.
+  A bar refresh's slot is the server's casting slot, which Titanium's encoder renumbers, and it
+  carries the reduction Titanium's encoder drops. The profile's book and gems 9 to 12 stay the
+  profile's planned part.
+- Its mana and endurance pools (`rof2_pools`, 6.538): the pool updates with their maxima and the
+  group's and raid's percents, which the server sends SoD and later clients only, unencoded, and
+  which give events of their own, since Titanium is sent nothing like them.
+- Its doors, ground objects and weather (`rof2_world`, 6.539): the door table and the ground
+  object have encoders of their own, and Titanium's readers take the door table by record length
+  and size width; the door's move, the click and the weather go out unencoded. The door record's
+  constants, the ground object's tilts and size, and the zone-in weather are reads still owed.
+- Its rolls, assists, yells for help and effects (`rof2_socials`, 6.541): seven messages with no
+  encoder for either generation, read by Titanium's readers under `RoF2`'s numbers. Whether the
+  program reads the spell effect's last fields and plays the sound file as Titanium does is a
+  read still owed.
+- Its targets, charms, rewards, reuse timers and skill answers (`rof2_answers`, 6.544): eight
+  messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
+  numbers. Whether the program reads the pick pocket answer's skill word and the begging
+  answer's first words is a read still owed.
+- Its quest rewards, renames, new titles notice and banker's change (`rof2_notices`, 6.549):
+  four messages with no encoder for either generation, read by Titanium's readers under
+  `RoF2`'s numbers. Whether the program reads the reward's faction words and the rename's two
+  words is a read still owed.
+- Its corpse money and loot close, surname answer and titles (`rof2_loot_titles`, 6.552): five
+  messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
+  numbers, but for the Loot All marker that ends a SoD and later listing, which gives no event
+  until the loot listing is read and blocks lifting validate. How the program shows that marker
+  is a read still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

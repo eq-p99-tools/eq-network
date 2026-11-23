@@ -1,15 +1,16 @@
 //! The Titanium client's messages, which `EQEmu` and P99 send.
 
 use super::{
-    planned, sent, unasked, Part,
+    planned, sent, sent_private, unasked, Part,
     Reader::{Admission, Chat, ListPolls, Login, SpellTables, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
-    BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
-    MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
+    BAZAAR_SEARCH, BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK,
+    MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
+    RENAME, REWARD, SACRIFICE, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
+    TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRADER_SHOP, TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -38,7 +39,9 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x0557 => sent("OP_VetRewardsAvaliable", EQEMU, planned(LaterSystems)),
         0x0587 => sent("OP_SendExpZonein", EQEMU, Read(&[Admission])),
         0x0677 => sent("OP_AdventureData", EQEMU, planned(LaterSystems)),
-        0x0681 => sent("OP_AAAction", EQEMU, planned(AlternateAdvancement)),
+        // Read on a local session; off one, dropped until the AA offer lifts
+        // (6.547 follow-up row).
+        0x0681 => sent("OP_AAAction", EQEMU, Read(&[Zone])),
         0x0695 => sent("OP_MobHealth", EQEMU, Read(&[Zone])),
         0x06c5 => sent("OP_LFPGetMatchesResponse", EQEMU, unasked(LaterSystems)),
         0x07f1 => sent(
@@ -121,7 +124,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1db5 => sent("OP_AdventureInfo", EQEMU, planned(LaterSystems)),
         0x1dde => sent("OP_OnLevelMessage", EQEMU, Partly(&[Zone], POPUP)),
         0x1e51 => sent("OP_Stun", EQEMU, Read(&[Zone])),
-        0x1ee9 => sent("OP_BazaarSearch", EQEMU, planned(Bazaar)),
+        // The search's results, end and welcome (6.550); P99 has no Bazaar.
+        0x1ee9 => sent_private("OP_BazaarSearch", EQEMU, Partly(&[Zone], BAZAAR_SEARCH)),
         0x1f21 => sent(
             "OP_RaidUpdate",
             EQEMU,
@@ -152,7 +156,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x267c => sent("OP_MoneyUpdate", EQEMU, Read(&[Zone])),
         0x26ab => sent("OP_PlayMP3", EQEMU, Read(&[Zone])),
         0x27b3 => sent("OP_TributeMoney", EQEMU, unasked(LaterSystems)),
-        0x2844 => sent("OP_BecomeTrader", EQEMU, planned(Bazaar)),
+        // Other players' trader signs (6.558); P99 has no Bazaar.
+        0x2844 => sent_private("OP_BecomeTrader", EQEMU, Read(&[Zone])),
         0x28aa => sent("OP_DzCompass", EQEMU, planned(LaterSystems)),
         0x28e1 => sent("OP_RequestDuel", EQEMU, Partly(&[Zone], DUEL_REQUEST)),
         0x2acf => sent("OP_Animation", EQEMU, Read(&[Zone])),
@@ -184,19 +189,22 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         ),
         0x34c1 => sent("OP_TradeCoins", EQEMU, Read(&[Zone])),
         0x358e => sent("OP_LevelAppearance", EQEMU, Read(&[Zone])),
-        0x35e8 => sent("OP_TraderShop", EQEMU, planned(Bazaar)),
+        // The admission to browse a trader (6.558).
+        0x35e8 => sent_private("OP_TraderShop", EQEMU, Partly(&[Zone], TRADER_SHOP)),
+        // Read on a local session; off one, dropped until the AA offer lifts
+        // (6.547 follow-up row).
         0x367d => sent("OP_SendAATable", EQEMU, Read(&[Zone])),
         0x372f => sent("OP_TradeRequest", EQEMU, Read(&[Zone])),
         0x3817 => sent("OP_DzExpeditionInvite", EQEMU, planned(LaterSystems)),
         0x381d => sent("OP_PlayerStateRemove", EQEMU, Read(&[Zone])),
         0x385e => sent("OP_ZonePlayerToBind", EQEMU, Read(&[Zone])),
         0x3906 => sent("OP_AdventureFinish", EQEMU, planned(LaterSystems)),
-        0x397d => sent("OP_TaskHistoryReply", EQEMU, planned(LaterSystems)),
+        0x397d => sent_private("OP_TaskHistoryReply", EQEMU, Partly(&[Zone], TASK_HISTORY)),
         0x3990 => sent("OP_BeginCast", EQEMU, Read(&[Zone])),
         // P99's compact position update.
         0x3a2b => sent("P99's compact position", P99, Read(&[Zone])),
         0x3af4 => sent("OP_RespondAA", EQEMU, Read(&[Zone])),
-        0x3ba8 => sent("OP_CancelTask", EQEMU, planned(LaterSystems)),
+        0x3ba8 => sent_private("OP_CancelTask", EQEMU, Read(&[Zone])),
         0x3bc2 => sent("OP_ClickObject", EQEMU, Read(&[Zone])),
         0x3bcf => sent("OP_HPUpdate", EQEMU, Read(&[Zone])),
         0x3c25 => sent("OP_ApproveWorld", EQEMU, Read(&[World])),
@@ -205,6 +213,14 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x3cdc => sent("OP_LogoutReply", EQEMU, Read(&[Zone])),
         // The answer to OP_RequestTitles.
         0x3e89 => sent("OP_SendTitleList", EQEMU, Read(&[Zone])),
+        // The Titanium program reads another program's own refusal of the
+        // player's challenge (R49-6d, 0x45d5af). EQEmu leaves 0x3ea0
+        // unmapped and never passes one on; P99 might (inferred).
+        0x3ea0 => sent(
+            "OP_DuelResponse (the program's own refusal)",
+            P99,
+            Read(&[Zone]),
+        ),
         0x3ea6 => sent("OP_ApproveName", EQEMU, Read(&[World])),
         0x3eba => sent("OP_SendZonepoints", EQEMU, Read(&[Zone])),
         0x3eec => sent("OP_SetGroupTarget", EQEMU, planned(Raids)),
@@ -241,7 +257,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x4f37 => sent("OP_DeleteSpell", EQEMU, Read(&[Zone])),
         0x4fb6 => sent("OP_InspectBuffs", EQEMU, planned(AlternateAdvancement)),
         0x512e => sent("OP_OpenTributeMaster", EQEMU, unasked(LaterSystems)),
-        0x524e => sent("OP_Trader", EQEMU, planned(Bazaar)),
+        0x524e => sent_private("OP_Trader", EQEMU, planned(Bazaar)),
         0x52a4 => sent("OP_PostEnterWorld", EQEMU, Read(&[World])),
         0x5394 => sent("OP_CharInventory", EQEMU, Read(&[Zone])),
         0x53df => sent(
@@ -250,10 +266,11 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             Partly(&[Zone], DISCIPLINE_TIMER),
         ),
         // A quest's reward, or EQEmu's fixed record that gives nothing.
+        // EQEmu names it OP_Sound; the program reads a quest reward (R49-6g).
         0x541e => sent("OP_Sound", EQEMU, Partly(&[Zone], REWARD)),
         0x547a => sent("OP_Emote", EQEMU, Read(&[Chat])),
         0x5483 => sent("OP_MarkNPC", EQEMU, planned(Raids)),
-        0x54eb => sent("OP_TaskActivityComplete", EQEMU, planned(LaterSystems)),
+        0x54eb => sent_private("OP_TaskActivityComplete", EQEMU, Read(&[Zone])),
         0x55bc => sent("OP_DeleteSpawn", EQEMU, Read(&[Zone])),
         0x5639 => sent("OP_TributeUpdate", EQEMU, planned(LaterSystems)),
         0x56cd => sent("OP_AdventureStatsReply", EQEMU, planned(LaterSystems)),
@@ -273,7 +290,12 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             Unread(Needless("it carries nothing")),
         ),
         0x5a48 => sent("OP_FormattedMessage", EQEMU, Read(&[Chat])),
-        0x5b7b => sent("OP_IncreaseStats", EQEMU, Partly(&[Zone], STATS)),
+        // The program reads 12 bytes, the spawn, the stat and the amount
+        // (R49-6f, 0x455fff). EQEmu sends its 141-byte IncreaseStat_Struct
+        // (zone/client.cpp Client::SetStats, Client::IncStats), which the
+        // program doesn't read: each one is counted unreadable, with its
+        // length and a sample.
+        0x5b7b => sent("OP_IncreaseStats", EQEMU, Read(&[Zone])),
         0x5c78 => sent("OP_Damage", EQEMU, Read(&[Zone])),
         0x5cc0 => sent("OP_PVPStats", EQEMU, planned(LaterSystems)),
         0x5d11 => sent("OP_Track", EQEMU, Read(&[Zone])),
@@ -286,11 +308,17 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             )),
         ),
         0x5e3d => sent("OP_SendGuildTributes", EQEMU, planned(LaterSystems)),
-        0x5e7c => sent("OP_TaskSelectWindow", EQEMU, planned(LaterSystems)),
+        0x5e7c => sent_private("OP_TaskSelectWindow", EQEMU, Partly(&[Zone], TASK_OFFERS)),
         0x5eab => sent("OP_SetTitleReply", EQEMU, Read(&[Zone])),
         0x5ecd => sent("OP_ExpUpdate", EQEMU, Read(&[Zone])),
-        0x5ef7 => sent("OP_TaskDescription", EQEMU, planned(LaterSystems)),
-        0x5f58 => sent("OP_AAExpUpdate", EQEMU, planned(AlternateAdvancement)),
+        0x5ef7 => sent_private(
+            "OP_TaskDescription",
+            EQEMU,
+            Partly(&[Zone], TASK_DESCRIPTION),
+        ),
+        // Read on a local session; off one, dropped until the AA offer lifts
+        // (6.547 follow-up row).
+        0x5f58 => sent("OP_AAExpUpdate", EQEMU, Read(&[Zone])),
         0x6014 => sent("OP_FinishTrade", EQEMU, Read(&[Zone])),
         0x601d => sent("OP_Bind_Wound", EQEMU, Read(&[Zone])),
         0x60b6 => sent("OP_OpenGuildTributeMaster", EQEMU, unasked(LaterSystems)),
@@ -307,7 +335,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x667c => sent("OP_ItemLinkResponse", EQEMU, Read(&[Zone])),
         0x673c => sent("OP_SimpleMessage", EQEMU, Read(&[Chat])),
         0x67ea => sent("OP_GuildTributeFavorAndTimer", EQEMU, planned(LaterSystems)),
-        0x682d => sent("OP_TaskActivity", EQEMU, planned(LaterSystems)),
+        0x682d => sent_private("OP_TaskActivity", EQEMU, Partly(&[Zone], TASK_ACTIVITY)),
         0x6839 => sent("OP_TradeBusy", EQEMU, Read(&[Zone])),
         0x692c => sent("OP_GMKick", EQEMU, Partly(&[Zone], KICK)),
         0x6937 => sent("OP_ClickObjectAction", EQEMU, Read(&[Zone])),
@@ -326,7 +354,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x6a93 => sent("OP_SkillUpdate", EQEMU, Read(&[Zone])),
         0x6cd5 => sent("OP_RandomReply", EQEMU, Read(&[Zone])),
         0x6d44 => sent("OP_LevelUpdate", EQEMU, Read(&[Zone])),
-        0x6dd8 => sent("OP_TraderBuy", EQEMU, planned(Bazaar)),
+        0x6dd8 => sent_private("OP_TraderBuy", EQEMU, planned(Bazaar)),
         0x6f6c => sent("OP_TributeItem", EQEMU, unasked(LaterSystems)),
         0x6f90 => sent("OP_LootRequest", EQEMU, Read(&[Zone])),
         0x700d => sent("OP_MoveDoor", EQEMU, Read(&[Zone])),
@@ -351,7 +379,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             planned(AlternateAdvancement),
         ),
         0x7441 => sent("OP_WearChange", EQEMU, Read(&[Zone])),
-        0x7460 => sent("OP_Barter", EQEMU, planned(Bazaar)),
+        0x7460 => sent_private("OP_Barter", EQEMU, planned(Bazaar)),
         0x754e => sent("OP_GuildMemberAdd", EQEMU, Partly(&[Zone], MEMBER_ADD)),
         0x757b => sent("OP_WhoAllResponse", EQEMU, Read(&[Zone])),
         0x75df => sent(
@@ -359,7 +387,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             EQEMU,
             Partly(&[Admission, Zone], TITANIUM_PROFILE),
         ),
-        0x76a2 => sent("OP_CompletedTasks", EQEMU, planned(LaterSystems)),
+        0x76a2 => sent_private("OP_CompletedTasks", EQEMU, Read(&[Zone])),
         0x7709 => sent("OP_Assist", EQEMU, Read(&[Zone])),
         0x775d => sent("OP_InspectRequest", EQEMU, Read(&[Zone])),
         0x77d0 => sent("OP_RemoveAllDoors", EQEMU, Read(&[Zone])),
@@ -374,10 +402,11 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // Nothing in EQEmu sends it today.
         0x7c59 => sent("OP_GuildMemberRename", EQEMU, Read(&[Zone])),
         0x7cba => sent("OP_EnterWorld", EQEMU, Read(&[World])),
-        0x7e03 => sent("OP_ShopEnd", EQEMU, planned(Bazaar)),
+        // The trader being browsed left trader mode (6.558).
+        0x7e03 => sent("OP_ShopEnd", EQEMU, Read(&[Zone])),
         0x7fe4 => sent("OP_MoneyOnCorpse", EQEMU, Read(&[Zone])),
         0x8258 => sent("OP_Translocate", EQEMU, Partly(&[Zone], TRANSLOCATE)),
-        0xb4ab => sent("OP_GuildBank", EQEMU, planned(LaterSystems)),
+        0xb4ab => sent("OP_GuildBank", EQEMU, Read(&[Zone])),
         _ => return None,
     })
 }

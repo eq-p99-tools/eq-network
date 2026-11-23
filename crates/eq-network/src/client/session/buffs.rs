@@ -28,6 +28,8 @@ pub(super) struct Buffs {
     revision: u64,
     pending: Option<(Request, Instant)>,
     p99: bool,
+    /// TAKP's and Quarm's 20-byte `OP_Buff` (6.604 E3).
+    eqmac: bool,
 }
 
 impl Buffs {
@@ -35,6 +37,16 @@ impl Buffs {
     pub(super) fn project1999() -> Self {
         Self {
             p99: true,
+            ..Self::default()
+        }
+    }
+
+    /// TAKP and Quarm, from their own `Handle_OP_Buff` (6.604 E3,
+    /// source-derived, not yet live). The same beneficial-only check holds
+    /// there: TAKP would fade any spell named.
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
             ..Self::default()
         }
     }
@@ -63,7 +75,17 @@ impl Buffs {
             let buff = request
                 .record(self.slots.as_ref())
                 .ok_or_else(|| anyhow::anyhow!("The selected buff slot is unavailable"))?;
-            Ok((cancel::titanium_packet(own, request.slot, buff)?, None))
+            let packet = if self.eqmac {
+                // The Titanium program's slot model is not the Mac one's.
+                anyhow::ensure!(
+                    matches!(request.placement, cancel::Placement::Received),
+                    "The selected buff slot is unavailable"
+                );
+                cancel::eqmac_packet(own, request.slot, buff)?
+            } else {
+                cancel::titanium_packet(own, request.slot, buff)?
+            };
+            Ok((packet, None))
         }
     }
 
@@ -224,6 +246,7 @@ impl Feature for Buffs {
     fn connection_ended(&mut self, _world: &mut World) {
         *self = Self {
             p99: self.p99,
+            eqmac: self.eqmac,
             ..Self::default()
         };
     }
@@ -405,6 +428,52 @@ mod tests {
             placement: eq_network_game::buffs::cancel::Placement::Received,
         });
         (buffs, world, command)
+    }
+
+    #[test]
+    fn a_mac_cancellation_is_one_twenty_byte_record_and_only_for_a_beneficial_buff() {
+        let wire = &crate::client::session::wire::EqMac;
+        let (_, mut world, command) = fixture();
+        let fresh = || {
+            let mut buffs = Buffs::eqmac();
+            buffs.snapshot(&[None, None, None, Some(buff(42))]);
+            buffs.revision = 1;
+            buffs
+        };
+        let mut buffs = fresh();
+        let outcome = testing::run_on(wire, |out| buffs.handle(&command, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [cancel::eqmac_packet(7, 3, &buff(42)).unwrap()]
+        );
+        assert_eq!(outcome.sent[0].body.len(), 20);
+        assert_eq!(progress(&outcome.events), [Progress::Submitted]);
+        // A harmful or unknown buff, and a modelled slot, send nothing,
+        // though TAKP would fade any spell named.
+        let ClientCommand::CancelBuff(request) = &command else {
+            unreachable!()
+        };
+        for changed in [
+            Request {
+                beneficial: Some(false),
+                ..request.clone()
+            },
+            Request {
+                beneficial: None,
+                ..request.clone()
+            },
+            Request {
+                placement: cancel::Placement::Modelled(buff(42)),
+                slot: 0,
+                ..request.clone()
+            },
+        ] {
+            let mut buffs = fresh();
+            let command = ClientCommand::CancelBuff(changed);
+            let outcome = testing::run_on(wire, |out| buffs.handle(&command, &mut world, out));
+            assert_eq!(outcome.sent, []);
+        }
     }
 
     fn progress(events: &[ClientEvent]) -> Vec<Progress> {

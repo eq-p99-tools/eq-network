@@ -14,17 +14,36 @@ fn normal_door_click_uses_the_official_no_item_sentinel() {
     assert_eq!(&packet.body[12..14], &42_u16.to_le_bytes());
 }
 
-/// Inferred until the click builder is read (6.537): the held item's ID in
-/// place of the sentinel, every other byte as an ordinary click's.
+/// Read R49-22b (0x4906c5): the cursor item's ID in place of the sentinel,
+/// and the skill only for a lockpick, at most 254.
 #[test]
-fn a_door_click_holding_an_item_carries_its_id_and_nothing_else_changes() {
+fn a_door_click_holding_an_item_carries_its_id_and_a_lockpick_its_skill() {
     let ordinary = doors::titanium_click(9, 42, None);
-    let holding = doors::titanium_click(9, 42, Some(0x0102_0304));
-    assert_eq!(&holding.body[8..12], &0x0102_0304_u32.to_le_bytes());
-    assert_eq!(holding.opcode, ordinary.opcode);
-    assert_eq!(holding.body[..8], ordinary.body[..8]);
-    assert_eq!(holding.body[12..], ordinary.body[12..]);
-    assert_eq!(&holding.body[4..8], &[0; 4], "picklockskill stays zero");
+    let key = doors::titanium_click(
+        9,
+        42,
+        Some(doors::HeldItem {
+            id: 0x0102_0304,
+            skill: 0,
+        }),
+    );
+    assert_eq!(&key.body[8..12], &0x0102_0304_u32.to_le_bytes());
+    assert_eq!(key.opcode, ordinary.opcode);
+    assert_eq!(key.body[..8], ordinary.body[..8]);
+    assert_eq!(key.body[12..], ordinary.body[12..]);
+    assert_eq!(&key.body[4..8], &[0; 4], "a key carries no skill");
+    for (skill, sent) in [(120, 120_u32), (300, 254)] {
+        let pick = doors::titanium_click(
+            9,
+            42,
+            Some(doors::HeldItem {
+                id: 0x0102_0304,
+                skill,
+            }),
+        );
+        assert_eq!(&pick.body[4..8], &sent.to_le_bytes());
+        assert_eq!(&pick.body[8..12], &0x0102_0304_u32.to_le_bytes());
+    }
 }
 
 #[test]

@@ -43,6 +43,10 @@ pub(super) struct ServerMessage {
     pub(super) senders: &'static [ServerProtocol],
     /// What the session does with it.
     pub(super) reading: Reading,
+    /// Whether its body carries the server's task text (a task's title,
+    /// description and step words), so that a gap tells of it by its
+    /// opcode and length alone, with no sample.
+    pub(super) private: bool,
 }
 
 impl ServerMessage {
@@ -76,6 +80,20 @@ const fn sent(
         name,
         senders,
         reading,
+        private: false,
+    }
+}
+
+/// A row whose body carries the server's task text: its gaps keep no
+/// sample.
+const fn sent_private(
+    name: &'static str,
+    senders: &'static [ServerProtocol],
+    reading: Reading,
+) -> ServerMessage {
+    ServerMessage {
+        private: true,
+        ..sent(name, senders, reading)
     }
 }
 
@@ -251,14 +269,19 @@ const QUARM: &[ServerProtocol] = &[ServerProtocol::Quarm];
 /// Stock `EQEmu`'s, to the `RoF2` client.
 const ROF2: &[ServerProtocol] = &[ServerProtocol::EqEmuRof2];
 
-/// What the session leaves unread of Titanium's profile.
+/// What the session leaves unread of Titanium's profile. The bandolier
+/// sets and the potion belt are read (6.559), on every Titanium server.
 const TITANIUM_PROFILE: &[Part] = &[
-    Part(
-        "alternate advancement and leadership",
-        Reason::Planned(Step::AlternateAdvancement),
-    ),
+    Part("leadership", Reason::Planned(Step::AlternateAdvancement)),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
 ];
+/// What the session leaves unread of `EQMac`'s AA packets (6.548): it reads
+/// them on a local TAKP session only, so on Quarm (decoded "assumed as
+/// TAKP") and remote TAKP they are still dropped until their rows.
+const EQMAC_AA: &[Part] = &[Part(
+    "all of it on Quarm and on a remote TAKP session",
+    Reason::Planned(Step::AlternateAdvancement),
+)];
 /// What the session leaves unread of `EQMac`'s profile.
 const EQMAC_PROFILE: &[Part] = &[
     Part(
@@ -266,7 +289,7 @@ const EQMAC_PROFILE: &[Part] = &[
         Reason::Planned(Step::EqMacWorld),
     ),
     Part(
-        "alternate advancement",
+        "alternate advancement on Quarm and on a remote TAKP session",
         Reason::Planned(Step::AlternateAdvancement),
     ),
 ];
@@ -281,6 +304,62 @@ const ILLUSION: &[Part] = &[
         Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
     ),
 ];
+/// What the session leaves unread of Titanium's `OP_BazaarSearch`.
+const BAZAAR_SEARCH: &[Part] = &[Part(
+    "the parcel delivery costs (action 29)",
+    Reason::Needless(
+        "EQEmu sends them after each search's results; only RoF and later have parcels \
+         (zone/trading.cpp Client::SendBazaarDeliveryCosts)",
+    ),
+)];
+
+/// What `OP_TraderShop`'s reader leaves (6.558): the admission to browse
+/// a trader is read.
+const TRADER_SHOP: &[Part] = &[Part(
+    "the buy's echo (a TraderBuy_Struct on the same opcode)",
+    Reason::Planned(Step::Bazaar),
+)];
+
+/// What `OP_TaskDescription`'s reader leaves (gap list section 5, 6.546).
+const TASK_DESCRIPTION: &[Part] = &[
+    Part(
+        "the reward type and the points (crystal rewards)",
+        Reason::Planned(Step::LaterSystems),
+    ),
+    Part(
+        "the reward-selection byte",
+        Reason::Planned(Step::LaterSystems),
+    ),
+];
+
+/// What `OP_TaskActivity`'s reader leaves.
+const TASK_ACTIVITY: &[Part] = &[
+    Part(
+        "the step's request-type word (EQEmu writes 0)",
+        Reason::Planned(Step::LaterSystems),
+    ),
+    Part(
+        "the step's dynamic zone switch",
+        Reason::Planned(Step::LaterSystems),
+    ),
+    Part(
+        "the long step's last byte (EQEmu writes 1)",
+        Reason::Planned(Step::LaterSystems),
+    ),
+];
+
+/// What `OP_TaskSelectWindow`'s reader leaves (6.555).
+const TASK_OFFERS: &[Part] = &[Part(
+    "each offered step's request-type word",
+    Reason::Needless("EQEmu writes 0, \"no longer in live\""),
+)];
+
+/// What `OP_TaskHistoryReply`'s reader leaves (6.555).
+const TASK_HISTORY: &[Part] = &[Part(
+    "each done step's two marks and last word",
+    Reason::Needless("EQEmu writes 0xffffffff, 0xffffffff and 0"),
+)];
+
 /// What the session leaves unread of a rename.
 const RENAME: &[Part] = &[
     Part(
@@ -502,11 +581,6 @@ const TRANSLOCATE: &[Part] = &[Part(
          and TAKP's Client::SendPendingTranslocatePacket)",
     ),
 )];
-/// What the session leaves unread of a quest's word on the player's stats.
-const STATS: &[Part] = &[Part(
-    "the first byte, the five resists and the second copy of every field",
-    Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
-)];
 /// What the session leaves unread of a discipline reuse timer.
 const DISCIPLINE_TIMER: &[Part] = &[Part(
     "the last field",
@@ -617,6 +691,7 @@ impl Unheard {
         log: &mut Events<'_>,
     ) -> Result<Vec<Message>> {
         let name = wire.coverage(opcode).map(|message| message.name);
+        let private = wire.coverage(opcode).is_some_and(|message| message.private);
         let mut kept = Vec::with_capacity(messages.len());
         for message in messages {
             let kind = match message {
@@ -626,7 +701,11 @@ impl Unheard {
                         part: part.to_string(),
                         error: error.clone(),
                     };
-                    log.gap(opcode, name, body, gap)?;
+                    if private {
+                        log.gap_unsampled(opcode, name, body.len(), gap)?;
+                    } else {
+                        log.gap(opcode, name, body, gap)?;
+                    }
                     kept.push(message);
                     continue;
                 }
@@ -635,7 +714,12 @@ impl Unheard {
                     continue;
                 }
             };
-            log.gap(opcode, name, body, GapKind::UnknownKind { kind })?;
+            let gap = GapKind::UnknownKind { kind };
+            if private {
+                log.gap_unsampled(opcode, name, body.len(), gap)?;
+            } else {
+                log.gap(opcode, name, body, gap)?;
+            }
             if self.kinds.insert((opcode, kind)) {
                 let name = name.unwrap_or("an unlisted message");
                 log.diagnostic(format!(
@@ -666,7 +750,12 @@ impl Unheard {
         let length = body.len();
         let message = wire.coverage(opcode);
         if let Some(gap) = gap_at(message.as_ref(), self.stage, length) {
-            log.gap(opcode, message.map(|message| message.name), body, gap)?;
+            let name = message.map(|message| message.name);
+            if message.is_some_and(|message| message.private) {
+                log.gap_unsampled(opcode, name, length, gap)?;
+            } else {
+                log.gap(opcode, name, body, gap)?;
+            }
         }
         if message.is_some_and(|message| !message.told_at(self.stage, length))
             || !self.told.insert(opcode)
@@ -878,6 +967,137 @@ mod tests {
             _ => None,
         });
         assert!(parts.is_some_and(|parts| !parts.is_empty()));
+    }
+
+    /// Quarm sends an empty `OP_TradeReset` (0x1040) after the cancel echo
+    /// on an NPC's give window (Quarm fc75fcf `Handle_OP_CancelTrade`,
+    /// `Handle_OP_TradeRequest`), as TAKP's server does. Nothing reads it
+    /// yet: it is the planned gap, never an unreadable message or an error
+    /// (checklist 6.576).
+    #[test]
+    fn quarms_empty_trade_reset_is_the_planned_gap_never_an_error() {
+        use crate::client::{session::wire::EqMac, Gap, GapStage};
+        let wire: &dyn Wire = &EqMac;
+        let messages = wire.messages(0x1040, &[], eq_network_game::inventory::ItemRules::Quarm);
+        assert!(messages.is_empty(), "read as {messages:?}");
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        unheard.tell(wire, 0x1040, &[], &mut log).unwrap();
+        let kept = unheard
+            .sift(wire, (0x1040, &[]), messages, &mut log)
+            .unwrap();
+        assert!(kept.is_empty());
+        log.end_stage().unwrap();
+        drop(log);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(
+            (gaps[0].opcode, gaps[0].name, gaps[0].kind.key()),
+            (0x1040, Some("OP_TradeReset"), "unread".to_owned())
+        );
+        assert!(matches!(
+            &gaps[0].kind,
+            GapKind::Unread { reason } if reason == "planned with EQMac's catch-up on exchanges"
+        ));
+    }
+
+    #[test]
+    fn the_bazaars_and_traders_gaps_keep_no_sample() {
+        use crate::client::{Gap, GapStage};
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        // The trader messages, still planned; a trader's sign that could
+        // not be read; and the search's unknown kind and unreadable rows.
+        unheard
+            .tell(&Titanium, 0x524e, &[1, 2, 3], &mut log)
+            .unwrap();
+        let sign = Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error: "trader sign of another length".into(),
+        };
+        unheard
+            .sift(&Titanium, (0x2844, &[1, 2, 3]), vec![sign], &mut log)
+            .unwrap();
+        let unreadable = Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error: "bazaar results not whole rows".into(),
+        };
+        unheard
+            .sift(
+                &Titanium,
+                (0x1ee9, &[7; 95]),
+                vec![Message::UnknownKind(22), unreadable],
+                &mut log,
+            )
+            .unwrap();
+        // The search itself, read but for its needless part, is no gap.
+        unheard.tell(&Titanium, 0x1ee9, &[7; 96], &mut log).unwrap();
+        log.end_stage().unwrap();
+        drop(log);
+        let told: Vec<_> = gaps
+            .iter()
+            .map(|gap| (gap.opcode, gap.min_length, gap.sample.is_none()))
+            .collect();
+        assert_eq!(
+            told,
+            [
+                (0x524e, 3, true),
+                (0x2844, 3, true),
+                (0x1ee9, 95, true),
+                (0x1ee9, 95, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn eqemus_stat_record_is_a_gap_with_its_length_and_the_programs_is_read() {
+        use crate::client::{Gap, GapKind, GapStage};
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        let program: Vec<u8> = [7u32, 1, 5]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        for body in [vec![0; 141], program] {
+            unheard.tell(&Titanium, 0x5b7b, &body, &mut log).unwrap();
+            let messages = eq_network_game::message::titanium(0x5b7b, &body);
+            unheard
+                .sift(&Titanium, (0x5b7b, &body), messages, &mut log)
+                .unwrap();
+        }
+        log.end_stage().unwrap();
+        drop(log);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!((gaps[0].opcode, gaps[0].min_length), (0x5b7b, 141));
+        assert!(
+            matches!(&gaps[0].kind, GapKind::Unreadable { error, .. } if error.contains("141-byte"))
+        );
     }
 
     #[test]

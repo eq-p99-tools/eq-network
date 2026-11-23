@@ -7,7 +7,7 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    doors::{eqmac, titanium, Clicked, DoorUpdate, OutOfReach},
+    doors::{eqmac, titanium, Clicked, DoorUpdate, HeldItem, OutOfReach, LOCKPICK_ITEM_TYPE},
     inventory::InventorySlot,
     message::Message,
     request::Request,
@@ -232,19 +232,35 @@ impl Doors {
     }
 }
 
-/// The server's item ID of what the player holds on the cursor, by the
-/// session's tracked inventory; none with nothing there or the inventory not
-/// loaded. A stack or an item with charges is named by its ID alone.
-fn cursor_item(world: &World) -> Option<u32> {
+/// What the player holds on the cursor, by the session's tracked inventory;
+/// none with nothing there or the inventory not loaded. A stack or an item
+/// with charges is named by its ID alone. A lockpick (item type 12, not a
+/// container) carries the player's Pick Lock value, and anything else, keys
+/// included, carries 0 (read R49-22b, 0x49812e).
+fn cursor_item(world: &World) -> Option<HeldItem> {
     let inventory = &world.inventory;
     if !inventory.received() || inventory.stale() {
         return None;
     }
-    inventory
-        .items()
-        .get(&InventorySlot::CURSOR)
-        .map(|item| item.details.id)
+    let item = inventory.items().get(&InventorySlot::CURSOR)?;
+    let skill = if item.rules.item_type == LOCKPICK_ITEM_TYPE && item.bag_slots == 0 {
+        world
+            .player
+            .as_ref()
+            .and_then(|player| player.skills.as_deref())
+            .and_then(|skills| skills.get(PICK_LOCK).copied())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Some(HeldItem {
+        id: item.details.id,
+        skill,
+    })
 }
+
+/// The Pick Lock skill's number.
+const PICK_LOCK: usize = 35;
 
 impl Feature for Doors {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -785,7 +801,9 @@ mod tests {
                 [eq_network_game::doors::titanium_click(
                     1,
                     7,
-                    Some(held).filter(|id| *id != u32::MAX)
+                    Some(held)
+                        .filter(|id| *id != u32::MAX)
+                        .map(|id| HeldItem { id, skill: 0 })
                 )]
             );
             assert_eq!(&outcome.sent[0].body[8..12], &held.to_le_bytes());
@@ -815,6 +833,46 @@ mod tests {
                 held: None
             }
         );
+    }
+
+    /// A lockpick on the cursor carries the player's Pick Lock value; a
+    /// key, or a container of lockpick type, carries 0 (read R49-22b).
+    #[test]
+    fn a_titanium_click_with_a_lockpick_carries_the_pick_lock_value() {
+        use eq_network_game::inventory::{Inventory, InventoryUpdate};
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![titanium_door(1, 0, 0)]));
+        let click = || ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            point: None,
+            created: Instant::now(),
+        };
+        let mut pick = testing::item(InventorySlot::CURSOR.0);
+        pick.details.id = 13010;
+        pick.rules.item_type = LOCKPICK_ITEM_TYPE;
+        let mut bag = pick.clone();
+        bag.bag_slots = 4;
+        let mut key = pick.clone();
+        key.rules.item_type = 0;
+        for (item, skill) in [(pick, 87_u32), (bag, 0), (key, 0)] {
+            let mut doors = Doors::default();
+            let mut world = World::new(5);
+            doors
+                .admit(&Message::Event(spawn.clone()), &mut world)
+                .unwrap();
+            let mut player = testing::player(7);
+            let mut skills = vec![0; 100];
+            skills[PICK_LOCK] = 87;
+            player.skills = Some(skills);
+            world.player.admit(player);
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+            world.inventory = inventory.into();
+            let outcome = testing::run(|out| doors.handle(&click(), &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(&outcome.sent[0].body[4..8], &skill.to_le_bytes());
+            assert_eq!(&outcome.sent[0].body[8..12], &13010_u32.to_le_bytes());
+        }
     }
 
     #[test]

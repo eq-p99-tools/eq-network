@@ -500,6 +500,14 @@ fn decoded_profile_zone(data: &[u8]) -> Result<Option<u16>> {
         .filter(|zone| *zone != 0))
 }
 
+/// The AA array and points of the zone's packed profile (checklist 6.548).
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_aa(body: &[u8]) -> Result<[crate::alternate_advancement::Update; 2]> {
+    crate::alternate_advancement::eqmac_profile(&unpack(body, true)?)
+}
+
 /// The player's group as the profile lists it each time a zone admits them
 /// (`mac_structs.h` `groupMembers`), with the leader unknown; None outside a
 /// group.
@@ -523,6 +531,10 @@ fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
     Ok(crate::group::profile_members(&data[PROFILE_GROUP], &player))
 }
 
+/// Where the profile keeps the player's intoxication, one byte (`intoxication`
+/// at 4968 in TAKP's `PlayerProfile_Struct` at 44afcbf and Quarm's
+/// `common/patches/mac_structs.h` at fc75fcf).
+const PROFILE_INTOXICATION: usize = 4968;
 /// Where the profile lists the player's languages: the 26 TAKP and Quarm
 /// fill (`MAX_PP_LANGUAGE`; `common/patches/mac.cpp` copies 26) of the
 /// field's room for 32, whose comment says the client uses the first 25.
@@ -579,8 +591,10 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
                 .map(|value| u32::from(u16::from_le_bytes(*value)))
                 .collect(),
         ),
-        practice_points: None,
+        // `points` (i16 at 156); a negative count is none left.
+        practice_points: Some(u32::try_from(signed_attribute(data, 156)).unwrap_or(0)),
         languages: Some(data[PROFILE_LANGUAGES].to_vec()),
+        intoxication: Some(u32::from(data[PROFILE_INTOXICATION])),
         disciplines: None,
         // What is left of each gem's reuse timer, in milliseconds
         // (`spellSlotRefresh`).
@@ -652,6 +666,22 @@ fn decoded_coins(data: &[u8]) -> Result<Vec<WorldEvent>> {
 /// Rejects malformed compression, profile layouts or truncated fields.
 pub fn profile_nourishment(body: &[u8]) -> Result<crate::food::Nourishment> {
     crate::food::eqmac_profile(&unpack(body, true)?)
+}
+
+/// Whether the validated `EQMac` profile shares looted coins (`/autosplit`).
+///
+/// # Errors
+/// Rejects malformed compression or a truncated profile.
+pub fn profile_auto_split(body: &[u8]) -> Result<bool> {
+    crate::split::eqmac_profile(&unpack(body, true)?)
+}
+
+/// The boat the packed profile names (`boat`, +3256), which TAKP and Quarm
+/// keep across zones (6.602); None when it names none or cannot be read,
+/// which the profile's other readers report.
+#[must_use]
+pub fn profile_vehicle(body: &[u8]) -> Option<String> {
+    crate::boats::riders::eqmac_profile_name(&unpack(body, true).ok()?)
 }
 
 /// The separate, uncompressed own-character zone-entry projection.
@@ -762,7 +792,8 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),
                 name_parts: crate::names::NameParts::default(),
-                pet_owner: None,
+                // The owner's spawn at +18 (`petOwnerId`), 0 for none.
+                pet_owner: Some(short(record, 18)).filter(|owner| *owner != 0),
                 hp_percent: None,
                 posture: None,
                 // The Mac-era record's body type is unread.
@@ -853,6 +884,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
         ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
+        crate::who::eqmac::RESPONSE_OPCODE => {
+            vec![WorldEvent::WhoList(crate::who::eqmac::decode(body)?)]
+        }
         ZONE_WEATHER => vec![WorldEvent::Weather(crate::clock::weather(body)?)],
         // Quarm's zones send their part of the rules at every zone-in.
         crate::rules::EQMAC_LOG_SERVER_OPCODE => {

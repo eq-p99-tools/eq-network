@@ -250,6 +250,12 @@ pub(in crate::client) struct World {
     pub(super) riding: std::sync::Arc<super::riders::Riding>,
     /// Where the transfer under way began, for the save before leaving.
     pub(super) carried_from: super::riders::CarriedFrom,
+    /// The potion belt as the session knows it, for the casting feature to
+    /// use (6.568 B1). Only the bandolier feature writes it; it is `None`
+    /// until the profile is read at this admission, or when it could not be.
+    pub(super) belt: Option<
+        Box<[Option<eq_network_game::bandolier::BeltItem>; eq_network_game::bandolier::BELT_SLOTS]>,
+    >,
     /// What the session itself made happen, for every feature and the host
     /// to hear next; see [`World::happened`].
     news: Vec<Message>,
@@ -292,6 +298,7 @@ impl World {
             safe_point: None,
             riding: std::sync::Arc::default(),
             carried_from: super::riders::CarriedFrom::Elsewhere,
+            belt: None,
             news: Vec::new(),
         }
     }
@@ -659,6 +666,7 @@ pub(super) mod testing {
             stack_count: None,
             charges: 0,
             bag_slots: 0,
+            augments: Default::default(),
             details: eq_network_game::items::ItemDetails {
                 base_held_model: None,
                 equipment: None,

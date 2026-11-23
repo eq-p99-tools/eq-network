@@ -7,7 +7,8 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    inventory::ItemUse,
+    bandolier::BeltUse,
+    inventory::{InventorySlot, ItemUse},
     message::Message,
     request::Request,
     spells::{SpellUpdate, ITEM_CAST_SLOT},
@@ -90,6 +91,8 @@ enum Phase {
 pub(super) enum Source {
     Gem(u8),
     Item,
+    /// An item used from the potion belt, answered on its own slot.
+    Belt,
     Knight(KnightAbility),
     Discipline,
 }
@@ -105,6 +108,8 @@ impl Source {
         source.is_none_or(|source| match source {
             Self::Gem(gem) => slot == u32::from(gem),
             Self::Item => slot == u32::from(ITEM_CAST_SLOT),
+            // Only the belt's own slot is this cast's (6.568 B5).
+            Self::Belt => slot == u32::from(eq_network_game::spells::BELT_CAST_SLOT),
             // EQEmu's ServerToTitaniumCastingSlot falls back to the
             // discipline slot for its internal Ability slot.
             Self::Knight(_) => {
@@ -328,16 +333,25 @@ impl CastGuard {
 /// The program's song state (actor +0xf98 and +0x104c, read R16): the spell
 /// of the player's own last cast start, and whether an item cast it. No song
 /// ends on its own; the server's cast update, a stop, or a new cast ends it.
-/// The program's memorize path (0x308e), where a Bard memorizing a spell stops
-/// the song with the stop sent and restarts that gem's, is not followed
-/// (6.442).
+/// A gem's song is kept only over 100 ms once the player's own cast start
+/// says its time. The program's memorize path (0x308e), where a Bard
+/// memorizing a spell stops the song with the stop sent and restarts that
+/// gem's, is not followed (6.442, R49-21c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Song {
     spell: u32,
     item: bool,
+    /// A gem's song whose own cast start has not come yet: only that first
+    /// start decides it (6.542).
+    awaiting_start: bool,
+    /// For an item's song, the host's word from installed spell data on
+    /// whether its spell is the class's (`ItemUse::installed_class_spell`);
+    /// `None` falls back to the memorized test.
+    installed_class_spell: Option<bool>,
 }
 
-/// The shortest cast the program keeps as a song: over 100 ms (read R16).
+/// The longest cast the program does not keep as a song: a cast is the
+/// song only over 100 ms (0x411f3d, read R16).
 const SONG_CAST_MS: u32 = 100;
 
 /// Casts spells and item effects for the player, one at a time.
@@ -349,7 +363,27 @@ pub(super) struct Casting {
     cast_stop: bool,
     knights: Option<knights::Reuse>,
     disciplines: disciplines::DisciplineState,
-    use_disciplines: bool,
+    use_disciplines: DisciplineUse,
+    belt_use: BeltUses,
+}
+
+/// Which wire's disciplines the server type takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DisciplineUse {
+    #[default]
+    Unoffered,
+    /// The listed spells, cast with the discipline slot (read R48).
+    Titanium,
+    /// TAKP's and Quarm's numbered `OP_Discipline` (6.603 G1).
+    EqMac,
+}
+
+/// Whether the server type takes items used from the potion belt (6.568).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BeltUses {
+    #[default]
+    Unoffered,
+    Offered,
 }
 
 const BARD_CLASS: u32 = 8;
@@ -370,14 +404,32 @@ impl Casting {
             Self::default()
         };
         casting.knights = Some(knights::Reuse::new(knight_estimate));
-        casting.use_disciplines = true;
+        casting.use_disciplines = DisciplineUse::Titanium;
         casting
+    }
+
+    /// Takes TAKP's and Quarm's `/disc` by number, from their own
+    /// `Handle_OP_Discipline` (6.603 G1, source-derived, not yet live).
+    pub(super) fn with_eqmac_disciplines(mut self) -> Self {
+        self.use_disciplines = DisciplineUse::EqMac;
+        self
     }
 
     /// Offers Titanium's `/stopcast`. `EQEmu` only for now: it ends a cast
     /// without moving, and P99's own handling of it is unchecked.
     pub(super) fn with_cast_stop(mut self) -> Self {
         self.cast_stop = true;
+        self
+    }
+
+    /// Takes items used from the potion belt, once its live rows pass
+    /// (6.568); P99 never.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "offered on stock EQEmu once rows 6.568 pass")
+    )]
+    pub(super) fn with_belt_use(mut self) -> Self {
+        self.belt_use = BeltUses::Offered;
         self
     }
 
@@ -413,14 +465,16 @@ impl Casting {
         let Some(song) = self.song else {
             return out.log.diagnostic("No song is playing".into());
         };
-        // A memorized spell is taken as the class's (6.442), so an item's
-        // song of a class spell not memorized ends here unsent, where the
-        // program sends the stop.
-        if !world
-            .player
-            .as_ref()
-            .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
-        {
+        // The host's installed spell data says whether an item's song is
+        // of the class's spell (6.542); without it, a memorized spell is
+        // taken as the class's (6.442), exact for a gem's song.
+        let class_spell = song.installed_class_spell.unwrap_or_else(|| {
+            world
+                .player
+                .as_ref()
+                .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
+        });
+        if !class_spell {
             self.song = None;
             return out
                 .log
@@ -479,6 +533,27 @@ impl Casting {
         }
     }
 
+    /// The player's own cast start, with the cast time the server sends
+    /// (`EQEmu`'s base time, `Mob::DoCastSpell`), keeps a gem's song only over
+    /// 100 ms, as 0x411f3d keeps a cast (read R16). Until it comes, a gem
+    /// cast is taken as a song; with none, it stays one. Whether 0x411f3d
+    /// reads the base or the focused time is unread (R49-21a, 6.442). Only
+    /// the first own start of that spell after the gem's send decides; a
+    /// later one, such as an item's click of the same spell, changes
+    /// nothing. An item's song was decided by its record's own cast time.
+    fn song_begun(&mut self, spell: u32, duration_ms: u32) {
+        let Some(song) = self.song.as_mut() else {
+            return;
+        };
+        if song.item || song.spell != spell || !song.awaiting_start {
+            return;
+        }
+        song.awaiting_start = false;
+        if duration_ms <= SONG_CAST_MS {
+            self.song = None;
+        }
+    }
+
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -515,11 +590,13 @@ impl Casting {
             match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
-                    // The session does not know a gem's cast time; every gem
-                    // cast is taken as over 100 ms (6.442).
+                    // A gem cast is taken as a song until the player's own
+                    // cast start says its time (`song_begun`, 6.442).
                     self.song = Some(Song {
                         spell: *spell_id,
                         item: false,
+                        awaiting_start: true,
+                        installed_class_spell: None,
                     });
                     return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
@@ -540,8 +617,46 @@ impl Casting {
         out.log.diagnostic(refusal.1)
     }
 
+    /// Uses the item a belt slot names from the first slot the player wears
+    /// it in or carries it in a pack, by the whole item-click path (6.568
+    /// B3). A bag is not a click slot (`check_item_cast`), nor the cursor
+    /// or a bank (B4); the order is inferred until read R49-45 c.
+    fn use_belt_item(
+        &mut self,
+        request: &BeltUse,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match belt_item_slot(request, world) {
+            Ok(slot) => {
+                let item = ItemUse {
+                    request_id: request.request_id,
+                    session_id: request.session_id,
+                    revision: world.inventory.revision(),
+                    slot,
+                    target_id: request.target_id,
+                    created: request.created,
+                    installed_class_spell: request.installed_class_spell,
+                };
+                self.use_item(&item, Source::Belt, world, out)
+            }
+            Err(error) => out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
+                session_id: request.session_id,
+                request_id: request.request_id,
+                error: Some(error.into()),
+                string_id: None,
+            })),
+        }
+    }
+
     /// Casts an item's click effect at a target the player can see.
-    fn use_item(&mut self, request: &ItemUse, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn use_item(
+        &mut self,
+        request: &ItemUse,
+        source: Source,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         if let Some(string_id) = lying_refusal(world, out) {
             return out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
                 session_id: request.session_id,
@@ -561,10 +676,19 @@ impl Casting {
                     .check_item_use(request, player.level, target_available)
             })
             .and_then(|spell_id| {
-                let packet = out.encode(&Request::CastItem {
-                    spell_id,
-                    slot: request.slot,
-                    target_id: request.target_id,
+                let (slot, target_id) = (request.slot, request.target_id);
+                let packet = out.encode(&if matches!(source, Source::Belt) {
+                    Request::CastBeltItem {
+                        spell_id,
+                        slot,
+                        target_id,
+                    }
+                } else {
+                    Request::CastItem {
+                        spell_id,
+                        slot,
+                        target_id,
+                    }
                 })?;
                 Ok((spell_id, packet))
             });
@@ -579,9 +703,11 @@ impl Casting {
                     self.song = Some(Song {
                         spell: spell_id,
                         item: true,
+                        awaiting_start: false,
+                        installed_class_spell: request.installed_class_spell,
                     });
                 }
-                self.submitted(spell_id, Source::Item, world, out)?;
+                self.submitted(spell_id, source, world, out)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -610,6 +736,35 @@ impl Casting {
     }
 }
 
+/// The slot a belt use casts from: the belt mirror's item, in the first
+/// worn slot (0 to 21) or pack (22 to 29) holding it whose custody is
+/// known (inferred until read R49-45 c).
+fn belt_item_slot(request: &BeltUse, world: &World) -> Result<InventorySlot, &'static str> {
+    let belt = world
+        .belt
+        .as_ref()
+        .ok_or("Your potion belt is not known; it is read again when you zone.")?;
+    let held = belt
+        .get(usize::from(request.belt_slot))
+        .ok_or("Choose a belt slot from 1 to 4.")?
+        .as_ref()
+        .ok_or("That belt slot is empty.")?;
+    let inventory = &world.inventory;
+    if !inventory.received() || inventory.stale() {
+        return Err("Wait for current inventory contents");
+    }
+    (0..=29)
+        .map(InventorySlot)
+        .find(|slot| {
+            inventory
+                .items()
+                .get(slot)
+                .is_some_and(|item| item.details.id == held.item_id)
+        })
+        .filter(|slot| inventory.custody_known(*slot))
+        .ok_or("You carry that item nowhere it can be used from the belt.")
+}
+
 impl Feature for Casting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
@@ -623,8 +778,15 @@ impl Feature for Casting {
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);
         }
-        if self.use_disciplines {
-            offered.push(Capability::UsingDisciplines);
+        match self.use_disciplines {
+            DisciplineUse::Unoffered => {}
+            DisciplineUse::Titanium => offered.push(Capability::UsingDisciplines),
+            DisciplineUse::EqMac => {
+                offered.extend([Capability::UsingDisciplines, Capability::DisciplineReuse]);
+            }
+        }
+        if self.belt_use == BeltUses::Offered {
+            offered.push(Capability::UsingPotionBelt);
         }
         offered
     }
@@ -634,6 +796,9 @@ impl Feature for Casting {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
+        if matches!(command, ClientCommand::UseBeltItem(_)) {
+            return self.belt_use == BeltUses::Offered;
+        }
         matches!(
             command,
             ClientCommand::CastSpell { .. }
@@ -643,6 +808,7 @@ impl Feature for Casting {
                 | ClientCommand::StopCasting { .. }
                 | ClientCommand::UseKnightAbility { .. }
                 | ClientCommand::UseDiscipline { .. }
+                | ClientCommand::AskDisciplineReuse { .. }
         )
     }
 
@@ -651,8 +817,7 @@ impl Feature for Casting {
         if let (Some(reuse), Message::KnightRefresh(remaining)) = (&mut self.knights, message) {
             reuse.received(*remaining, now);
         }
-        let own = self
-            .use_disciplines
+        let own = (self.use_disciplines == DisciplineUse::Titanium)
             .then(|| {
                 world
                     .player
@@ -682,6 +847,7 @@ impl Feature for Casting {
             ClientCommand::UseKnightAbility {
                 ability, target, ..
             } => self.knight(command, *ability, *target, Instant::now(), world, out),
+            ClientCommand::AskDisciplineReuse { .. } => self.ask_discipline_reuse(command, out),
             ClientCommand::UseDiscipline {
                 spell_id,
                 timer,
@@ -694,7 +860,8 @@ impl Feature for Casting {
                 world,
                 out,
             ),
-            ClientCommand::UseItem(request) => self.use_item(request, world, out),
+            ClientCommand::UseItem(request) => self.use_item(request, Source::Item, world, out),
+            ClientCommand::UseBeltItem(request) => self.use_belt_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
         }
@@ -748,6 +915,16 @@ impl Feature for Casting {
         })) = message
         {
             self.song_reported(*spell_id, world);
+        }
+        if let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            duration_ms,
+        })) = message
+        {
+            if world.is_player(*caster_id) {
+                self.song_begun(u32::from(*spell_id), *duration_ms);
+            }
         }
         match message {
             Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,
@@ -964,6 +1141,7 @@ mod tests {
         world.inventory = inventory.into();
         let now = Instant::now();
         let item = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 5,
             revision: world.inventory.revision(),
@@ -1103,6 +1281,7 @@ mod tests {
         world.player.admit(testing::player(7));
         world.posture.observed(PostureState::Lying);
         let item = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 3,
             session_id: 5,
             revision: 1,
@@ -1190,6 +1369,7 @@ mod tests {
     fn item_activations_share_cast_exclusion_without_blocking_posture_interrupts() {
         let now = Instant::now();
         let request = ClientCommand::UseItem(eq_network_game::inventory::ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 12,
             revision: 1,

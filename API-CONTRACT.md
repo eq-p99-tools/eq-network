@@ -1,5 +1,51 @@
 # API and integration contracts
 
+## Titanium liquid reports and their damage record (read R49-3)
+
+Every Titanium session, `EQEmu` local or not and P99, offers `Drowning` and
+`LavaHeat`, as the Titanium program reports them on any server. After each
+accepted Titanium report, the session sends `OP_EnvDamage` and then the
+program's damage record, `OP_Damage` 0x5c78
+(`hazards::titanium_damage_record`, read R49-3 c). Falls get the same
+record (R49-3a). `EQEmu` relays the record to every client in the zone,
+the sender included for every type but a fall, and applies nothing. P99's
+handling is unknown, and its first use there is the attended liquid row.
+The record is skipped where the player's HP,
+less the amount, would be below -10, the program's death path. The session
+judges that from the server's last HP plus what the items add, and only
+where it can count the items (inferred, 6.491b). No Titanium server type
+counts them yet, so the record goes.
+
+On Titanium the session also refuses any report in the freeze stance
+(posture 102) and for a carrier race (0x8d, 0x48, 0x49, 0x72, 0x194), as
+the program's shared report function does (R49-3 d, R49-3a).
+
+`WorldEvent::HazardReported { session_id, hazard, amount, record }` follows
+every report the session sent, falls included, so a front end can print the
+program's own line (R49-3 e). `record` says whether the damage record
+followed, so a front end can expect its echo.
+
+Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
+`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
+sends it yet, since cold is unwired until R49-26.
+
+**Breaking:**
+- `WorldEvent::HazardReported`;
+- `LiquidHazard::ZoneHeat` and `Hazard::ZoneHeat` on exhaustive enums;
+- `Hazard` is now `Serialize`.
+
+## An item's song and the host's spell data
+
+`ItemUse::installed_class_spell: Option<bool>` is the host's word, from its
+installed spell data, on whether the clicked item's spell is the player's
+class's (spells fields 104-119 below 255 for that class). A host without an
+installed record (no spell data, or P99's replayed definitions) sends
+`None`. The session uses it only for a song it is already keeping from that
+click, to choose between sending the Bard's stop and ending the song here;
+it never starts a song, names a spell or sends a stop with no song. `None`
+keeps the memorized test (6.442, 6.542). **Breaking:** every `ItemUse`
+literal names the field.
+
 ## Server filters
 
 `ClientConfig::server_filters` is the set a character starts with; the
@@ -38,11 +84,16 @@ built from these kinds may be one the official options cannot produce.
 `GameCommand::SendFeedback { session_id, text, created }` send a report to
 the server's staff (`eq_network_game::reports`), under
 `Capability::Petitioning`, `Capability::ReportingBugs` and
-`Capability::SendingFeedback`. A person reads each one, so a host sends one
-only when the player types it, never from a script, social or setting.
-Stock `EQEmu` lists petitions and bug reports; no server type lists feedback,
-or any of the three on P99, Quarm or TAKP, until its own live check
-(recording checklist 6.511).
+`Capability::SendingFeedback`. A person reads each one. A host may send one
+the player types or one from a script, since a script may do whatever the
+player can; the pace below holds either way.
+Stock `EQEmu` lists petitions and bug reports, and so do Quarm and TAKP from
+their own handlers (6.604 E6, source-derived, not yet checked live). No
+server type lists feedback, or any of the three on P99, until its own live
+check (recording checklist 6.511). On `EQMac` a petition is the text and a
+NUL; a bug report is the servers' 1131-byte short record, carrying only the
+reporter's name and the player's text, and the servers fill in the place and
+target themselves. Quarm runs with petitions off, and answers with a line.
 
 A `BugReport` carries its category (the servers' names), the player's text,
 and, when the host knows them, the player's place and heading and the
@@ -207,30 +258,47 @@ stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule
 
 ## The item held in a door click
 
-A Titanium door click names what the player holds on the cursor (checklist
-6.537): `Request::ClickDoor { door_id, held }` and
-`doors::titanium_click(id, player_id, held)` put the server's item ID of the
-cursor item in bytes 8 to 11, or -1 with nothing there, as recorded for an
-ordinary click. The session takes the item from its own tracked inventory, never
-from the host: no item on the cursor, or an inventory not yet loaded or made
-stale, sends -1, and a stack or an item with charges is named by its ID alone.
-The click never moves, drops or gives the item, and the ID appears in no event
-or diagnostic the host hears. That a held item's ID goes there is inferred
-(0x4906c5 takes an item argument; a type 57 door's contact click carries the
-cursor item; read R14, R16e) until the click builder is read; byte 1 stays 3 and
-bytes 4 to 7 (`EQEmu`'s `picklockskill`) stay zero, both unread. Stock `EQEmu`
-reads none of these: it takes the key from its own copy of the inventory and the
-key ring, and answers with its own lines and `OP_MoveDoor`. `EQMac`'s program
-asks for a clear cursor first, so its session still refuses a click with an
-item there, and its encoder refuses a `held` item. RoF2 sends -1 until its
-click is read.
+A Titanium door click names what the player holds on the cursor, as read R49-22b
+reads the program (checklist 6.537; 0x49812e and 0x4906c5).
+`Request::ClickDoor { door_id, held }` and
+`doors::titanium_click(id, player_id, held: Option<HeldItem>)` write 16 bytes:
+- the door at +0;
+- the skill at +4, at most 254;
+- the cursor item's ID at +8, or -1 for an empty cursor;
+- the clicker at +12.
+
+`HeldItem::skill` is the player's Pick Lock value when the cursor holds a
+lockpick (`LOCKPICK_ITEM_TYPE`, 12, and not a container). Anything else, keys
+included, carries 0. Bytes 1 to 3 are not a field: the program leaves stack
+contents there. The official client's recordings show 3 in byte 1, and the
+encoder keeps it.
+
+The session takes the item and the skill from its own tracked inventory and
+profile, never from the host. No item on the cursor, or an inventory not yet
+loaded or made stale, sends -1, and a stack or an item with charges is named by
+its ID alone. The click never moves, drops or gives the item, and the ID appears
+in no event or diagnostic the host hears. The program refuses no keyed or locked
+door itself, and neither does the session: the lock lines are the server's.
+
+Not yet built:
+- A trapped door type sends item -1 and the Disarm Traps value. The read names
+  only part of that list of types, so a follow-up waits for the rest.
+- A type 57 door's contact click. Door +0xa4, +0xb4 and +0xb8 are not key
+  data, which corrects R16e.
+
+Stock `EQEmu` reads none of these fields: it takes the key from its own copy of
+the inventory and the key ring, and answers with its own lines and
+`OP_MoveDoor`. `EQMac`'s program asks for a clear cursor first, so its session
+still refuses a click with an item there, and its encoder refuses a `held` item.
+RoF2 sends -1 until its click is read.
 
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:
 `Vertical::of` (rise or sink, travel and speeds by open type, 0x4368b3), `Slide::of`
 (type 15 and 78-81, 0x4366e8), `Solidity::of` (whether the floor sweep stands a
-player on a door, 0x490370, and whether its wall stops them, 0x42ce5d),
+player on a door, 0x490370, and whether it stops them: every door does,
+0x42cdb1),
 `returns_after` and `returns_at` (the client's own return, 0x48faa5) and `field`
 (door +0x66, the param's low 16 bits as an i16). The field stays as spawned; the
 server message that changes it later (0x45e626) is not traced. `Solidity` is a
@@ -469,10 +537,9 @@ acceptance nor water state. The host asserts water from the installed zone.
 `Capability::ALL` grows from 50 to 52 with `Drowning` and `LavaHeat`;
 `GameCommand` gains `LiquidDamage { session_id, hazard, amount, observation }`
 and `WorldEvent` gains `LiquidHazardRevision { session_id, revision }`.
-Only the Titanium `EQEmu` policy offers the two capabilities, and only on a
-session whose connection is constrained to local endpoints; P99, Quarm, TAKP
-and a remote `EQEmu` keep falls only and refuse `LiquidDamage` before
-anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
+Every Titanium policy, `EQEmu` local or not and P99, offers the two
+capabilities (see "Titanium liquid reports and their damage record"); Quarm
+and TAKP keep falls only and refuse `LiquidDamage` before anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
 refuses every other hazard.
 
 The session raises `LiquidHazardRevision` at admission and whenever an input
@@ -487,9 +554,8 @@ milliseconds, the player is admitted and not dead or transferring, its
 accepted report of the same hazard. Anything else is refused with a
 diagnostic and no wire change; the next revision is the host's signal to
 sample again. An accepted report is sent as the Titanium environmental
-record with damage type 251 (drowning) or 250 (lava); the Titanium program's
-own liquid reports are unrecorded, so that layout is inferred (recording
-checklist 6.392). `PlayerState.titanium_environment` carries the profile's
+record with damage type 251 (drowning) or 250 (lava), 244 for zone 200's
+lava, laid out as the Titanium program builds it (read R49-3 c). `PlayerState.titanium_environment` carries the profile's
 zone, base fire resistance and whether any alternate advancement rank is
 present. Titanium `eqgame.exe` copies the profile dword at byte 12876 at
 0x4b9f3c and uses it at 0x418756. The cited EQEmu Titanium encoder writes
@@ -517,13 +583,117 @@ Post-admission facts publish immediately as singleton batches. This reduces
 admission event amplification without enlarging the viewer queue or proving
 that all possible queue saturation is prevented.
 
-Malformed packets withdraw their affected observation. An unidentified
+Since checklist 6.547 the facts also carry the rest of the Titanium AA
+state, each field raw under its wire name: every `OP_SendAATable` header
+field (the string ids, `cost`, `cost2`, the prerequisite pair, `type`,
+`spellid`, the timer id `spell_type`, `spell_refresh`, `max_level`,
+`last_id`, `next_id`); the profile's `aapoints_spent`, `aapoints` and `expAA`
+as `Update::Points`; the 12-byte `OP_AAExpUpdate` 0x5f58 as
+`Update::Progress` (experience as the server scales it to 0..330, unspent
+points and the split percentage); and the server's 12-byte `OP_AAAction`
+0x0681 as `Update::Timer` {`begin`, `ability`, `end`}, where `ability` is a
+definition's `spell_type` and `end` is the server's clock when it sent the
+timer, not a deadline. The session does no timer arithmetic and keeps no
+timers; it publishes each as received. Points, experience and timers change
+no effect, so they bring no `LiquidHazardRevision`.
+
+Since checklist 6.548 a local TAKP session publishes `EQMac`'s AA facts the
+same way, from TAKP's layouts, keyed by the Mac AA id the client knows:
+`OP_RespondAA` 0x1542 (227 bytes: a first byte TAKP fills with the points
+spent, inferred from its use, then 226 rank bytes, id `r + 1` at `r + 1`;
+id 211's constant 3, TAKP's Fleet of Foot workaround, is passed through) as
+`Update::MacRanks`; the profile's AA array (nonzero ids only, the value as
+sent, which TAKP makes the rank times 16) as `Update::MacSelections` and its
+`aapoints`, `expAA` and `perAA` as `Update::MacPoints`; `OP_AAExpUpdate`
+0x2342 (8 bytes) as `Update::MacProgress`; and the server's 12-byte
+`OP_AAAction` 0x1442, keyed by the Mac AA id, as `Update::MacTimer`. `EQMac`
+servers send no definitions, so no Mac fact enters the environmental sums.
+Quarm shares the decoding, assumed as TAKP, but isn't offered it until its
+own attended row; remote TAKP waits for the local row. An unreadable Mac
+packet withdraws as its Titanium kind does, and a timer withdraws nothing.
+
+Since checklist 6.556 the session can send Titanium's AA requests. Since
+6.581 `Capability::AlternateAdvancement` is listed under the same gate as
+the facts: only on a local stock `EQEmu` or local TAKP session, until their
+live rows (6.556, 6.562) pass. Public `EQEmu`, P99, Quarm and RoF2 never
+list it, local or not, and there the three commands are refused as not
+offered. On a local TAKP session only the split goes (below): Train and
+Activate stay refused until the client's AA data is read (R49-41b).
+`ClientCommand::TrainAlternateAdvancement { rank_id }` buys a
+rank, `ActivateAlternateAdvancement { rank_id, target }` uses an owned
+rank's ability, and `SetAlternateAdvancementSplit { percentage }` sets the
+share of experience that goes to AAs, each as one 16-byte `OP_AAAction`
+0x0681 {action, ability, target, exp}: train is action 3 with the rank id,
+activate action 0 with the owned rank id and the target's spawn or 0, a
+split of 1 to 100 action 1, and 0 action 2 (off). Which ids and actions the
+program itself sends is read R49-39, inferred until then.
+
+The session checks each request against a bounded, never published view of
+what this admission's facts said: the definitions offered (at most 4096;
+one past that is not kept, so a train for it is refused), the latest
+selections and the latest unspent points (`Update::Points` or
+`Update::Progress`, whichever came last). It follows every withdrawal and a
+new admission starts it afresh. Each check is one EQEmu makes too, and what
+is not known refuses. A train goes only for an offered rank the player does
+not own, whose rank before it the table shows owned, which costs no more
+than the unspent points, whose level is no higher than the player's current
+level and whose class mask has the player's class. EQEmu's table offers each
+ability's owned rank and the next, or its first, so a rank another offered
+rank follows is owned; otherwise the selections name it, by exact id in
+`OP_RespondAA` and by an ability's first rank in the profile. So a maxed
+ability above rank one, which has no following rank in the table and which
+the profile names only by its first rank, reads as not owned until an
+`OP_RespondAA` names its exact rank: until then it can't be activated. The
+local live row checks that the zone entry brings an `OP_RespondAA` (our
+client sends `OP_UpdateAA`); if it brings none, the offer waits on a fix.
+Prerequisite abilities are left to the server. One train is in flight at a time, until
+EQEmu's answer (`OP_RespondAA`, then `OP_AAExpUpdate`) or 5 seconds. An
+activation goes for an owned rank with an ability (`spellid` not -1), at
+most one a second; a split change at most one a second, and above 100 is
+refused where EQEmu would quietly set 0. The waits and paces are ours,
+inferred. A refusal is `WorldEvent::AlternateAdvancementRefused
+{ session_id, reason, refusal }`: `refusal` is an
+`alternate_advancement::Refusal` for the host to word, and None where the
+session refused the command as it refuses any (an earlier admission, not
+offered); `reason` says the same in this library's words. The server's own
+answers (the gain line, the reuse wait, the split's on and off lines) reach
+the host as its other lines do.
+
+Since checklist 6.562 the same three commands also encode for the `EQMac`
+generation, still listed by no server type: TAKP's `OP_AAAction` 0x1442 is
+256 bytes of text, NUL-padded and built from fixed words and numbers only:
+`buy N`, `activate N` (N the Mac AA id, 1 to 226, as `Update::MacRanks`
+names it; TAKP picks the rank to buy itself), `on N` for a split of 1 to
+100 and `off` for 0. The exact bytes are read R49-41a, inferred until then.
+On `EQMac` the session sends only the split for now. TAKP's buy checks
+neither level nor class, which the Mac client keeps itself (read R49-41b),
+so a train is refused as `Refusal::Unknown` until the session has the
+client's AA data; an activation is refused the same way, since which ids
+are passive is that data too and TAKP answers a passive one with a line
+while the player sits, feigns or rides a boat. An activation's `target`
+must be None on `EQMac`, refused as `Refusal::OutOfRange` otherwise: TAKP's
+text names no target and uses the server's stored one, which the session's
+own selection does not prove. Turning the split on needs a known level of
+51 or more (`Refusal::LevelTooLow`, or `Refusal::Unknown` when the level
+isn't known): TAKP takes `on N` at any level and turns it off again below
+51 at the next experience change, so ours is 51, inferred until R49-41.
+Turning it off goes at any level. The capability waits for a local TAKP
+live row; Quarm, assumed as TAKP, waits for its own attended row, and P99
+is never offered it.
+
+Malformed packets withdraw their affected observation. An unreadable
+profile withdraws its points with its selections (`Update::Points(None)`),
+unreadable experience withdraws the last (`Update::Progress(None)`), and an
+unreadable timer withdraws nothing: no timer id in it can be trusted. Each
+unreadable line carries no payload bytes; the profile, experience and
+timer lines name the length. An unidentified
 malformed definition withdraws cached definitions; `OP_ClearAA` withdraws the
 whole AA view until replacement facts arrive. These withdrawals never supply
 an empty selection. The local effect-list bound is 256 records per definition;
 staging and definition retention are separately bounded at 4096. Exceeding a
 bound withholds observations. This feature sends no packets, offers no AA
-commands, and is absent from P99, EQMac and remote EQEmu feature sets.
+commands, and is absent from P99, Quarm, RoF2, remote EQEmu and remote TAKP
+feature sets.
 
 [EQEmu Titanium AA layouts](https://github.com/EQEmu/EQEmu/blob/f5ec714c8835b2afd2be1812bb9033ff70a17a64/common/patches/titanium_structs.h#L3229-L3261)
 [EQEmu AA encoders](https://github.com/EQEmu/EQEmu/blob/f5ec714c8835b2afd2be1812bb9033ff70a17a64/common/patches/titanium.cpp#L1749-L1816)
@@ -715,6 +885,27 @@ prefix drains; unrelated failures still propagate. Existing receive signatures
 are unchanged. See
 [evidence and packet limits](docs/session-termination.md).
 
+## Reconnect count and queued commands
+
+With `RunOptions::reconnect` on (the default), `Client::run` and
+`run_with_commands` try at most `RunOptions::reconnect_attempts` fresh logins in
+a row, 5 by default (our bound, 6.534: no read or server source gives one),
+then return the last failure; the count starts again once a run has stayed in
+its zone for at least the reconnect delay, so a server that admits and drops at
+once is still bounded. Each `ClientEvent::Reconnecting` says which `attempt` it
+is of how many (`attempts`); the last before the run ends says `attempt ==
+attempts`. Just before each fresh login says `ConnectionState::Connecting`,
+every command still in the host's queue is dropped unread and told once as
+`ClientEvent::CommandDropped { command, reason }`, with the command's kind and
+our reason only, never its text, recipient or a character name: nothing asked
+for in the ended session acts in the next one. A command sent after that point
+is read by the new login, even one composed before the host saw
+`Reconnecting`, so hosts should send the admission-scoped forms (such as
+`SendChatInAdmission`). When the run ends instead (reconnect off, a confirmed
+rejection or the end of the count), the queue stays the host's. The eq-client
+viewer turns reconnect off; the loop runs for hosts that keep the default, such
+as headless or scripted runs and this crate's tests.
+
 ## Camp completion evidence
 
 `CampStatus::Camped` now means an actual `Message::LoggedOut` was received.
@@ -738,14 +929,49 @@ allowance policies remain with the existing inventory owner.
 
 `Capability::ApplyingPoison` gates `GameCommand::ApplyPoison { slot }`. The
 inventory feature offers it with `Inventory`, on Titanium and `EQMac`
-admissions; RoF2 offers no features. The session refuses, with
-`WorldEvent::ApplyPoisonRefused` and nothing sent, while the inventory is not
-current, while the slot has moves unconfirmed, while an earlier request waits
-for its answer, and when the slot holds no item of type 42. It never removes
-the poison itself: the server's own inventory record does, applied or not.
-`WorldEvent::PoisonAnswered { slot, applied }` is the server's answer and ends
-the request in flight. The Titanium program's own gates and lines are pending
-read R49-1 (recording checklist 6.493).
+admissions; RoF2 offers no features. The session follows the Titanium
+program's flow (read R49-1, recording checklist 6.493); `EQMac` takes the
+same flow, inferred, as its program is not read.
+
+- It refuses, with `WorldEvent::ApplyPoisonRefused` and nothing sent, in this
+  library's words with no `string_id`: while the inventory is not current,
+  while the slot has moves unconfirmed, when the slot holds no item of type
+  42, when the slot is inside a bag (the program's item use passes only
+  top-level slots, the cursor included), and while the player's skills are
+  not yet known.
+- With the Apply Poison skill at 0 it refuses with `string_id` 0x305f.
+- A standing player is sat down through the usual posture request and
+  `WorldEvent::Posture`. A player still not sitting (ducking, lying,
+  feigning) is refused with `string_id` 0x305d.
+- A command while a poison is waiting or in flight is ignored, as the
+  program ignores it: a diagnostic, and no world event. It is ignored only
+  after the sit and the 0x305d refusal, in the program's order, so a
+  standing player's click while one is in flight still sits them.
+- Otherwise the wait starts, with `WorldEvent::PoisonStarted { slot,
+  string_id: 0x305e }`. The request goes out once the seated wait passes
+  the delay, read each tick as the program reads it (read R49-1f): effect
+  234's total in ms where that is not 0, else 10 s. A negative total never
+  sends; the wait then ends only with a posture or zone change.
+- The host reports that total with `GameCommand::PoisonWait { total_ms }`
+  (6.493b), offered with `Capability::ApplyingPoison`, whenever it changes
+  and after each admission: effect 234 from every active buff at its
+  caster's level (type-4 records negated) and every AA the class may use at
+  its level; worn items do not count. It is the host's own report, never a
+  script's. `None` means something that could carry the effect is unknown,
+  such as a buff's spell. Untold or `None`, the session waits 10 s, which
+  departs where a total is not 0: slower below 10 s, faster above it or when
+  negative.
+- Any posture change before the send, a stand and re-sit between two ticks
+  included, cancels it with `WorldEvent::PoisonInterrupted { string_id:
+  0x30d1 }` and nothing sent. A click checks this first, so a stand and a
+  click before the next tick cancel and start anew. Leaving the zone drops
+  it silently, as the program's zoning does.
+
+It never removes the poison itself: the server's own inventory record does,
+applied or not. `WorldEvent::PoisonAnswered { slot, applied }` is the
+server's answer and ends the request in flight; the program says 0x3269 when
+`applied`, else 0x326a, in colour 0x10e. The program's lines for 0x305f,
+0x305d, 0x305e and 0x30d1 are in colour 0x111.
 
 ## Command diagnostic identity
 
@@ -897,6 +1123,24 @@ never establishes carried weight, receipt or server acceptance. It must be used
 with a received, non-stale model whose complete history was recorded from its
 baseline; cloning preserves that history, endpoint reconstruction does not.
 
+## Augments
+
+Titanium serializes a common item's augment sockets as the item's children
+(`EQEmu`'s `GetAugment` is `GetItem` on a common item; 5 sockets), on a
+worn or carried item and two deep on an item in a bag. The reader keeps
+each socket's augment id in `InventoryItem::augments` and places no
+augment in the inventory (6.570); before, any augmented item made the
+whole inventory unreadable. A child of a common record is read as an
+augment even where the record claims room (ours, 6.570 G1: only a bag has
+contents in `EQEmu`). An augment past socket 4, an augment with children,
+or a child of any other non-bag class is still unreadable. An augmented
+record carries no link hash. **What augments add is not summed yet, so
+anything derived from an augmented item reads as unknown, never as less**:
+`Inventory::carried_weight_tenths` is `Err(WeightUnavailable::Augments)`
+while any counted item is augmented (the Titanium program adds augments'
+weight), and `equipment_stats_uncertain()` is true while any worn item is.
+`EQMac` has no augments.
+
 ## Ordered host inventory projections
 
 `InventoryMove::sequence` optionally names a monotonically increasing local
@@ -997,19 +1241,36 @@ capability, inventory owner or automatic EQMac loot-all behavior changes here.
 
 ## Spoken languages
 
-`chat::Tongue` is the language a message is spoken in and the speaker's skill
-in it. Its fields are private: a tongue is `Tongue::COMMON` (language 0, skill
-100) or `Tongue::spoken(&PlayerState, language)`, which takes the skill from
-the profile and is `None` when the profile lacks the language or holds no skill
-in it. No caller can send a language or a skill of its own.
-`SendChatInAdmission` carries one; `chat::encode_outbound_in` writes it
-(Titanium: language u32 at 128, skill u32 at 144; `EQMac`: u16s at 128 and
-134); `encode_outbound_for` and `SendChat` write the common tongue. RoF2 is
-refused. Which channels carry a chosen tongue is the host's choice: `EQEmu` and
-TAKP take the language from every channel, use their own record of the skill,
-and turn OOC, GM, broadcast and petition chat back to the common tongue
-themselves. What the official client writes in the skill field is inferred,
-pending program read R49-4b.
+`chat::Tongue` is the language a message is spoken in and the skill it carries.
+Its fields are private: a tongue is `Tongue::COMMON` (language 0, skill 100),
+`Tongue::spoken(&PlayerState, language, Speaker)` for a typed line, or
+`Tongue::unslurred(&PlayerState, language, game_master)` for the away reply.
+Both are `None` when the profile lacks the language or holds no skill in it.
+No caller can send a language or a skill of its own.
+
+The skill is worded as the Titanium program words it (read R49-4b):
+- the profile's skill less `PlayerState::intoxication >> 2`, never below 0,
+  language 0 included (`unslurred` takes nothing off);
+- 100 when `Speaker::game_master`;
+- -1 (`u32::MAX`) when the speaker is a game master and
+  `Speaker::log_server_word_zero` is set.
+
+`Tongue::skill()` is the wire's u32. `SendChatInAdmission` carries one;
+`chat::encode_outbound_in` writes it (Titanium: language u32 at 128, skill u32
+at 144; `EQMac`: u16s at 128 and 134, the skill cut to 16 bits, inferred);
+`encode_outbound_for` and `SendChat` write the common tongue. RoF2 is refused.
+The program sends the same tongue on every channel: `EQEmu` and TAKP take the
+language from every channel, use their own record of the skill, and turn OOC,
+GM, broadcast and petition chat back to the common tongue themselves.
+
+`PlayerState::intoxication: Option<u32>` is the profile's (Titanium u32 at
+128, `EQMac` byte at 4968; `None` on RoF2). No later change of it is decoded.
+
+`WorldRules::listener_garble: Option<bool>` is Titanium's `OP_LogServer` word
+at 16, which turns on the program's second garble stage by the listener's own
+skill (read R49-4c). `EQEmu` leaves it 0. The `EQMac` word at the same offset
+is `WorldRules::gibberish`, which TAKP's program reads the same way (read
+R49-4m).
 
 A received `OP_ChannelMessage` now fills `ChatEvent::language` and
 `ChatEvent::language_skill` on both generations, as sent: `EQEmu` sends 27 for a
@@ -1297,6 +1558,212 @@ revision, capability and scenario. Separate source-derived behavior, synthetic
 codec/state-machine tests, and live evidence. A check on one server type does not
 list a feature on another: one checked on TAKP waits for its own check on Quarm.
 
+A Mac server type may also list a feature from a read of that server's own
+handlers at a named commit, never from another server's: the offer is
+labelled "source-derived, not live" in its server type, its checklist row
+stays open until a live row, and a live defect withdraws the offer on that
+server first. Quarm's source is public (SecretsOTheP/EQMacEmu). Quarm offers
+`Giving`, `Grouping`, `Listing` and `Translocate` this way, from its handlers
+at fc75fcf (6.576). Its own refusals (self-found and challenge modes, Iksar
+zones, GM checks) answer as its lines. A Quarm translocate is answered as on
+TAKP, but Quarm sends no second offer after a yes: it moves the player with
+its ordinary zone change.
+
+What Quarm sends back on those four, from the same commit: its group packets
+use the same layouts as TAKP's. Its trade cancel names who closed at +0 and
+carries a fixed 1665 at +2, which is not read. It echoes the player's own
+cancel back to them (with their own ID, or the NPC's on a give window), and
+echoes the `EQMac` program's second cancel too; the window is already closed,
+so the session withholds each echo and sends nothing more. On an NPC's give
+window it sends an empty `OP_TradeReset` (0x1040) before the NPC's
+acknowledgement and after a cancel; nothing reads it yet, so it is recorded
+as the planned exchanges gap, never as an error.
+
+TAKP offers `Looting` the same way, from its handlers at EQMacEmu/Server
+44afcbf (6.577): the same 2-byte open and close, 12-byte item request, echo
+before the checks and empty-cursor rule as Quarm's. Both servers end the loot
+for an item request sooner than 10 ms after the last on the corpse
+(`loot_cooldown_timer`), so the session never sends one sooner and refuses
+one asked sooner. Delivery and coins stay with the inventory owner.
+
+Quarm and TAKP offer `Who` and `FriendsWho` the same way, each from its own
+handlers (6.583): the 140-byte `Who_All_Struct` of 16-bit fields, and the
+friends' comma list ending in its only NUL (Quarm `strcpy`s it), with no name
+past the 64 bytes the worlds read. The answer, `OP_WhoAllResponse` (0x0b20),
+is read into the same `WorldEvent::WhoList`; when nobody matched, the zone
+sends string 5029 instead, which reaches the host as chat. Its account name,
+sent only to a game master, stays out of `WhoPlayer`'s `Debug`, and an answer
+that doesn't read is a gap with no sample. One who or friends query is in
+flight at a time: the next waits for the answer, the 5029 line or 5 seconds,
+and comes at least a second after the last, a pace of the session's own (open
+row 6.583a for the program's). One asked sooner is refused and may be asked
+again. A plain `/who` stays the host's own list of the zone, as on Titanium
+(open row 6.583b).
+
+Quarm and TAKP offer `Rolling`, `Assisting` and `Splitting` the same way
+(6.585), from handlers the two servers share at Quarm fc75fcf and TAKP 44afcbf.
+- **Rolling.** A roll is Titanium's 8 bytes on the `EQMac` opcode (0xe741). Its
+  `OP_RandomReply` (0x1640) is read into the same `WorldEvent::Roll`. The
+  session sends ends of 0 to 32000, in order; that limit is ours, as P99's
+  program sets it (open row 6.585b for the `EQMac` program's).
+- **Assisting.** An assist is 2 bytes (0x0042). The server always answers on
+  the same opcode, into `WorldEvent::Assisted`, with the assistee's target, or
+  with the player's own spawn when there is none or the assistee stands past
+  250. That spawn is passed on as named (open row 6.585a). Only one assist is
+  in flight at a time, for up to 5 seconds.
+- **Emotes and yells** are not offered on these servers yet.
+- **Splitting.** `/split` is the 16-byte record on 0x3141, and `/autosplit` is
+  appearance type 28. The profile's byte at 3348 says whether automatic
+  splitting is on.
+  - Like the program, the session takes the coins from the purse first.
+  - A refusal sends its line (12328 or 13112, which arrives as
+    `Message::SplitRefused`) and then four purse additions, platinum to
+    copper, zeros included. The purse is known again only if each kind came
+    back as asked.
+  - A split that goes through takes the coins' worth from copper first and
+    makes change upward without telling the client
+    (`split::eqmac_take`). It then pays the share as the same four additions,
+    so the purse becomes what the take left plus the share.
+  - With fewer than four additions within 3 seconds, the purse is unknown.
+    Quarm pays a self-found splitter nothing.
+  - One split is in flight at a time; another asked before the answer is
+    refused. The purse settles only if nothing else moved it during the
+    wait, and is otherwise unknown.
+  - What the `EQMac` program's purse shows after a split that made change is
+    unread (open row 6.585d).
+
+Quarm and TAKP offer `Corpses` the same way (6.591), from Quarm fc75fcf and TAKP
+44afcbf.
+- **Consent.** A consent is the name and its NUL on 0xb740. It toggles on
+  these servers, and neither has a deny, so `ClientCommand::Consent { given:
+  false }` is refused (open row 6.591a). The answer on 0xd540 is the same
+  161 bytes, read into `WorldEvent::Consent`, and only the player consented
+  gets it.
+- **`/corpse`** is `OP_GMSummon` (0xc540, 152 bytes). It is sent only for a
+  player's corpse the session sees in the zone, and at most every 250 ms. A
+  `/corpse` sooner than that is withheld without a refusal. That floor is ours
+  (open row 6.591c), and the Mac program's `/corpse` opcode is open row
+  6.591b.
+- **`/corpsedrag`** is 152 bytes on 0x1441.
+- **`/corpsedrop`** is offered on Quarm alone, on its own opcode (0x1337 on its
+  wire): one byte drops all corpses, and the 152-byte record drops one. TAKP
+  refuses it.
+- **Refusals.** The local refusals of a consent cite no string numbers here.
+
+Quarm and TAKP offer `Pets` the same way (6.595), from both servers' identical
+`Handle_OP_PetCommands` and `zone/pets.h` at Quarm fc75fcf and TAKP 44afcbf.
+- **Commands.** Each is the 8-byte command and target on 0x4542, with
+  Titanium's numbers. Taunt on (13), no cast (18) and focus (19) fall to the
+  servers' default and are refused locally. Hold and feign go as asked, and
+  the server decides by the player's AAs.
+- **Ownership.** A spawn's owner comes from its record's `petOwnerId` (+18)
+  in the zone's spawn list and in a new spawn, and from charm.
+- **Quarm alone** refuses every command but get lost while the player is
+  invisible or hidden, in the pet's own words.
+- **Pace.** None (open row 6.595a).
+
+Quarm and TAKP offer `Resurrection` and `Sacrifice` the same way (6.596), from
+`Handle_OP_RezzAnswer` and `Handle_OP_Sacrifice` at Quarm fc75fcf and TAKP
+44afcbf.
+- **Resurrection.** The offer (0x2a41) and the answer (0x9b41) are
+  Titanium's 228-byte `Resurrect_Struct`, with no instance. The answer is the
+  offer byte for byte, with only the choice set: Quarm takes the zone and place
+  from it. Quarm moves the player itself on a yes.
+- **TAKP's completion.** TAKP sends its kept offer again with the answer 1
+  (0xec41), and the client moves itself. The session follows it only for the
+  offer it accepted in this admission, at the same zone and place, as a
+  solicited transfer with reason 9 and heading 0 (inferred). Anything else is
+  recorded as a gap. TAKP's rez effect, which the `EQMac` program applies
+  itself, is not shown (open row 6.596b).
+- **Time limit.** A question stays open an hour, then the session declines it
+  (inferred, open row 6.596a).
+- **Sacrifice.** The 12-byte offer is returned with only the answer set (1 or
+  0), on the player's word alone. The Mac program's no is inferred as 0 (open
+  row 6.596c).
+
+Quarm and TAKP offer `Training` the same way (6.597), from the identical
+`Client::OPGMTraining`, `OPGMTrainSkill` and `OPGMEndTraining` at Quarm
+fc75fcf and TAKP 44afcbf.
+- **Packets.**
+  - Open and answer (0x9c40): 244 bytes, the guildmaster's and player's 16-bit
+    spawns. The answer adds each skill's most as a 16-bit value, the price
+    scale (f32 at +204), `success` (+208) and 32 language flags.
+  - Practice (0x4041): Titanium's 12 bytes with the player's spawn at +2.
+  - Goodbye (0x9d40): 4 bytes.
+- **Results.** A practice is answered by `OP_SkillUpdate2` (0xbe41), read as
+  the player's skill only when it names their spawn.
+- **Cost and points.** The server takes the cost and a point without a word.
+  - The cost is the cube of the value over 10, times the price scale, times
+    0.0099999998, cut to a whole number. A new skill (254) costs nothing.
+  - The session projects the purse as the server's copper-first take, or
+    leaves it uncertain.
+  - Points come from the profile (+156), and each level adds 5.
+- **Languages** are held: both servers accept any language 0 to 25, and the
+  `EQMac` program's own rule is unread (open row 6.597a).
+- **Caps.** An offer's caps are each skill's most at the server's top level,
+  not at the player's level, so a host shows a larger number than the player
+  can reach now. A practice at the player's current most is refused with the
+  value repeated, which closes it with no spend.
+- **Unanswered.** A practice the server leaves unanswered for 5 s leaves the
+  points unknown and, when it had a cost, the purse uncertain: the server
+  takes both without a word. A late answer is plain skill news. An untrained
+  skill the player's level has not reached is likely dropped without an
+  answer (`MaxSkill` 0); the `EQMac` program would not ask (open row 6.597d).
+
+Quarm and TAKP offer `Tradeskills` and `WorldContainers` (6.598), from
+`Object::HandleCombine`, `Object::HandleClick` and
+`Handle_OP_ClickObjectAction` at Quarm fc75fcf and TAKP 44afcbf.
+- **Combine (0x0541).** 32 bytes (`Combine_Struct`). Both servers read only
+  the container's slot, a 16-bit value at +4: 1000 for the open world
+  container, else the pack slot. The other fields are left zero; what the
+  `EQMac` program writes there is unread (open row 6.598a). The answer is
+  always empty.
+- **Open (0xd740).** The click is the 8-byte `OP_ClickObject`. The 20-byte
+  answer carries the player, the container, `open` (0 when another player
+  uses it), the type at +10, 10 places at +12 and the icon at +16. An answer
+  with `open` 0 holds nothing. The items arrive as `OP_ObjectItemPacket`
+  (0xfb40) at places 0 to 9, which moves name 4000 to 4009.
+- **Close.** The session repeats the answer with `open` cleared. Both servers
+  answer with an empty `OP_ClickObjectAction` (`Message::ContainerReleased`).
+  Unlike `EQEmu`, neither returns the container's items: they stay in it,
+  and its places leave the view. The session closes the container when the
+  player dies, as neither server does before the player leaves the zone
+  (inferred, open row 6.598d).
+- **Combine results.** In a world container, `OP_ClearObject` (8 bytes,
+  `Clear` 1) comes before the reset; in a carried kit each component is
+  deleted with `OP_MoveItem`, and a recipe that replaces its kit deletes the
+  kit too. Refusals for class, race or (Quarm only) era send a line and no
+  reset. The session frees the player after 10 s, by time alone (open row
+  6.598c).
+- **Moves.** Into a world container only whole from the cursor, and out only
+  onto the empty cursor. Quarm refuses other world moves as a possible hack;
+  TAKP accepts them, so this stricter rule holds on both. A cursor item over
+  a different one in a place swaps, as both servers do; the same stack is
+  refused rather than predicted, because both servers move it whole.
+- **Lore.** A pickup the server refuses with a delete of its destination and
+  the duplicate-lore line leaves the item in its place, on every server.
+
+TAKP's and Quarm's boat control is read but not offered (6.602), from the
+identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
+`Handle_OP_ControlBoat` at Quarm fc75fcf and TAKP 44afcbf.
+- **Control (0x2641).** 4 bytes: the boat's 16-bit spawn, 1 to take or 0 to
+  give up, and a byte the servers only echo (sent as zero, open row 6.602b).
+  A grant or a release is echoed; a take while another player steers is
+  refused with the `IN_USE` line and no echo, so the take's wait runs out and
+  the session gives it up. Leaving the boat, a zone offer and the player's
+  death each give control back.
+- **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
+  types until the `EQMac` program's steering (a position update under the
+  boat's spawn moves it on both servers) and its board, leave and arrival
+  wire are read (open rows 9a and 9b).
+- **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
+  `Message::VehicleName`, last among the profile's messages. Both servers
+  keep it across zones and clear it on `OP_LeaveBoat` and in a zone without
+  boats.
+- **Casting aboard.** Both servers interrupt every cast while the profile
+  names a boat (`Handle_OP_CastSpell`). Whether the `EQMac` program refuses
+  first is unread (open row 9c).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs
@@ -1411,9 +1878,12 @@ session does not work speeds out itself); a frontend launches its jumps at it,
 and the session's guard bounds an announced jump's rise by the factor the jump
 started with. `MotionState.strafe_walk_units_per_second`, where present, is
 the strafe rate with walking selected: Titanium strafes on the selected base
-speed, so `strafe_units_per_second` is then the running rate, which bounds a
-`MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
-the walking rate. A ducking player's grant already carries the ducked rates
+speed, so `strafe_units_per_second` is then the running rate. A frontend
+names the pace selected in `MovementMode::Strafe(Pace)`: the guard bounds a
+`Strafe(Pace::Walk)` sample by the walking rate where the grant has one, and by
+the one strafe rate where it has none (`EQMac`), and a `Strafe(Pace::Run)`
+sample by the running rate (checklist 6.540). The pace changes nothing on the
+wire. **Breaking (6.540):** `MovementMode::Strafe` became `Strafe(Pace)`. A ducking player's grant already carries the ducked rates
 where the generation moves them ducked (see below), so a frontend halves
 nothing for ducking. On Titanium a ducking or sneaking player strafes on the
 selected base halved, both rates given as standing, and a grounded diagonal's
@@ -1518,13 +1988,13 @@ combines; `OpenContainer`, `CloseContainer` and `Combine(WORLD_CONTAINER)`
 require `WorldContainers`. `tradeskills::combine_capability` supplies the
 same distinction to frontends. EQEmu offers both; P99 offers carried combines
 and the guarded ordinary forge (`WorldContainers` scoped to one-unit placements
-into empty forge slots and whole withdrawals to an empty cursor), with no change
-to the current TAKP/Quarm offers. Exhaustive capability
+into empty forge slots and whole withdrawals to an empty cursor). TAKP and
+Quarm offer both from 6.598. Exhaustive capability
 matches and station controls must handle the new variant.
 
 `titanium_combine` retains its signature but writes the native full 32-bit
 slot, replacing the old invented high-word sentinel, and rejects nonpack,
-nonworld slots. No EQMac combine encoding is introduced. Additive
+nonworld slots. Additive
 `tradeskills::{check_carried, CarriedRefusal}` exposes the source-backed local
 metadata/identity prerequisites without changing any inventory.
 `CombineUpdate::Answered` means a received local transaction reset, not a
@@ -1660,37 +2130,88 @@ changes are at least 500 ms apart; a refusal is
 ## Duel challenges
 
 Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
-so far), another player's challenge comes as `WorldEvent::DuelOffer` with a
-`socials::DuelQuestion`, beside the `WorldEvent::Duel` news it came in.
-Answer it with `GameCommand::AnswerDuel`, copying `id` into `offer_id` and
-its admission into `session_id`; only the player's own choice should send a
-yes. The question has no local deadline and nothing declines it on the
-player's behalf. It closes with `WorldEvent::ConsentClosed`: `AnswerSent`
-after an answer, `Interrupted` on zoning, death or logout, a newer
-challenge, the duel's start or the challenger's refusal. A stale answer is
-refused with `WorldEvent::DuelRefused` and sends nothing.
+so far), the session keeps a duel as the Titanium program does (read
+R49-6): the challenge the player sent, the one waiting for them, and
+whether a duel is on. It tells the host what happened in
+`WorldEvent::DuelNews` with a `socials::DuelNews`, one for each line the
+program shows; the host words them from the installed string table.
 
-Challenge another player with `GameCommand::ChallengeDuel`, naming their
-spawn in `target` (Titanium's `/duel` at the target). The session sends it
-only at a player spawn in its spawn list other than the player, with one
-challenge out at a time and at least five seconds between two; anything
-else is refused with `WorldEvent::SocialRefused` and sends nothing.
-`EQEmu` looks the one challenged up without checking they exist, so a
-host must never reach the wire another way. The challenge is remembered
-until the server's `OP_DuelAccept` starts the duel, the other client turns
-it down, the one challenged leaves the zone, the player zones, or sixty
-seconds pass, since `EQEmu` tells a decline only in a line of text. While
-it is remembered, the record from the one challenged that `EQEmu` sends
-before the duel starts is not a question: no `DuelOffer` comes for it and
-nothing is sent. Both bounds and every refusal line are this crate's,
-pending a read of the program (checklist 6.492b). The server says its own
-line when the other player is considering another duel or the player has
-already accepted one.
+`GameCommand::ChallengeDuel` is `/duel`. Put the player's target in
+`target`, or 0 for none. It always acts on that target:
+
+- At no player, or at the player themself, it sends nothing and tells
+  `NoPlayerTarget` or `NotYourself`.
+- During a duel it sends nothing and tells `AlreadyDueling`.
+- At the player who challenged them, it accepts: `OP_RequestDuel`, then
+  `OP_DuelAccept`, each naming the challenger and then the player. The
+  news is `Accepting`.
+- While another player's challenge waits, it sends nothing and tells
+  `ConsideringAnother`.
+- Otherwise it challenges (`OP_RequestDuel` only) and tells `Challenging`.
+  A second challenge replaces the first. The program has no distance test
+  and no time-out, so neither does the session.
+
+A challenge reaching the player is `Challenged`, unless the program would
+turn it down on its own. Then the session sends the program's 12-byte
+`OP` 0x3ea0 refusal (`socials::DUEL_AUTO_DECLINE_OPCODE`) with a reason:
+1 while a duel is on, 2 while another challenge waits or the player has
+challenged someone else. Reason 0, the ignore list, is not taken, because
+the session keeps no ignore list. The same challenger again, or the
+opponent during the duel, changes nothing. A challenge from the one the
+player challenged starts the duel with nothing sent (`Begun`).
+
+The player's side of the duel is the one they challenged or accepted
+(read R49-6d), and only it ends one:
+
+- **Its death:** `Won` when the player killed them during the duel, and
+  the session sends the program's 8-byte 0x3bad {opponent, player}
+  (`socials::titanium_duel_over`). Otherwise `Ended`, which also covers a
+  challenge that was never accepted. A challenger's death changes nothing.
+- **Its leaving the zone:** `Forfeited` during the duel, also with 0x3bad,
+  or `Lapsed` before it.
+- **Its own program's refusal** (0x3ea0, `DuelUpdate::AutoDeclined`):
+  `TurnedDown`, with the reason. This ends the player's side and keeps a
+  challenge waiting for the player. `EQEmu` never passes this on.
+
+`EQEmu` takes 0x3bad as its 12-byte decline, so it drops the 8-byte form.
+The player's own death, zoning and logging out forget the duel.
+
+A waiting challenge also comes as `WorldEvent::DuelOffer` with a
+`socials::DuelQuestion`. The program has no such window, so the host shows
+it only as a setting that says it departs from the original. Answer it
+with `GameCommand::AnswerDuel`, copying `id` into `offer_id`. A yes sends
+exactly what `/duel` at the challenger sends. A no forgets the challenge
+here and sends nothing: Titanium has no decline. It closes with
+`WorldEvent::ConsentClosed`, `AnswerSent` after an answer and
+`Interrupted` when the duel state is forgotten. A stale answer, or one naming a
+challenger gone from the zone, is refused and sends nothing (ours:
+`EQEmu` looks the one named up without checking they exist). Outside a zone, `/duel` and the answer are refused;
+the session makes no posture or motion test, as the program makes none. `Request::AnswerDuel` with `accept: false` is refused
+on Titanium.
+
+`EQEmu` maps 0x3bad, not 0x3ea0, to its decline, so on stock `EQEmu` a
+refusal the program sends is never told to the challenger. The challenger
+stays challenging until they zone or die, as with the original client.
+The first P99 use of 0x3ea0 and of the two-packet accept is attended.
+
+## Weapon stances
+
+Where the server type takes them (`Capability::WeaponStances`: stock
+`EQEmu`; not yet offered on P99, whose first use is attended, nor on the
+Mac servers, whose program forms are unread), `GameCommand::ToggleStance`
+is `/sheathe` (`Stance::Sheathed`, state bit 2) or `/aggressive`
+(`Stance::Aggressive`, bit 8). The session flips that bit in the player's
+state word and sends `OP_PlayerStateAdd` (0x63da) or
+`OP_PlayerStateRemove` (0x381d), 8 bytes {own spawn, bit}, as the program
+does (R49-6n). Nothing answers and no line is shown. The server passes it
+to the others and not back, so the session keeps the player's word itself
+until a new zone or the server's own word on the player's states.
 
 ## Shielding
 
 Where the server type takes `/shield` (`Capability::Shielding`: stock
-`EQEmu` so far, from its source and not yet checked live), send
+`EQEmu`, TAKP and Quarm, each from its own source and not yet checked live;
+TAKP's and Quarm's `OP_Shielding` is the 16-bit spawn id alone), send
 `GameCommand::Shield` with the spawn id of the player to shield. The server
 checks the level (30), the class (Warrior), its rule, the 3-minute recast,
 the target (no NPC, not oneself) and the distance (15), and answers each
@@ -1700,22 +2221,49 @@ refusal, the start and the end with a line of its own; nothing answers on
 the original makes before it sends (oneself, the class, the level) are the
 host's: they may only be stricter than the server's.
 
+## Disciplines on TAKP and Quarm
+
+TAKP and Quarm send a Mac player no list of disciplines and no reuse
+timers. Where they are offered (`Capability::UsingDisciplines`, from both
+servers' own `Handle_OP_Discipline`, not yet checked live), send
+`GameCommand::UseDiscipline` by spell as on Titanium. The session sends the
+servers' number for that spell and the player's class (`OP_Discipline`,
+the number and three zero bytes), and refuses only a spell with no number
+for the class (`WorldEvent::CastRejected`, nothing sent) and a second try
+within one second. The server judges the level, its reuse timer, any
+discipline still active and the player's state, and answers each with a
+line of its own. `OP_DisciplineChange` reports the discipline begun and
+ended. Nothing waits for a cast.
+
+`GameCommand::AskDisciplineReuse` (`Capability::DisciplineReuse`) is the
+bare `/disc`: it sends the number 0, under the same one-second guard. The
+server answers with a line either way; the one that says a discipline is
+ready reaches the host as chat with string 393 and the server's color.
+
 ## Surnames
 
 Where the server type takes `/surname` (`Capability::Surnaming`: stock
-`EQEmu` so far, from its source and not yet checked live), send
-`GameCommand::Surname` with the word the player typed. It goes as typed:
-never cut, its case left for the server to set. Only what the record cannot
-carry is refused (`WorldEvent::SocialRefused`): an empty word, a space, a
-control character, anything outside ASCII, or 32 bytes and more. One request
-waits at a time, until its answer, a zone change, or 10 s. The server
-answers with `WorldEvent::SurnameAnswer` (`accepted`, and the surname it
-names) or with a line of its own for each refusal; an answer to no request
-is withheld. The name a taken surname gives the spawns comes from the zone's
+`EQEmu`, TAKP and Quarm, each from its own source and not yet checked live),
+send
+`GameCommand::Surname` with the word the host's `/surname` settled on (the
+Titanium program's is the first word, quotes taken whole, cut to 19 bytes:
+read R49-10). It goes as given, a quoted word's spaces included, its case
+left for the server to set. Only what the record cannot carry is refused
+(`WorldEvent::SocialRefused`): an empty word, a control character, anything
+outside ASCII, or 32 bytes and more. Nothing holds a second request: the
+program paces it by its own question. The server answers with
+`WorldEvent::SurnameAnswer` (`accepted`, any word but 0 as the program reads
+it, and the surname it names) or with a line of its own for each refusal;
+every answer reaches the host, asked or not, as the program shows each. The name a taken surname gives the spawns comes from the zone's
 own `WorldEvent::LastName`, not from the answer. `EQMac`'s request and
-answer are built but listed by no server type, and `EQMac`'s
-`OP_GMLastName` now gives `WorldEvent::LastName` too. A surname stays for
-good, or for days, so a host sends it only on the player's own typed word.
+answer (100 bytes) are listed by TAKP and Quarm (6.604 E5), and `EQMac`'s
+`OP_GMLastName` gives `WorldEvent::LastName` too. There the session also
+refuses first what the servers' comments say the `EQMac` program refuses
+(inferred, never more than the server does): a character under level 20,
+and a surname over 19 characters. A character who already has a surname is
+the server's to refuse, with its own line. A surname stays for
+good, or for days, so a host sends it only on the player's own word,
+answered yes.
 
 ## Titles
 
@@ -1744,6 +2292,341 @@ name a choice gives the spawn comes from the zone's own
 program's title window is read (R49-14). `EQMac` and RoF2 build neither
 request: `EQMac` has no titles, and RoF2's numbers are owed (inferred for
 RoF2, 6.489).
+
+## Bandolier sets and the potion belt
+
+Every Titanium server's profile, P99's included, carries the player's four
+bandolier sets and four potion belt slots (`EQEmu`'s
+`PlayerProfile_Struct`: `bandoliers` at byte 6164, 320 bytes each;
+`potionbelt` at 12564, 72 bytes a slot). At each admission the session
+reads them into `WorldEvent::Bandoliers` and `WorldEvent::PotionBelt`
+(6.559). A set is its name and its primary, secondary, range and ammo
+items; an item is its id, icon and name. An item numbered 0 is `None`
+whatever its name (`EQEmu`'s remove leaves the name), and a set with
+neither a name nor an item is `None`. A name with no end within its field
+gives one unreadable gap and withdraws only these two events; the rest of
+the profile still reads, and the session tells the new
+`WorldEvent::BandoliersUnknown` instead of the two. Both are told at the
+admission, after `Entered`. P99's era has no bandolier and its bytes
+there are unverified, so a host shows them only with the windows that come
+later. `EQMac` has neither, and RoF2's 20 sets and 5 slots are owed.
+
+Saving and clearing a set (`GameCommand::SaveBandolier`, `ClearBandolier`,
+under `Capability::Bandoliers`) and setting and clearing a belt slot
+(`SetPotionBelt`, `ClearPotionBelt`, under `Capability::PotionBelt`) are
+built and tested from stock `EQEmu`'s source (6.564), and no server type
+offers them until their local live rows pass; P99 never does. Sets and
+slots are numbered 0 to 3. Titanium sends `OP_Bandolier` (0x6f0c, 40
+bytes) and `OP_PotionBelt` (0x0719, 12 bytes). A save stores the name (1
+to 31 printable ASCII bytes) and the id, icon and name of what is worn in
+the primary, secondary, range and ammo slots; a belt slot takes an item
+the player wears or carries in a pack or a bag in one (never the cursor or
+a bank) that is a potion (item type 21) or carries the item's potion-belt
+flag (`ItemPlacement::potion_belt`). The server answers none of them, so
+after each send the session tells the whole new `WorldEvent::Bandoliers`
+or `WorldEvent::PotionBelt`. **That event is the session's own mirror of
+what it sent; the next admission's profile is the server's word.** A
+refusal is `WorldEvent::BandolierRefused` in the session's words, with
+nothing sent: sets unknown, a set, slot or name out of bounds, a save
+while the inventory is not known or while casting (inferred until read
+R49-45 b), a clear of a set or slot already empty, a belt item not carried
+or not for the belt, and a second send within 250 ms (ours, inferred). Using
+the belt is described below.
+
+Swapping to a set (`GameCommand::SwapBandolier`, under its own
+`Capability::BandolierSwap`) is built and tested from source (6.566) and
+offered by no server type until its local live rows pass and read
+R49-45 d confirms the program's order; P99 never. It sends `OP_Bandolier`
+action 2. Stock `EQEmu` then moves up to eight items (`SetBandolier`,
+`MoveItemToInventory`) and sends no item update, so the session works out
+every move (`bandolier::swap`) and tells the host the whole result as
+`WorldEvent::Inventory(InventoryUpdate::Prediction(..))`, settled by the
+ordinary refusal window. A host may send a swap from a click, a key, a
+social or a script, since a script may do whatever the player can. The swap
+is refused, with nothing sent (`BandolierRefused`), when any move can't be
+worked out exactly: an inventory not known or with a move in flight or
+custody unknown, anything on the cursor, an item record lacking what the
+moves read, a return that would reach the cursor (ours: `EQEmu` pushes it
+there), an empty set, or nothing to swap; and while stunned, dead,
+trading, at a merchant, with a world container or a trader's window open,
+casting, or within 250 ms of the last bandolier send (inferred until read
+R49-45 b). `EQEmu`'s `HasItem` also matches an augment socketed in an
+item, so a set naming an id in any worn or carried item's
+`InventoryItem::augments` is refused, and so is a pack item that is not a
+bag but has room or contents (6.570 G3). **On `EQEmu` the server
+confirms no move, so the slots of any item move, the player's own or a
+swap's, keep projected custody after they settle until the server next
+sends them; a swap is refused after any item move until then.** Regaining
+that custody is a gate for offering the swap, beside its live rows and
+read R49-45 d.
+
+Using a belt slot (`GameCommand::UseBeltItem(BeltUse)`, under its own
+`Capability::UsingPotionBelt`) is built and tested from source (6.568) and
+offered by no server type until its local live rows pass; P99 never. The
+host names only the belt slot (0 to 3); the item is the one the session's
+belt holds there, so a host can't use an item the belt does not name. The
+session casts it from the first slot holding that item, worn 0 to 21 and
+then packs 22 to 29 (inferred until read R49-45 c), by Titanium's
+`OP_CastSpell` on casting slot 11 (`EQEmu`'s `CastingSlot::PotionBelt`).
+**Stock `EQEmu` casts the item at whatever slot that names, the bank and the
+cursor included; the session never names a bank, the cursor or a bag**,
+since an item click is never sent from a bag either. Past the choice of
+slot it is the whole item-use path of `GameCommand::UseItem`: the same
+holds (`Casting`, `Inventory`), the same checks of charges, click effect,
+level, song class and target, and the same answers
+(`WorldEvent::ItemUseAction`, then the cast's own events). A refresh on
+slot 11 answers the cast; one on the item slot (10) does not. It is refused
+in the session's words, with nothing sent, when the belt is unknown or not
+yet read, the belt slot is out of bounds or empty, the inventory is not
+known or is stale, the item is not worn or in a pack, or the first slot
+holding it has custody unknown (as after an `EQEmu` move until the server
+sends it again). Hosts and scripts get no wider rule than for `UseItem`.
+
+## Guild bank
+
+Stock `EQEmu` keeps a guild bank only in the guild hall (zone 345), and
+never sends a Titanium client the bank's list: `SendGuildBank` sends a
+client before RoF the slots of its inventory type sizes, which are 0 for
+Titanium. What the server does send, to every guild member in the zone, is
+one slot at a time as an item arrives, leaves or changes there
+(`SendGuildBankItemUpdate`). The session reads `OP_GuildBank` (0xb4ab) into
+`WorldEvent::GuildBank` (6.563):
+
+- `Shown(GuildBankEntry)`: a slot of the deposit or main area holds this
+  item now, replacing what it held. `quantity` is the stack's count, or 1
+  for an item with charges (the server sends 1). `usable_for_actor` is the
+  server's `is_useable`, worked out for the player whose action caused the
+  update, so for anyone else it is not this player's answer; nothing should
+  act on it for this player.
+- `Removed { area, slot, item_id }`: that slot is empty now.
+- `DepositAnswered { taken }` and `Acknowledged`: the server's answers to a
+  deposit and to the other requests. Neither names the request it answers.
+  The session sends no guild bank request yet and acts on neither; in
+  particular a taken deposit moves no cursor item until the deposit slice.
+- `Cleared { deposit_slots, main_slots }`: read as its layout says; nothing
+  on stock `EQEmu` sends it.
+- `Banker(bool)`: the player's own banker flag from the profile's
+  `guildbanker` word (byte 13056), which `EQEmu` sets only in the guild
+  hall. A word other than 0 or 1 is an unreadable gap, never "banker". In
+  the guild hall the flag also changes through `OP_SetGuildRank`
+  (`GuildUpdate::MemberRank` with no guild); a host takes the latest of the
+  two.
+
+**The view is never complete.** A host's view of the bank is the slots it
+has seen through `Shown` and `Removed` since it entered the guild hall; it
+starts empty at every zone change. A slot never seen may hold anything.
+
+`GuildBankEntry`'s `donor` and `permitted` are players' names. They are in
+the event only: its `Debug` output leaves them out, and a host should not
+log them either. Any other action, a known action at another length, an
+area other than 0 or 1, and a `display` or `Fail` word other than 0 or 1
+are unreadable gaps. P99's era has no guild bank; `EQMac` has no such
+message, and RoF2's bank is another layout, owed.
+
+
+## Bazaar search
+
+Stock `EQEmu` on Titanium has a Bazaar, and TAKP and Quarm have the
+Mac-era one (below); P99's era has none, and RoF2's search is unread.
+`Capability::BazaarSearching` is built and tested from each server's
+source. TAKP and Quarm offer it from source, not live yet (6.580a stays
+open, and the first use on either is attended); stock `EQEmu` offers it
+once its local live row passes (6.550a). No buy, browse or trader mode is
+sent: a later buy must send the listed price exactly, since stock `EQEmu`
+charges the price the client sends.
+
+`GameCommand::BazaarSearch { criteria }` sends `OP_BazaarSearch` (0x1ee9)
+action 7 as `BazaarSearch_Struct`, 108 bytes. Each `BazaarCriteria` field
+left `None` is sent as the value the server takes as open: all ones for
+the class, race, stat, slot and item type, 0 for a price, 1 and 100 for the
+levels (what the official client sends for an open criterion is owed to
+read R49-42a). The trader is a spawn id, 0 for all. The name is at most 63
+bytes of printable ASCII; prices are whole platinum from 1 (the server
+counts them in thousands of copper); levels are 1 to 100; each least must
+not pass its most. `GameCommand::BazaarWelcome` sends action 9, padded to
+20 bytes (inferred). Each is refused with `WorldEvent::BazaarRefused` and
+nothing is sent outside the Bazaar (zone 151; `EQEmu` searches only the
+player's own zone and instance, so elsewhere it finds nothing, and where
+the original lets a player search is owed to R49-42), while another is in
+flight (until its answer, a zone change, a new admission or 10 s), within
+2 s of the last (ours, inferred), or when the criteria are out of bounds.
+
+The server's answers come as `WorldEvent::Bazaar`: `Results` with each
+`BazaarListing` (the trader's spawn, item id, serial number, name and the
+count the server adds as `"Name(count)"`, `None` where the field cut it
+off, the price in copper and the searched stat), then `SearchDone`, which
+alone answers a search that found nothing; and `Welcome { traders, items }`.
+The host names traders from its own spawn list. Results that are not whole
+96-byte rows, more than 1000 rows, a row of another action or of a spawn past
+16 bits, and an action no server is known to send are gaps; an answer
+nobody asked for is withheld and a gap too. The bazaar's and traders'
+gaps keep no sample, only opcode and length. The parcel delivery costs
+`EQEmu` sends after results (action 29) are read and dropped: only RoF and
+later have parcels.
+
+### On TAKP and Quarm
+
+TAKP's and Quarm's servers share `Client::Handle_OP_BazaarSearch` and
+`Client::SendBazaarResults` (EQMacEmu `zone/client_packet.cpp`,
+`zone/trading.cpp`), and the same commands send their records on
+`OP_BazaarSearch` (0x1142). The search is `BazaarSearch_Struct`, 88 bytes:
+action 7, then the trader, class, race, stat, slot and item type as 16-bit
+fields, the name, and the least and most price in whole platinum (0 for
+no bound). The server reads class, race and slot as bit positions in the
+item's masks, counted from 1 for the class and race (the race is its
+mask bit, Human 1 to Iksar 13) and from 0 for the slot, all ones as any, the stat as 0 to 20, and the
+item type with its own special values (0, 31, 46 to 49). Its record has no
+level bound, so a search with either level is refused, as is a criterion
+past 16 bits or equal to all ones. The welcome request is action 9 in 20
+bytes. The handler drops any other size. Neither server refuses a search
+from outside the Bazaar: the handler builds a "Bazaar Search hack" note
+when the zone is not 151 (`Zones::BAZAAR`) and answers all the same. The
+session sends one only in zone 151, our own stricter rule, taken because
+the servers flag it; the same one in flight, 10 s wait and 2 s floor hold.
+
+Each result comes in a packet of its own, a 76-byte row, and the end after
+the last (20 bytes, action 12). So the host hears one `Results` with one
+`BazaarListing` per row, then `SearchDone`. A Mac row's listing has
+`serial` and `stat` `None`, since the row carries neither; `trader` is
+`None` where the server sends 0, a trader not in the zone; `listings` is
+how many listings the server grouped in the row; the name's `" (N)"`
+gives `count`, as on Titanium. **The item id is as the server sent it:
+`SendBazaarResults` stores it through a 16-bit signed field, so an id past
+32767 arrives wrapped and can't be trusted as an id** (nor the count, which
+the server picks by that id's stacking). Rows past 1000 in one search are
+withheld and a gap. When a search reaches `Bazaar:MaxSearchResults`, the
+server's yellow line comes as ordinary chat.
+
+## Browsing a trader
+
+`Capability::BazaarBrowsing` is built and tested from stock `EQEmu`'s
+source and offered by no server type until its local live row passes
+(6.558a). Nothing is bought.
+
+`GameCommand::BrowseTrader { trader }` sends `OP_TraderShop` (0x35e8) as
+Titanium's `TraderClick_Struct` `{trader, 0, 0, 0}`, 16 bytes. It is
+refused with `WorldEvent::BazaarRefused`, nothing sent, outside the Bazaar;
+for a spawn that is not a player the session saw turn their trader sign on
+(`OP_BecomeTrader`) or a search answer named as a trader since the zone-in,
+and has not seen leave; beyond the generation's merchant reach, or 20 in
+3-D where that is unread (inferred, R49-42 d; `EQEmu` checks no distance);
+while a browse or a merchant's window is open, or a merchant's opening
+waits for its answer; while another click waits (10 s); and within 1 s of
+the last click (ours, inferred). A merchant may
+not open while a browse is open or a click waits. `EQEmu` does not check
+that the spawn clicked is a trader, and records the player as their one
+customer until the browse ends, which is why the session clicks only known
+traders and ends every browse it closes.
+
+The server's admission comes as `BazaarEvent::Admitted { trader, approved }`
+(a refusal's line is chat). After an approval, the trader's items come as
+`BazaarEvent::Listed(TraderListing)`: the trader, the item's serial number
+(the seventh field of the merchant item header), the price in copper, the
+count and the item. A listing of a serial already listed replaces it (a
+price cut or a re-list). `BazaarEvent::Delisted { trader, serial }` takes
+one out (`OP_TraderDelItem`, or a price of 0). Outside a browse these
+packets stay the merchant's, unchanged. `GameCommand::EndBrowse` sends
+`OP_Trader` (0x524e) action 4 as `Trader_ShowItems_Struct`, 20 bytes, which
+the server does not answer, and `BazaarEvent::BrowseEnded { trader }`
+follows at once. A zone offer, answer or handoff also ends an open browse
+with our end, sent while this zone's connection still carries it, since a
+refused zone change keeps the player as the trader's customer; a click in
+flight then stops waiting. A browse ends without our end when the server's
+`OP_ShopEnd` says the trader left trader mode (our end would free the
+trader's next customer), when their sign goes off or they despawn, and at a
+new admission (the server forgets the customer with the zone, inferred). A
+list past 80 items or an item that cannot be read is a gap and ends the
+browse with our end, so no half list is kept. An admission no click asked
+for is withheld and a gap; an approval that comes after its click stopped
+waiting is ended at once. After either approval, the run of merchant item
+packets that follows is that trader's list: it is withheld, and told once
+as a gap.
+
+Other players' signs come as `BazaarEvent::TraderSign { spawn, on }`; their
+name is not read. Titanium's spawn records carry no trader flag, so a
+trader who began before the player zoned in is known only from a search
+answer until their sign changes (inferred; how the program knows them is
+owed to R49-42 d). The trader rows' gaps keep no sample.
+
+## Task journal
+
+Stock `EQEmu` sessions (Titanium) read the task journal the zone sends
+(gap list section 5, recording checklist 6.546, from `EQEmu`'s source and
+not yet checked live). P99, TAKP, Quarm and RoF2 keep none; there is no
+capability and nothing is sent. The host hears, each with the admission's
+`session_id`:
+
+- `WorldEvent::TaskDescribed { description }`: an entry's `TaskDescription`
+  in its `TaskSlot` (the one `TaskKind::Task` slot 0, or a `TaskKind::Quest`
+  slot 0 to 18), with its title, the server's open-journal flag, duration,
+  duration code and start time as sent (the session does no clock
+  arithmetic), description and `Rewards`. A description of another task in
+  a slot forgets that slot's earlier steps.
+- `WorldEvent::TaskStepUpdated { activity }`: one step, `Step::Hidden` or
+  `Step::Shown(Objective)` with its goal and count, for an entry the
+  session holds. `EQEmu` sends a description before its steps every time,
+  so a step for a slot holding no entry of its task is stale: the host
+  does not hear it, and it goes to the gap log by opcode and length.
+- `WorldEvent::TaskConcluded { completion }`: a step ended
+  (`stage_completed`), or the whole task completed or failed. `EQEmu` then
+  sends the entry again (a step) or takes it out (the task).
+- `WorldEvent::TaskRemoved { at }`: the server took the entry out
+  (`OP_CancelTask`), the only way an entry leaves the journal here.
+- `WorldEvent::CompletedTasks { list }`: the tasks finished, at most 50,
+  replacing the earlier list.
+
+What the zone sends before it admits the player is told at the admission,
+the task first, then the quests by slot, each description before its
+steps, then the finished list. Up to 64 stale messages heard before the
+admission go to the gap log there; past that only their count is told, as
+one diagnostic. Each zone starts empty and sends the whole journal again. A message that is short, overruns, has a string without its
+end or too long, counts past what it carries, names a shared task (kind 1,
+after Titanium), a slot past the journal or a step past 20 is refused
+whole, never cut, and goes to the gap log by opcode and length only: no
+journal message's gap keeps a sample, and no diagnostic or error carries a
+task's words. Inferred until read R49-38: the official program's use of
+each field, and whether it clears its journal at zone-in.
+
+### Offers and requests
+
+The same sessions read an NPC's offer and a finished task's steps
+(checklist 6.555, from `EQEmu`'s source and not yet checked live), each
+heard only after the admission, its words in the event alone:
+
+- `WorldEvent::TasksOffered { offers }`: `TaskOffers` from `OP_TaskSelectWindow`,
+  1 to 40 `OfferedTask`s from the giver's spawn, with the steps the window
+  shows. It replaces any earlier offer, which stands until the player takes
+  one or declines, the next offer, or the zone's end.
+- `WorldEvent::TaskHistory { history }`: a finished task's done steps, as
+  asked for.
+
+`Capability::Tasks` covers five commands. It is offered only on a local
+stock `EQEmu` session until its live row passes, because a wrong
+acceptance can bring down a zone other players share. Each refusal is
+`WorldEvent::TaskRefused { reason }`, and nothing is sent:
+
+- `GameCommand::AcceptTask { task_id }` sends `OP_AcceptNewTask` (12 bytes:
+  the kind as offered, the task and the giver) only for a task in the
+  current offer, not already held, while the giver is an NPC spawn the
+  session holds. `EQEmu`'s `CanAcceptNewTask` dereferences the giver
+  without a null check, so a giver gone from the zone is refused here; one
+  that leaves between this check and the server's read can't be guarded.
+  One send ends the offer, as `EQEmu` clears its own.
+- `GameCommand::DeclineTasks` ends the offer and sends nothing, since
+  `EQEmu` ignores an acceptance of task 0 (inferred until read R49-38).
+- `GameCommand::CancelTask { at }` sends `OP_CancelTask` (8 bytes) only for
+  a slot that exists and holds an entry, once until the server's removal or
+  the zone's end. `EQEmu`'s `RemoveTask` doesn't check the slot, so a quest
+  slot past 18 or a second cancel would corrupt its count of quests.
+- `GameCommand::AskTaskHistory { index }` sends `OP_TaskHistoryRequest`
+  for an index in the last finished list. `GameCommand::ListTaskTimers`
+  sends `/tasktimers` with an empty body, which `EQEmu` doesn't read (the
+  program's body is inferred until read R49-38); the server answers in
+  chat. Each is paced at one per second, this library's floor (inferred).
+
+A host may send `AcceptTask` and `CancelTask` from a click, a social, a
+hotbutton or a script, since a script may do whatever the player can. A
+cancel loses the entry's progress, so a host confirms a click first.
 
 ## Resurrection and translocate consent
 

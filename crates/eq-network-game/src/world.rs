@@ -96,6 +96,15 @@ pub struct PlayerState {
     /// room for 32 (`common/patches/mac.cpp`). Skill updates for skill
     /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
     pub languages: Option<Vec<u8>>,
+    /// How drunk the player is, by the profile's `intoxication`
+    /// (`common/patches/titanium_structs.h`'s u32 at 128; the `EQMac`
+    /// profile's byte at 4968, TAKP 44afcbf and Quarm fc75fcf), when
+    /// decoded. Read R49-4 takes the value the program shifts right by two
+    /// and takes off a spoken tongue's skill as this one (inferred: the
+    /// program reads it from its own copy of the profile). The servers raise
+    /// it on a drink without telling the client, so it holds until the next
+    /// zone-in; a drink after zoning leaves it low (known shortfall).
+    pub intoxication: Option<u32>,
     /// The disciplines the player knows, by spell ID, in the list's slots
     /// (100, and `RoF2`'s 300), 0 for an empty one, when decoded: Titanium's
     /// profile, which
@@ -625,7 +634,8 @@ pub enum Capability {
     GroundDropping,
     /// Titanium's Lay on Hands and Harm Touch.
     KnightAbilities,
-    /// Use the supported Titanium Warrior disciplines.
+    /// Use disciplines: those a Titanium server lists, or on TAKP and
+    /// Quarm those the class has a number for.
     UsingDisciplines,
     /// Respond to the current server dialog.
     ServerDialogs,
@@ -697,12 +707,50 @@ pub enum Capability {
     /// suffix ([`crate::command::GameCommand::RequestTitles`],
     /// [`crate::command::GameCommand::SetTitle`]).
     Titling,
+    /// Searching the Bazaar for traders' items, and asking how many traders
+    /// and items there are ([`crate::command::GameCommand::BazaarSearch`],
+    /// [`crate::command::GameCommand::BazaarWelcome`]). No money moves.
+    BazaarSearching,
+    /// Browsing a trader's wares in the Bazaar, read only
+    /// ([`crate::command::GameCommand::BrowseTrader`],
+    /// [`crate::command::GameCommand::EndBrowse`]). No money moves.
+    BazaarBrowsing,
+    /// Saving and clearing bandolier sets
+    /// ([`crate::command::GameCommand::SaveBandolier`],
+    /// [`crate::command::GameCommand::ClearBandolier`]). No swap.
+    Bandoliers,
+    /// Swapping to a bandolier set
+    /// ([`crate::command::GameCommand::SwapBandolier`]), on the player's own
+    /// click or key only.
+    BandolierSwap,
+    /// Using the item a potion belt slot names
+    /// ([`crate::command::GameCommand::UseBeltItem`]).
+    UsingPotionBelt,
+    /// Setting and clearing the potion belt's slots
+    /// ([`crate::command::GameCommand::SetPotionBelt`],
+    /// [`crate::command::GameCommand::ClearPotionBelt`]). No use from it.
+    PotionBelt,
+    /// Taking offered tasks, cancelling journal entries, a finished task's
+    /// steps and `/tasktimers` ([`crate::tasks::offers`]).
+    Tasks,
+    /// Training, activating and setting the experience split of the
+    /// player's AAs ([`crate::command::GameCommand::TrainAlternateAdvancement`],
+    /// [`crate::command::GameCommand::ActivateAlternateAdvancement`],
+    /// [`crate::command::GameCommand::SetAlternateAdvancementSplit`]).
+    AlternateAdvancement,
+    /// Asking when a discipline may next be used
+    /// ([`crate::command::GameCommand::AskDisciplineReuse`]): `EQMac`'s
+    /// bare `/disc`.
+    DisciplineReuse,
+    /// Titanium's `/sheathe` and `/aggressive`
+    /// ([`crate::command::GameCommand::ToggleStance`]).
+    WeaponStances,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 80] = [
+    pub const ALL: [Self; 90] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -783,6 +831,16 @@ impl Capability {
         Self::LookingForGroup,
         Self::Shielding,
         Self::Titling,
+        Self::BazaarSearching,
+        Self::Tasks,
+        Self::AlternateAdvancement,
+        Self::BazaarBrowsing,
+        Self::Bandoliers,
+        Self::PotionBelt,
+        Self::BandolierSwap,
+        Self::UsingPotionBelt,
+        Self::DisciplineReuse,
+        Self::WeaponStances,
     ];
 }
 
@@ -838,6 +896,21 @@ pub enum WorldEvent {
         session_id: u64,
         /// Opaque revision to echo when reporting the sample.
         revision: u64,
+    },
+    /// The session sent a report of damage the world did to the player, as
+    /// the server type takes it. The Titanium program prints its own line
+    /// for each such report (read R49-3 e), so a front end can too.
+    HazardReported {
+        /// The admission that sent the report.
+        session_id: u64,
+        /// What did the damage.
+        hazard: crate::hazards::Hazard,
+        /// The amount reported.
+        amount: u32,
+        /// Whether the damage record followed the report (Titanium's falls,
+        /// drowning, lava and cold, R49-3a). `EQEmu` echoes the record to
+        /// its sender for every type but a fall.
+        record: bool,
     },
     /// P99 spell-table facts, delivered in world/zone receive order even
     /// before profile admission. Installed definitions and provider epochs
@@ -999,6 +1072,18 @@ pub enum WorldEvent {
     BookAction(crate::spells::BookActionStatus),
     /// Server-driven spell and casting state.
     Spell(crate::spells::SpellUpdate),
+    /// Whether the player holds a Feign Death standing, by Move While
+    /// Feigned (6.454): true once the press or a feign spell's landing
+    /// leaves them standing with the feign owed a stand, false once any
+    /// posture is sent or reported, or the player dies. A new zone admission
+    /// starts with none held, unreported. A jump then goes without its
+    /// crouch's posture reports, which would end the feign (6.599). True
+    /// means the feign was pressed or landed and is held standing, not that
+    /// the server's roll succeeded: the servers send nothing on success, so
+    /// after a failed feign it stays true until the next posture, and a
+    /// standing-still jump in that window skips its crouch's reports too
+    /// (recording checklist 6.599a).
+    FeignHeld(bool),
     /// Server-reported appearance posture.
     Posture {
         /// Entity whose stance changed.
@@ -1319,6 +1404,37 @@ pub enum WorldEvent {
     /// answer to [`crate::command::GameCommand::RequestTitles`]
     /// (`names::title_list`).
     TitleList(Vec<crate::names::TitleChoice>),
+    /// What the server says of the player's Bazaar search
+    /// ([`crate::command::GameCommand::BazaarSearch`],
+    /// [`crate::command::GameCommand::BazaarWelcome`]), of a browse of a
+    /// trader ([`crate::command::GameCommand::BrowseTrader`]), and of
+    /// other players' trader signs.
+    Bazaar(crate::bazaar::BazaarEvent),
+    /// The player's four bandolier sets, as the profile at admission keeps
+    /// them; each `None` where it is empty
+    /// ([`crate::bandolier::titanium_profile`]).
+    Bandoliers(Box<[Option<crate::bandolier::BandolierSet>; crate::bandolier::SETS]>),
+    /// The player's four potion belt slots, as the profile at admission
+    /// keeps them; each `None` where it is empty.
+    PotionBelt(Box<[Option<crate::bandolier::BeltItem>; crate::bandolier::BELT_SLOTS]>),
+    /// The profile's sets and belt could not be read at this admission:
+    /// they are unknown until the next, and the session changes neither.
+    BandoliersUnknown,
+    /// A bandolier set or potion belt change was not sent, and why.
+    BandolierRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A Bazaar search, welcome request, click on a trader or end of a
+    /// browse was not sent, and why.
+    BazaarRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
@@ -1411,6 +1527,32 @@ pub enum WorldEvent {
         mana: u32,
         /// Current endurance.
         endurance: u32,
+    },
+    /// A spawn's mana or endurance with its maximum, as `RoF2`'s pool
+    /// updates give it (6.538).
+    ResourcePool {
+        /// Zone-local entity identifier: the player, or another player the
+        /// player holds on an extended target, whose exact values the
+        /// server sends then.
+        spawn_id: u16,
+        /// Which pool.
+        pool: crate::rof2_pools::Pool,
+        /// The current value, as sent. It can stand above the maximum in
+        /// the instant a maximum drops, and a host must not assume
+        /// otherwise; the reader does not clamp it.
+        current: u32,
+        /// The maximum, as sent.
+        maximum: u32,
+    },
+    /// A spawn's mana or endurance as a percent, as `RoF2`'s group and raid
+    /// updates give it (6.538).
+    ResourcePercent {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// Which pool.
+        pool: crate::rof2_pools::Pool,
+        /// The server's own rounded 0..100 percentage, validated.
+        percent: u8,
     },
     /// Experience progress within this level, on the Titanium 0..330 scale.
     Experience(u32),
@@ -1603,13 +1745,98 @@ pub enum WorldEvent {
     },
     /// The server's answer to a poison put on ([`crate::poisons`]): where it
     /// sat and whether it took. The server's own inventory record removes
-    /// it.
+    /// it. The program says 0x3269 when it took, else 0x326a, in colour
+    /// 0x10e (read R49-1 d).
     PoisonAnswered(crate::poisons::PoisonAnswer),
+    /// A poison started going on (read R49-1): the player sits for it, and
+    /// its request goes out when the program's wait ends. The host says
+    /// `string_id` (0x305e).
+    PoisonStarted {
+        /// Admission from the request.
+        session_id: u64,
+        /// Where the poison sits.
+        slot: crate::inventory::InventorySlot,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
+    /// A poison waiting to go out was stopped by a posture change before
+    /// its request went (read R49-1 d); nothing was sent. The host says
+    /// `string_id` (0x30d1), in colour 0x111 (read R49-1f).
+    PoisonInterrupted {
+        /// Admission from the request.
+        session_id: u64,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// What the chat server told about its channels
     /// ([`crate::chat_server`]).
     Channel(crate::chat_server::ChannelEvent),
     /// The chat server link came up or ended.
     ChannelLink(crate::chat_server::ChannelLink),
+    /// A task journal entry's description, as stock `EQEmu` sends it as
+    /// the entry is taken, at each zone-in and after each step's end
+    /// (gap list section 5, recording checklist 6.546). Its steps follow
+    /// as [`WorldEvent::TaskStepUpdated`].
+    TaskDescribed {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The entry.
+        description: crate::tasks::TaskDescription,
+    },
+    /// One step of a journal entry the session holds, hidden or with its
+    /// objective and count.
+    TaskStepUpdated {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The step.
+        activity: crate::tasks::TaskActivity,
+    },
+    /// A step or a whole journal entry ended. `EQEmu` takes a whole
+    /// entry out with a [`WorldEvent::TaskRemoved`] right after.
+    TaskConcluded {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// How and where.
+        completion: crate::tasks::TaskCompletion,
+    },
+    /// The server took a journal entry out.
+    TaskRemoved {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The emptied slot.
+        at: crate::tasks::TaskSlot,
+    },
+    /// The tasks the player has finished, the 50 most recent, replacing
+    /// any earlier list.
+    CompletedTasks {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The list, oldest first, as sent.
+        list: Vec<crate::tasks::CompletedTask>,
+    },
+    /// An NPC offers the player tasks, replacing any earlier offer. The
+    /// offer stands until the player takes one or declines, the next offer,
+    /// or the zone's end.
+    TasksOffered {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The offer, as sent.
+        offers: crate::tasks::offers::TaskOffers,
+    },
+    /// A finished task's done steps, as asked for.
+    TaskHistory {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The steps.
+        history: crate::tasks::offers::TaskHistory,
+    },
+    /// A task request was not sent, and why.
+    TaskRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A chat line was not sent, and is not kept for later: the session's
     /// pace for all chat held it (recording checklist 6.523).
     ChatRefused {
@@ -1632,8 +1859,9 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
         /// The official client's own words for this refusal, as an
-        /// `eqstr_us.txt` string ID; none yet (pending read R49-1, recording
-        /// checklist 6.493).
+        /// `eqstr_us.txt` string ID (read R49-1 b): 0x305f without the
+        /// Apply Poison skill, 0x305d when the player is still not sitting.
+        /// None where the refusal is this library's own.
         string_id: Option<u32>,
     },
     /// The player used an ability; its timer runs this long before the
@@ -1887,6 +2115,9 @@ pub enum WorldEvent {
     Duel(crate::socials::DuelUpdate),
     /// A challenge to a duel the player may accept or decline, once.
     DuelOffer(crate::socials::DuelQuestion),
+    /// What a Titanium duel means to the player, as the official program
+    /// words it (R49-6 a, e, h); the session tells it.
+    DuelNews(crate::socials::DuelNews),
     /// An answer to a duel was not sent, and why.
     DuelRefused {
         /// The offer the command named.
@@ -1899,6 +2130,11 @@ pub enum WorldEvent {
     /// News of the player's guild ([`crate::guild`]). The session keeps no
     /// roster.
     Guild(crate::guild::GuildUpdate),
+    /// News of the guild bank ([`crate::guild_bank`]): a slot seen or
+    /// emptied, an answer to a request, or the player's banker flag. A
+    /// host's view is the slots seen since it entered the guild hall, never
+    /// complete. Nothing in the session acts on it.
+    GuildBank(crate::guild_bank::GuildBankUpdate),
     /// What a game master or the world tells the zone of a player: a kick,
     /// a kill, or the player made to look like an NPC; or, to a game
     /// master, a petition in the queue ([`crate::gm`]). Nothing acts on
@@ -1939,6 +2175,16 @@ pub enum WorldEvent {
         report: crate::reports::ReportKind,
         /// Why not.
         reason: String,
+    },
+    /// An AA train, activation or split was not sent, and why.
+    AlternateAdvancementRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not, in this library's words.
+        reason: String,
+        /// Why not, for a host to word; None where the session refused it
+        /// as it refuses any command (an earlier admission, not offered).
+        refusal: Option<crate::alternate_advancement::Refusal>,
     },
     /// A roll, emote, assist or surname was not sent, and why.
     SocialRefused {
@@ -2030,10 +2276,10 @@ pub enum WorldEvent {
         /// New server skill value.
         value: u32,
     },
-    /// A quest's word on the player's base stats: each stat's new value or
-    /// its rise, which the record does not tell apart ([`crate::stats`]);
-    /// the next profile has them as the server keeps them.
-    StatsChanged(crate::stats::StatChange),
+    /// A word on a spawn's base stat, as the Titanium program reads it
+    /// ([`crate::stats`], read R49-6f). `EQEmu`'s own 141-byte form is
+    /// unreadable here, as it is to the program, and counted as a gap.
+    StatsChanged(crate::stats::StatIncrease),
     /// A skill's button is ready again, by the servers' number for the
     /// skill: `EQMac`'s servers' word, before the official client's own
     /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
@@ -2137,6 +2383,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         ),
         practice_points: Some(word(profile, 2224)),
         languages: Some(profile[TITANIUM_LANGUAGES].to_vec()),
+        intoxication: Some(word(profile, 128)),
         disciplines: Some(crate::disciplines::titanium_list(
             &profile[TITANIUM_DISCIPLINES],
         )?),
@@ -2356,7 +2603,7 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::stats::INCREASE_STATS_OPCODE => {
             return Ok(Some(WorldEvent::StatsChanged(
-                crate::stats::titanium_change(body)?,
+                crate::stats::titanium_increase(body)?,
             )));
         }
         crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
@@ -2422,6 +2669,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(event)
         } else if let Some(update) = crate::guild::titanium(opcode, body)? {
             Some(WorldEvent::Guild(update))
+        } else if let Some(update) = crate::guild_bank::titanium(opcode, body)? {
+            Some(WorldEvent::GuildBank(update))
         } else if let Some(notice) = crate::gm::titanium(opcode, body)? {
             Some(WorldEvent::Gm(notice))
         } else if let Some(update) = crate::raid::decode(opcode, body)? {
@@ -2668,6 +2917,16 @@ mod tests {
             Capability::LookingForGroup => 77,
             Capability::Shielding => 78,
             Capability::Titling => 79,
+            Capability::BazaarSearching => 80,
+            Capability::Tasks => 81,
+            Capability::AlternateAdvancement => 82,
+            Capability::BazaarBrowsing => 83,
+            Capability::Bandoliers => 84,
+            Capability::PotionBelt => 85,
+            Capability::BandolierSwap => 86,
+            Capability::UsingPotionBelt => 87,
+            Capability::DisciplineReuse => 88,
+            Capability::WeaponStances => 89,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -3300,17 +3559,20 @@ mod tests {
     }
 
     #[test]
-    fn a_quests_word_on_the_players_stats_is_read() {
-        let mut body = vec![0; 141];
-        body[1] = 5;
+    fn a_stat_increase_is_read_as_the_program_reads_it_and_eqemus_form_is_not() {
+        let body: Vec<u8> = [7u32, 1, 5]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
         assert_eq!(
             titanium_update(0x5b7b, &body).unwrap(),
-            Some(WorldEvent::StatsChanged(crate::stats::StatChange {
-                strength: 5,
-                ..crate::stats::StatChange::default()
+            Some(WorldEvent::StatsChanged(crate::stats::StatIncrease {
+                spawn_id: 7,
+                stat: 1,
+                amount: 5,
             }))
         );
-        assert!(titanium_update(0x5b7b, &body[..140]).is_err());
+        assert!(titanium_update(0x5b7b, &[0; 141]).is_err());
     }
 
     #[test]

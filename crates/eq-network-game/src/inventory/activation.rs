@@ -1,5 +1,8 @@
 //! Click-cast metadata from Titanium's serialized item definition.
-use crate::{command::EncodedCommand, spells::ITEM_CAST_SLOT};
+use crate::{
+    command::EncodedCommand,
+    spells::{BELT_CAST_SLOT, ITEM_CAST_SLOT},
+};
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::time::Instant;
@@ -22,6 +25,13 @@ pub struct ItemUse {
     pub target_id: u16,
     /// Local creation time; stalls and reconnects do not replay requests.
     pub created: Instant,
+    /// The host's word, from its installed spell data, on whether the
+    /// item's spell is the player's class's (spells fields 104-119 below
+    /// 255 for that class); `None` without an installed record. It only
+    /// chooses, for a song the session is already keeping from this click,
+    /// between sending the stop and ending it here; it never starts a song,
+    /// names a spell, or sends a stop with no song (6.542).
+    pub installed_class_spell: Option<bool>,
 }
 
 /// Effect activation category; unknown values retain their original byte.
@@ -187,7 +197,7 @@ impl super::Inventory {
         target_id: u16,
     ) -> Result<[u8; 20]> {
         let spell_id = self.check_item_cast(revision, slot, level, target_id)?;
-        titanium_item_cast_body(spell_id, slot, target_id)
+        titanium_item_cast_body(ITEM_CAST_SLOT, spell_id, slot, target_id)
     }
 
     /// Checks casting an item's click effect from the current instance, and
@@ -257,15 +267,17 @@ impl super::Inventory {
 }
 
 /// The body of Titanium's `OP_CastSpell` for an item's click effect: the
-/// item-click gem (10), the spell, the item's slot and the target.
+/// casting slot (10 for a click, 11 from the potion belt), the spell, the
+/// item's slot and the target.
 fn titanium_item_cast_body(
+    cast_slot: u16,
     spell_id: u32,
     slot: super::InventorySlot,
     target_id: u16,
 ) -> Result<[u8; 20]> {
     let mut body = [0; 20];
     for (bytes, value) in body.as_chunks_mut::<4>().0.iter_mut().zip([
-        u32::from(ITEM_CAST_SLOT),
+        u32::from(cast_slot),
         spell_id,
         u32::try_from(slot.0)?,
         u32::from(target_id),
@@ -287,7 +299,23 @@ pub fn titanium_item_cast(
 ) -> Result<EncodedCommand> {
     Ok(EncodedCommand {
         opcode: CAST_OPCODE,
-        body: titanium_item_cast_body(spell_id, slot, target_id)?.to_vec(),
+        body: titanium_item_cast_body(ITEM_CAST_SLOT, spell_id, slot, target_id)?.to_vec(),
+    })
+}
+
+/// Titanium's `OP_CastSpell` casting the click effect of an item used from
+/// the potion belt (casting slot 11), already checked as an item click is.
+///
+/// # Errors
+/// Rejects a slot the packet cannot carry.
+pub fn titanium_belt_cast(
+    spell_id: u32,
+    slot: super::InventorySlot,
+    target_id: u16,
+) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: CAST_OPCODE,
+        body: titanium_item_cast_body(BELT_CAST_SLOT, spell_id, slot, target_id)?.to_vec(),
     })
 }
 
@@ -332,5 +360,25 @@ mod tests {
         fields[134] = "73";
         assert!(ItemActivation::decode(&fields[..134], "0").is_err());
         assert!(ItemActivation::decode(&fields, "-1").is_err());
+    }
+
+    #[test]
+    fn a_belt_cast_names_slot_11_and_the_chosen_inventory_slot() {
+        // `OP_CastSpell`: slot, spell, inventory slot, target, then 0
+        // (6.568; slot 11 inferred until read R49-45 c).
+        let packet = titanium_belt_cast(1234, super::super::InventorySlot(23), 7).unwrap();
+        assert_eq!(packet.opcode, CAST_OPCODE);
+        let words: Vec<u32> = packet
+            .body
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
+            .collect();
+        assert_eq!(words, [11, 1234, 23, 7, 0]);
+        let click = titanium_item_cast(1234, super::super::InventorySlot(23), 7).unwrap();
+        assert_eq!(click.body[4..], packet.body[4..]);
+        assert_eq!(click.body[..4], 10u32.to_le_bytes());
+        assert!(titanium_belt_cast(1, super::super::InventorySlot(-1), 0).is_err());
     }
 }

@@ -155,7 +155,22 @@ impl Transfer {
 /// empty, as `EQEmu` leaves it.
 #[must_use]
 pub fn titanium_profile_name(profile: &[u8]) -> Option<String> {
-    let name = until_nul(profile.get(PROFILE_NAME)?);
+    profile_name(profile, PROFILE_NAME)
+}
+
+/// Where the `EQMac` profile names the boat the player rode (`boat`, 32
+/// bytes at +3256): TAKP and Quarm save it on `OP_BoardBoat` and clear it on
+/// `OP_LeaveBoat` and in a zone with no boats (6.602).
+pub const EQMAC_PROFILE_NAME: std::ops::Range<usize> = 3256..3256 + 32;
+
+/// The boat the `EQMac` profile names, if any.
+#[must_use]
+pub fn eqmac_profile_name(profile: &[u8]) -> Option<String> {
+    profile_name(profile, EQMAC_PROFILE_NAME)
+}
+
+fn profile_name(profile: &[u8], at: std::ops::Range<usize>) -> Option<String> {
+    let name = until_nul(profile.get(at)?);
     (!name.is_empty()).then(|| String::from_utf8_lossy(name).into_owned())
 }
 

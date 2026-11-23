@@ -59,6 +59,14 @@ pub struct WorldRules {
     pub pvp: u32,
     /// Whether the player may trade no-drop items.
     pub no_drop_trades: bool,
+    /// Titanium: whether the program garbles a heard tongue a second time
+    /// by the listener's own skill, from the log-server word at 16. Read
+    /// R49-4c: 0x4b631b copies it, and the listener stage (0x478f73) runs
+    /// only while it is nonzero. `EQEmu` (1d9cb5c, `world/client.cpp`
+    /// `SendLogServer`) never sets the word (`unknown016`), so the stage is
+    /// off there. The `EQMac` copy's word at 16 is [`Self::gibberish`],
+    /// which TAKP's program uses the same way (read R49-4m).
+    pub listener_garble: Option<bool>,
     /// Titanium: whether the petition window is open to players.
     pub petition_window: Option<bool>,
     /// Titanium: whether voice macros are enabled.
@@ -74,7 +82,9 @@ pub struct WorldRules {
     /// `EQMac`: whether character creation offers its name generator.
     pub name_generator: Option<bool>,
     /// `EQMac`: the flag TAKP's struct names `Gibberish`, which TAKP and
-    /// Quarm set.
+    /// Quarm set. TAKP's program reads it as Titanium's
+    /// [`Self::listener_garble`] (read R49-4m: 0x4eb336 copies it, and only
+    /// the listener garble 0x5063a9 reads it).
     pub gibberish: Option<bool>,
     /// `EQMac`: whether the world is a test server.
     pub test_server: Option<bool>,
@@ -87,8 +97,9 @@ pub struct WorldRules {
 /// Reads Titanium's log-server settings (`EQEmu`'s `LogServer_Struct`, 264
 /// bytes): the raw language-zero name selector at 0, then the
 /// player-versus-player ruleset at 4 and no-drop trading at 8, one byte each,
-/// then one byte each from 260 for the petition window, voice macros, mail
-/// and the tutorial's way home turned off. The world's short name at 32 is
+/// the listener garble's switch, a word at 16, then one byte each from 260
+/// for the petition window, voice macros, mail and the tutorial's way home
+/// turned off. The world's short name at 32 is
 /// [`crate::world::titanium_world_name`]'s.
 ///
 /// # Errors
@@ -102,6 +113,7 @@ pub fn titanium_rules(body: &[u8]) -> Result<WorldRules> {
         language_zero_selector: Some(LanguageZeroSelector(word(body, 0))),
         pvp: u32::from(body[4]),
         no_drop_trades: body[8] != 0,
+        listener_garble: Some(word(body, 16) != 0),
         petition_window: Some(body[260] != 0),
         voice_macros: Some(body[261] != 0),
         mail: Some(body[262] != 0),
@@ -205,6 +217,7 @@ mod tests {
                 language_zero_selector: Some(LanguageZeroSelector(0)),
                 pvp: 2,
                 no_drop_trades: true,
+                listener_garble: Some(false),
                 petition_window: Some(true),
                 voice_macros: Some(false),
                 mail: Some(true),
@@ -212,6 +225,9 @@ mod tests {
                 ..WorldRules::default()
             }
         );
+        // Any bit of the word at 16 turns the listener stage on.
+        body[18] = 1;
+        assert_eq!(titanium_rules(&body).unwrap().listener_garble, Some(true));
         body[263] = 1;
         assert_eq!(
             titanium_rules(&body).unwrap().tutorial_way_home,
