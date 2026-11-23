@@ -694,6 +694,18 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Challenge another player to a duel: Titanium's `/duel` at the
+    /// player's target (checklist 6.492b; what the program checks and
+    /// prints is pending R49-6h). The session sends it only at a player
+    /// spawn in the zone other than the player, one challenge at a time.
+    ChallengeDuel {
+        /// Current zone admission.
+        session_id: u64,
+        /// The player challenged.
+        target: u16,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Choose a button on the exact popup that was displayed.
     RespondToPopup {
         /// Current zone admission.
@@ -1167,6 +1179,7 @@ impl GameCommand {
             Self::AnswerSacrifice { .. } => "AnswerSacrifice",
             Self::AnswerTranslocate { .. } => "AnswerTranslocate",
             Self::AnswerDuel { .. } => "AnswerDuel",
+            Self::ChallengeDuel { .. } => "ChallengeDuel",
             Self::RespondToPopup { .. } => "RespondToPopup",
             Self::InspectPlayer { .. } => "InspectPlayer",
             Self::SetInspectNote { .. } => "SetInspectNote",
@@ -1294,6 +1307,7 @@ impl GameCommand {
             | Self::StopSong { session_id, .. }
             | Self::StopCasting { session_id, .. }
             | Self::YellForHelp { session_id, .. }
+            | Self::ChallengeDuel { session_id, .. }
             | Self::EmoteAnimation { session_id, .. }
             | Self::SocialEmote { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
@@ -1444,7 +1458,7 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
-            Self::AnswerDuel { .. } => Capability::Dueling,
+            Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
             Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
                 Capability::PlayerInspection
@@ -1578,6 +1592,7 @@ impl GameCommand {
             | Self::StopSong { created, .. }
             | Self::StopCasting { created, .. }
             | Self::YellForHelp { created, .. }
+            | Self::ChallengeDuel { created, .. }
             | Self::EmoteAnimation { created, .. }
             | Self::SetPosture { created, .. }
             | Self::FeignLanded { created, .. }
@@ -1814,6 +1829,7 @@ pub fn encode(
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
         | GameCommand::AnswerDuel { .. }
+        | GameCommand::ChallengeDuel { .. }
         | GameCommand::RespondToPopup { .. }
         | GameCommand::InspectPlayer { .. }
         | GameCommand::SetInspectNote { .. }
