@@ -1412,9 +1412,12 @@ session does not work speeds out itself); a frontend launches its jumps at it,
 and the session's guard bounds an announced jump's rise by the factor the jump
 started with. `MotionState.strafe_walk_units_per_second`, where present, is
 the strafe rate with walking selected: Titanium strafes on the selected base
-speed, so `strafe_units_per_second` is then the running rate, which bounds a
-`MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
-the walking rate. A ducking player's grant already carries the ducked rates
+speed, so `strafe_units_per_second` is then the running rate. A frontend
+names the pace selected in `MovementMode::Strafe(Pace)`: the guard bounds a
+`Strafe(Pace::Walk)` sample by the walking rate where the grant has one, and by
+the one strafe rate where it has none (`EQMac`), and a `Strafe(Pace::Run)`
+sample by the running rate (checklist 6.540). The pace changes nothing on the
+wire. **Breaking (6.540):** `MovementMode::Strafe` became `Strafe(Pace)`. A ducking player's grant already carries the ducked rates
 where the generation moves them ducked (see below), so a frontend halves
 nothing for ducking. On Titanium a ducking or sneaking player strafes on the
 selected base halved, both rates given as standing, and a grounded diagonal's
