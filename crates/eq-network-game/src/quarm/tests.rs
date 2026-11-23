@@ -722,6 +722,7 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
                 Some(_)
             )),
             Message::AlternateAdvancement(crate::alternate_advancement::Update::MacPoints(Some(_))),
+            Message::VehicleName(None),
         ] if *zone_id == bind.zone_id
             && buffs.iter().all(Option::is_none)
             && book.slots().iter().all(Option::is_none)
@@ -733,6 +734,17 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
         profile(&wire, "Example").unwrap().spell_refresh_ms,
         Some([0; 8])
     );
+    // An unpacked profile naming the boat the player rode (`boat`, +3256).
+    let mut aboard = vec![0; PROFILE_SIZE];
+    assert_eq!(crate::boats::riders::eqmac_profile_name(&aboard), None);
+    aboard[3256..3256 + 14].copy_from_slice(b"Maidens_Voyage");
+    aboard[3256 + 14..3256 + 32].fill(b'x');
+    aboard[3256 + 14] = 0;
+    assert_eq!(
+        crate::boats::riders::eqmac_profile_name(&aboard).as_deref(),
+        Some("Maidens_Voyage")
+    );
+    assert_eq!(profile_vehicle(&[0; 7]), None);
 }
 
 #[test]
