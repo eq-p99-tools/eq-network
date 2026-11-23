@@ -165,26 +165,6 @@ always in the common tongue.
 The pure `encode` helper does not own a session and cannot perform this guard;
 hosts using it directly must validate their own admission first.
 
-<<<<<<< HEAD
-## Door clicks and the clicked point
-
-`GameCommand::ClickDoor` carries `point: Option<Position>`: where the host's own
-click ray hit the door's model as drawn, in server axes. A host must send a point
-only from its own ray hit on the door it names, never a made-up one. On Titanium
-(and RoF2, inferred, 6.489) the session admits the click when the 3-D distance from
-that point to the player is no more than the player's size and 20, the program's
-rule (0x49812e, 0x4906c5, 0x435b55, 0x644368; read R16b, R16e; checklist 6.530).
-The size is the player's own spawn's size as the server told it, kept through size
-appearances and illusions; where that is 0 or not yet heard, `EQEmu`'s size for
-the race (inferred for the program's model default), and 0 for an unlisted race.
-Past the limit it answers `DoorAction` with string 1462, as before.
-
-A point that is not finite, or lies more than 200 and the player's size from the
-door's origin where it stands now, is refused in our own words with no string
-(our guard, not the program's). With no point (a key, a script) the reach is
-today's: 3-D to the door's origin where it stands now, within 20, which is
-stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule.
-=======
 ## Chat pacing
 
 One pace holds all the chat a host asks for: `SendChat` and `SendChatInAdmission`
@@ -205,7 +185,25 @@ Zone chat is told by `WorldEvent::ChatRefused { session_id, reason }`, a channel
 command by `ChatChannelRefused`; the reason says how many whole seconds to wait (never
 0) and never repeats the line. Only what a host asked for is counted: the chat link's
 own login and the local fixture's depop are not.
->>>>>>> origin/main
+
+## Door clicks and the clicked point
+
+`GameCommand::ClickDoor` carries `point: Option<Position>`: where the host's own
+click ray hit the door's model as drawn, in server axes. A host must send a point
+only from its own ray hit on the door it names, never a made-up one. On Titanium
+(and RoF2, inferred, 6.489) the session admits the click when the 3-D distance from
+that point to the player is no more than the player's size and 20, the program's
+rule (0x49812e, 0x4906c5, 0x435b55, 0x644368; read R16b, R16e; checklist 6.530).
+The size is the player's own spawn's size as the server told it, kept through size
+appearances and illusions; where that is 0 or not yet heard, `EQEmu`'s size for
+the race (inferred for the program's model default), and 0 for an unlisted race.
+Past the limit it answers `DoorAction` with string 1462, as before.
+
+A point that is not finite, or lies more than 200 and the player's size from the
+door's origin where it stands now, is refused in our own words with no string
+(our guard, not the program's). With no point (a key, a script) the reach is
+today's: 3-D to the door's origin where it stands now, within 20, which is
+stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule.
 
 ## Titanium lifts and door mechanisms
 
