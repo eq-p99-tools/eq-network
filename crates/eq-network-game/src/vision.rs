@@ -15,13 +15,15 @@ pub enum Invisibility {
 }
 
 impl Invisibility {
-    /// The parameter as `dialect` reads it, or `None` for a generation whose
-    /// parameter is not built yet.
-    pub(crate) const fn from_wire(dialect: GameDialect, value: u32) -> Option<Self> {
+    /// The parameter as `dialect` reads it. `RoF2` reads as Titanium's,
+    /// inferred (6.518): stock `EQEmu` sends both the same values
+    /// (`Mob::SetInvisible` through `Mob::SendAppearancePacket`, which
+    /// `ENCODE(OP_SpawnAppearance)` passes through), and only the Titanium
+    /// program's reading of them is known.
+    pub(crate) const fn from_wire(dialect: GameDialect, value: u32) -> Self {
         match dialect {
-            GameDialect::Titanium => Some(Self::Titanium(value)),
-            GameDialect::EqMac => Some(Self::EqMac(value)),
-            GameDialect::Rof2 => None,
+            GameDialect::Titanium | GameDialect::Rof2 => Self::Titanium(value),
+            GameDialect::EqMac => Self::EqMac(value),
         }
     }
 

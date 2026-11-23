@@ -282,8 +282,9 @@ pub struct WearChange {
     pub tint: Option<[u8; 3]>,
 }
 
-/// Both generations' tint record: blue, green, red, and a flag set when used.
-fn tint(bytes: &[u8]) -> Option<[u8; 3]> {
+/// Every generation's tint record: blue, green, red, and a flag set when
+/// used.
+pub(crate) fn tint(bytes: &[u8]) -> Option<[u8; 3]> {
     (bytes[3] != 0).then_some([bytes[2], bytes[1], bytes[0]])
 }
 
@@ -640,7 +641,9 @@ pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
     spawn_update(body, crate::GameDialect::EqMac)
 }
 
-fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<WorldEvent>> {
+/// Decodes `OP_SpawnAppearance` as `dialect`'s program reads it; see
+/// [`update`].
+pub(crate) fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<WorldEvent>> {
     ensure!(body.len() == 8, "invalid appearance length");
     let spawn_id = u16::from_le_bytes([body[0], body[1]]);
     let kind = u16::from_le_bytes([body[2], body[3]]);
@@ -654,18 +657,19 @@ fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<World
         );
         return Ok(None);
     }
-    // Only Titanium's program reads type 20 as the GM flag.
+    // Only Titanium's program reads type 20 as the GM flag. The listing
+    // claims kind 20 first for every generation, so `RoF2` taking false
+    // changes nothing; what its program does with the kind is not read
+    // (6.518).
     let gm_flag = match dialect {
         crate::GameDialect::Titanium => true,
-        crate::GameDialect::EqMac => false,
-        crate::GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
     };
     Ok(Some(match (kind, listing) {
         (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
         (INVISIBILITY, None) => WorldEvent::Visibility {
             spawn_id,
-            state: crate::vision::Invisibility::from_wire(dialect, value)
-                .context("not built for RoF2 yet")?,
+            state: crate::vision::Invisibility::from_wire(dialect, value),
         },
         (POSTURE, None) => WorldEvent::Posture {
             spawn_id,
@@ -820,6 +824,22 @@ pub(crate) fn eqmac_face_change(body: &[u8]) -> Result<WorldEvent> {
 /// # Errors
 /// Rejects a wrong length and a spawn ID that is zero or past 16 bits.
 pub(crate) fn titanium_states(opcode: u16, body: &[u8]) -> Result<WorldEvent> {
+    states(opcode, [STATES_ADDED_OPCODE, STATES_REMOVED_OPCODE], body)
+}
+
+/// Decodes a `PlayerState_Struct`, the same 8 bytes on every generation
+/// that has it: the spawn in 32 bits, then the states. `opcodes` is the
+/// generation's pair, added then removed, and `opcode` says which one came.
+///
+/// # Errors
+/// Rejects an opcode outside the pair, a wrong length and a spawn ID that
+/// is zero or past 16 bits.
+pub(crate) fn states(opcode: u16, opcodes: [u16; 2], body: &[u8]) -> Result<WorldEvent> {
+    let [added, removed] = opcodes;
+    ensure!(
+        opcode == added || opcode == removed,
+        "invalid player state opcode"
+    );
     ensure!(body.len() == 8, "invalid player state length");
     let spawn_id = u16::try_from(u32::from_le_bytes([body[0], body[1], body[2], body[3]]))
         .context("player state spawn ID out of range")?;
@@ -827,7 +847,7 @@ pub(crate) fn titanium_states(opcode: u16, body: &[u8]) -> Result<WorldEvent> {
     let states = SpawnStates(u32::from_le_bytes([body[4], body[5], body[6], body[7]]));
     Ok(WorldEvent::Appearance {
         spawn_id,
-        change: if opcode == STATES_ADDED_OPCODE {
+        change: if opcode == added {
             AppearanceChange::StatesAdded(states)
         } else {
             AppearanceChange::StatesRemoved(states)
