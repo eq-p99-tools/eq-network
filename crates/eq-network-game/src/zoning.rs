@@ -22,6 +22,9 @@ pub const HANDOFF_OPCODE: u16 = 0x61b6;
 /// `OP_SaveOnZoneReq`: the client asking the zone it is leaving to save the
 /// player (`EQEmu` `utils/patches/patch_Titanium.conf`).
 pub const SAVE_ON_ZONE_OPCODE: u16 = 0x1540;
+/// `OP_Save`: the client asking the zone to save the player on an event
+/// (0x4a1350; read R49-22g), with the event's reason at +4.
+pub const EVENT_SAVE_OPCODE: u16 = 0x736b;
 /// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
 /// leaving; the server's copy tells the zone a spawn left.
 pub const DEPART_OPCODE: u16 = 0x55bc;
@@ -125,6 +128,24 @@ const SAVE_HEADING: usize = 0x11;
 const SAVE_VEHICLE: usize = 0x6d;
 /// How many bytes from +0x05 the save's checksum covers.
 const SAVE_CHECKED: usize = 0xb8;
+/// The byte 0x4a1350 stores its event's reason in; 0x4976bf leaves it 0
+/// (read R49-22g §5).
+const SAVE_REASON: usize = 0x04;
+
+/// The event reasons 0x4a1350 stores at +4, for the events this session
+/// saves on (read R49-22g §1; checklist 6.615).
+pub mod save_reason {
+    /// `/roleplay` (0x46a3fa).
+    pub const ROLEPLAY: u8 = 0x0a;
+    /// `/anonymous` (0x4726f1).
+    pub const ANONYMOUS: u8 = 0x0b;
+    /// The merchant window's close (0x537149); which window it is, is
+    /// inferred.
+    pub const MERCHANT_CLOSED: u8 = 0x14;
+    /// The server's `OP_LootComplete` (0xa94) or `OP_EndLootRequest`
+    /// (0x2316), whose handler saves (0x52b05d).
+    pub const LOOT_ENDED: u8 = 0x15;
+}
 
 /// Titanium's checksum 0x4b6c04 (read R36c): the reflected CRC-32 table
 /// (0xEDB88320) from a seed of all ones, with no final inversion, which is
@@ -169,7 +190,23 @@ pub fn save_checksum(bytes: &[u8]) -> u32 {
 /// reads is unrecorded (6.145).
 #[must_use]
 pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
+    titanium_save(save, SAVE_ON_ZONE_OPCODE, 0)
+}
+
+/// Titanium's event save (`OP_Save`, 0xc0 bytes), as 0x4a1350 builds it
+/// (read R49-22g §5): the same layout as [`titanium_save_on_zone`]'s, with
+/// the event's `reason` ([`save_reason`]) at +4. The place is the player's
+/// own at the moment of the save, which 0x4a1350 copies from the spawn
+/// first (R49-22h §4), in the same axis order.
+#[must_use]
+pub fn titanium_event_save(save: &Save, reason: u8) -> EncodedCommand {
+    titanium_save(save, EVENT_SAVE_OPCODE, reason)
+}
+
+/// Both saves' body: one encoder (6.615 P4).
+fn titanium_save(save: &Save, opcode: u16, reason: u8) -> EncodedCommand {
     let mut body = vec![0; 192];
+    body[SAVE_REASON] = reason;
     if let Some(position) = save.position {
         // The zone request's order: y, then x, then z.
         for (index, value) in [position.y, position.x, position.z].into_iter().enumerate() {
@@ -188,10 +225,7 @@ pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
     }
     let checksum = save_checksum(&body[SAVE_POSITION..SAVE_POSITION + SAVE_CHECKED]);
     body[..4].copy_from_slice(&checksum.to_le_bytes());
-    EncodedCommand {
-        opcode: SAVE_ON_ZONE_OPCODE,
-        body,
-    }
+    EncodedCommand { opcode, body }
 }
 
 /// The save's heading: the whole number cut toward zero, as the recorded
@@ -793,6 +827,36 @@ mod tests {
             vehicle: None,
         });
         assert_eq!(&save.body[17..21], &[0xff; 4]);
+    }
+
+    #[test]
+    fn an_event_save_is_the_zone_saves_body_with_its_reason() {
+        let save = Save {
+            position: Some(Position {
+                x: 10.0,
+                y: -20.5,
+                z: 3.25,
+                heading: 479.5,
+            }),
+            vehicle: Some("Boat".into()),
+        };
+        let zone = titanium_save_on_zone(&save);
+        for (reason, value) in [
+            (save_reason::ROLEPLAY, 0x0a),
+            (save_reason::ANONYMOUS, 0x0b),
+            (save_reason::MERCHANT_CLOSED, 0x14),
+            (save_reason::LOOT_ENDED, 0x15),
+        ] {
+            let event = titanium_event_save(&save, reason);
+            assert_eq!(event.opcode, 0x736b);
+            assert_eq!(event.body.len(), 0xc0);
+            assert_eq!(event.body[4], value);
+            // The checksum covers +5 on, so the reason leaves it as is.
+            let mut unreasoned = event.body.clone();
+            unreasoned[4] = 0;
+            assert_eq!(unreasoned, zone.body);
+        }
+        assert_eq!(zone.body[4], 0);
     }
 
     #[test]

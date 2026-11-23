@@ -556,6 +556,11 @@ impl OpenMerchant {
         Ok(())
     }
 
+    /// Whether any merchant's window is open.
+    pub(super) fn any_open(&self) -> bool {
+        self.0.is_some()
+    }
+
     /// Whether the command names the shop whose stock is in use.
     pub(super) fn is_open(&self, merchant_id: u16) -> bool {
         self.0

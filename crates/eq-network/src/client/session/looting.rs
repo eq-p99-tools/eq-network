@@ -10,6 +10,7 @@ use eq_network_game::{
     loot::{LootRequest, LootRequestStatus, LootResponse, LootUpdate},
     message::Message,
     world::{SpawnKind, WorldEvent},
+    zoning,
 };
 use std::{
     collections::BTreeSet,
@@ -352,6 +353,15 @@ impl Feature for Looting {
         if reset && self.corpse.take().is_some() {
             out.log
                 .send(ClientEvent::World(WorldEvent::Loot(LootUpdate::Closed)))?;
+        }
+        // The server's close of the loot the player had open: the Titanium
+        // program's handler saves (0x52b05d; read R49-22g, 6.615). A close
+        // with no loot open is withheld before this.
+        if matches!(
+            message,
+            Message::Event(WorldEvent::Loot(LootUpdate::Closed))
+        ) {
+            super::saves::event(world, zoning::save_reason::LOOT_ENDED, out)?;
         }
         Ok(())
     }
