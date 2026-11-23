@@ -5,6 +5,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A Titanium trap or door record (type 253, the new `TRAP_DAMAGE_KIND`)
+  keeps its spell field in `Damage::spell_id`, since the Titanium program
+  picks the line it prints for one by that field (0x4a56e3, read R49-3b).
+  Other kinds still drop it. A field of 0 or 0xFFFF reads as none.
 - Report drowning and lava on every Titanium server, as the Titanium
   program does (read R25: 0x41c905 sends its own damage reports on any
   server it plays on). **Characters on public EQEmu servers and on P99
