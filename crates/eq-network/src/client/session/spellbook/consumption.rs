@@ -97,7 +97,12 @@ impl ScribeConsumption {
     /// An uncertain scribe keeps its custody hold until received cursor evidence
     /// accounts for the scroll. An attributed removal needs an exact book
     /// confirmation and inventory revision. A queued refill may precede it.
-    pub fn reconcile(&mut self, inventory: &Inventory, update: InventoryUpdate) -> InventoryUpdate {
+    pub fn reconcile(
+        &mut self,
+        inventory: &Inventory,
+        update: InventoryUpdate,
+        now: std::time::Instant,
+    ) -> InventoryUpdate {
         let Some(mut receipt) = self.0.take() else {
             return update;
         };
@@ -144,14 +149,50 @@ impl ScribeConsumption {
                 }
                 _ => update,
             }
-        } else if receipt.timed_out && update == InventoryUpdate::Remove(cursor) {
-            // A late answer to a scribe whose custody was released: the
-            // server used up the scroll, but the player may have moved items
-            // since, so the model cannot say where it went.
-            InventoryUpdate::Invalidated
+        } else if receipt.timed_out {
+            self.late(receipt, update, now)
         } else {
             update
         }
+    }
+
+    /// A late answer to a scribe whose custody was released (recording
+    /// checklist 6.526): the server used up the scroll, but the player may
+    /// have moved items since, so the model cannot say where it went. The
+    /// server sends the confirmation and the cursor removal from one
+    /// handler, and answers what the player sent later only after both, so
+    /// the first update naming the cursor after the confirmation is the
+    /// scroll's. Updates that leave the cursor alone pass it by; anything
+    /// else that names the cursor, a snapshot, an invalidation or the end of
+    /// [`REMOVAL_WINDOW`] ends the receipt.
+    fn late(
+        &mut self,
+        receipt: Receipt,
+        update: InventoryUpdate,
+        now: std::time::Instant,
+    ) -> InventoryUpdate {
+        let cursor = InventorySlot(30);
+        let within = receipt
+            .confirmed
+            .is_some_and(|at| now.saturating_duration_since(at) < REMOVAL_WINDOW);
+        if !within {
+            return update;
+        }
+        if update == InventoryUpdate::Remove(cursor) {
+            return InventoryUpdate::Invalidated;
+        }
+        let leaves_cursor = match &update {
+            InventoryUpdate::Set(items) => items.iter().all(|item| item.slot != cursor),
+            InventoryUpdate::Remove(slot)
+            | InventoryUpdate::Consume { slot, .. }
+            | InventoryUpdate::Used(slot)
+            | InventoryUpdate::Deduct { slot, .. } => *slot != cursor,
+            _ => false,
+        };
+        if leaves_cursor {
+            self.0 = Some(receipt);
+        }
+        update
     }
 }
 
@@ -219,7 +260,11 @@ pub(super) mod tests {
         let mut host = worker.clone();
         let mut tracker = tracker(&worker);
         tracker.observe(&confirmation(), true);
-        let update = tracker.reconcile(&worker, InventoryUpdate::Remove(InventorySlot(30)));
+        let update = tracker.reconcile(
+            &worker,
+            InventoryUpdate::Remove(InventorySlot(30)),
+            std::time::Instant::now(),
+        );
         assert_eq!(
             update,
             InventoryUpdate::Consume {
@@ -234,7 +279,11 @@ pub(super) mod tests {
         assert!(!worker.stale());
         assert!(!worker.predicted()); // Only the consumed scroll's plain pickup is resolved.
         assert_eq!(
-            tracker.reconcile(&worker, InventoryUpdate::Remove(InventorySlot(30))),
+            tracker.reconcile(
+                &worker,
+                InventoryUpdate::Remove(InventorySlot(30)),
+                std::time::Instant::now()
+            ),
             InventoryUpdate::Remove(InventorySlot(30))
         );
     }
@@ -278,7 +327,10 @@ pub(super) mod tests {
                 5 => {
                     tracker.observe(&confirmation(), true);
                     let unrelated = InventoryUpdate::Remove(InventorySlot(29));
-                    assert_eq!(tracker.reconcile(&inventory, unrelated.clone()), unrelated);
+                    assert_eq!(
+                        tracker.reconcile(&inventory, unrelated.clone(), std::time::Instant::now()),
+                        unrelated
+                    );
                 }
                 6 => {
                     tracker.observe(&confirmation(), true);
@@ -291,11 +343,140 @@ pub(super) mod tests {
             }
             let removal = InventoryUpdate::Remove(InventorySlot(30));
             assert_eq!(
-                tracker.reconcile(&inventory, removal.clone()),
+                tracker.reconcile(&inventory, removal.clone(), std::time::Instant::now()),
                 removal,
                 "case {case}"
             );
         }
+    }
+
+    /// A scribe that timed out, after which the player put the scroll back
+    /// in the bag, and the server's late confirmation; with its instant.
+    fn late_answer() -> (Inventory, ScribeConsumption, std::time::Instant) {
+        let mut inventory = scroll_on_cursor();
+        let mut tracker = tracker(&inventory);
+        tracker.timed_out(2, 73);
+        let mut scroll = inventory.items()[&InventorySlot(30)].clone();
+        scroll.slot = InventorySlot(22);
+        inventory.apply(InventoryUpdate::Remove(InventorySlot(30)));
+        inventory.apply(InventoryUpdate::Set(vec![scroll]));
+        tracker.observe(&confirmation(), false);
+        let confirmed = tracker.0.as_ref().and_then(|receipt| receipt.confirmed);
+        (
+            inventory,
+            tracker,
+            confirmed.expect("the late answer confirms"),
+        )
+    }
+
+    #[test]
+    fn a_late_scribe_answer_passes_updates_that_leave_the_cursor_alone() {
+        let (mut inventory, mut tracker, at) = late_answer();
+        let now = at + std::time::Duration::from_secs(1);
+        let elsewhere = inventory.items()[&InventorySlot(22)].clone();
+        for unrelated in [
+            InventoryUpdate::Set(vec![elsewhere]),
+            InventoryUpdate::Remove(InventorySlot(29)),
+            InventoryUpdate::Consume {
+                slot: InventorySlot(23),
+                charge: true,
+            },
+            InventoryUpdate::Used(InventorySlot(24)),
+            InventoryUpdate::Deduct {
+                slot: InventorySlot(25),
+                quantity: 1,
+            },
+        ] {
+            assert_eq!(
+                tracker.reconcile(&inventory, unrelated.clone(), now),
+                unrelated
+            );
+            assert!(tracker.awaiting_cursor(now), "{unrelated:?}");
+        }
+        let removal = InventoryUpdate::Remove(InventorySlot(30));
+        let received = tracker.reconcile(&inventory, removal.clone(), now);
+        assert_eq!(received, InventoryUpdate::Invalidated);
+        // The receipt is spent: a second cursor removal is only a removal.
+        assert_eq!(tracker.reconcile(&inventory, removal.clone(), now), removal);
+        assert!(!tracker.awaiting_cursor(now));
+        // Nothing mid-zone refreshes it on either generation; the next
+        // zone-in's inventory does.
+        inventory.apply(received);
+        assert!(inventory.stale());
+        inventory.apply(InventoryUpdate::Snapshot(
+            inventory.items().values().cloned().collect(),
+        ));
+        assert!(!inventory.stale());
+    }
+
+    #[test]
+    fn anything_else_naming_the_cursor_or_resetting_the_model_ends_a_late_receipt() {
+        let (inventory, _, _) = late_answer();
+        let mut on_cursor = inventory.items()[&InventorySlot(22)].clone();
+        on_cursor.slot = InventorySlot(30);
+        for ending in [
+            InventoryUpdate::Snapshot(inventory.items().values().cloned().collect()),
+            InventoryUpdate::Invalidated,
+            InventoryUpdate::Set(vec![on_cursor.clone()]),
+            InventoryUpdate::Cursor(vec![on_cursor]),
+            InventoryUpdate::Consume {
+                slot: InventorySlot(30),
+                charge: false,
+            },
+            InventoryUpdate::Settled,
+        ] {
+            let (inventory, mut tracker, at) = late_answer();
+            assert_eq!(
+                tracker.reconcile(&inventory, ending.clone(), at),
+                ending,
+                "passed through unchanged"
+            );
+            let removal = InventoryUpdate::Remove(InventorySlot(30));
+            assert_eq!(
+                tracker.reconcile(&inventory, removal.clone(), at),
+                removal,
+                "{ending:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_late_receipt_ends_exactly_five_seconds_after_its_confirmation() {
+        let removal = InventoryUpdate::Remove(InventorySlot(30));
+        let unrelated = InventoryUpdate::Remove(InventorySlot(29));
+        let before = |at: std::time::Instant| {
+            (at + REMOVAL_WINDOW)
+                .checked_sub(std::time::Duration::from_nanos(1))
+                .unwrap()
+        };
+        // Just inside: kept across an unrelated update, and the removal
+        // that follows is the scroll's.
+        let (inventory, mut tracker, at) = late_answer();
+        assert_eq!(
+            tracker.reconcile(&inventory, unrelated.clone(), before(at)),
+            unrelated
+        );
+        assert!(tracker.awaiting_cursor(before(at)));
+        assert_eq!(
+            tracker.reconcile(&inventory, removal.clone(), before(at)),
+            InventoryUpdate::Invalidated
+        );
+        // At the instant: the receipt ends, and the hold with it.
+        let (inventory, mut tracker, at) = late_answer();
+        assert!(!tracker.awaiting_cursor(at + REMOVAL_WINDOW));
+        assert_eq!(
+            tracker.reconcile(&inventory, unrelated.clone(), at + REMOVAL_WINDOW),
+            unrelated
+        );
+        assert_eq!(
+            tracker.reconcile(&inventory, removal.clone(), before(at)),
+            removal
+        );
+        let (inventory, mut tracker, at) = late_answer();
+        assert_eq!(
+            tracker.reconcile(&inventory, removal.clone(), at + REMOVAL_WINDOW),
+            removal
+        );
     }
 
     #[test]
@@ -330,14 +511,14 @@ pub(super) mod tests {
             slot: cursor,
             charge: false,
         };
-        let received = tracker.reconcile(&inventory, decrement.clone());
+        let received = tracker.reconcile(&inventory, decrement.clone(), std::time::Instant::now());
         assert_eq!(received, decrement);
         inventory.apply(received);
         assert_eq!(inventory.items()[&cursor].stack_count, Some(1));
         assert!(tracker.unconfirmed());
 
         let removal = InventoryUpdate::Remove(cursor);
-        let received = tracker.reconcile(&inventory, removal.clone());
+        let received = tracker.reconcile(&inventory, removal.clone(), std::time::Instant::now());
         assert_eq!(received, removal);
         inventory.apply(received);
         assert!(!inventory.items().contains_key(&cursor));
@@ -358,7 +539,10 @@ pub(super) mod tests {
             let mut tracker = tracker(&inventory);
             tracker.observe(&confirmation(), true);
             let removal = InventoryUpdate::Remove(InventorySlot(30));
-            assert_eq!(tracker.reconcile(&inventory, removal.clone()), removal);
+            assert_eq!(
+                tracker.reconcile(&inventory, removal.clone(), std::time::Instant::now()),
+                removal
+            );
         }
     }
 }

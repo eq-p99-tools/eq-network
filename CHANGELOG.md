@@ -20,6 +20,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wraps alike, read 0. Coverage lists the six, with the Drakkin words as
   the illusion's and face change's part. An admitted RoF2 session hands
   the host each and still sends and offers nothing.
+- Keep a late scribe answer's hold until its cursor removal (6.526). A
+  scribe that timed out and then got its late book confirmation, after the
+  player moved the scroll, lost its receipt to any other inventory update,
+  so the cursor removal that followed applied as a plain removal. The
+  receipt now passes updates that leave the cursor alone, so that removal
+  still marks the inventory stale. Anything else naming the cursor, a
+  snapshot, an invalidation or 5 s since the confirmation ends it; a
+  cursor removal 5 s or more after the confirmation is now a plain removal.
+- Tell the player's bind zone (checklist 6.524). `world::titanium_bind_zone`
+  reads the primary bind's zone from Titanium's profile (`binds[5]` at byte
+  24, 20-byte records, as `EQEmu`'s `titanium_structs.h` lays them out), and
+  the `EQMac` profile's first bind, already read for the move home after
+  death, gives the same. Each says it as the new
+  `WorldEvent::BoundIn { zone_id }`, told once after the admission, after
+  the buffs and experience. A zone past 16 bits is unreadable and gives
+  none; the zone-in goes on. It needs no capability and sends nothing.
+  Stock `EQEmu` sends a Titanium client nothing when a bind lands
+  mid-session, so the zone is believed current only until the next zone-in
+  (inferred, pending R49-6m). `EQMac`'s move home is unchanged.
+  **Breaking:** a new variant on the exhaustive `WorldEvent`.
+
 - Read RoF2's chat and the server's own lines as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.521). `chat::parse_for` with
   `GameDialect::Rof2` now reads `OP_ChannelMessage` (0x2b2d) in its own

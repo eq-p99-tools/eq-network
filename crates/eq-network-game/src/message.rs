@@ -371,6 +371,10 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
             })
         },
     ));
+    messages.push(crate::world::titanium_bind_zone(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |zone_id| Message::Event(WorldEvent::BoundIn { zone_id }),
+    ));
     spells::SpellBook::titanium_profile(body).map_or_else(
         |error| unreadable(Part::Spells, &error),
         |book| Message::Event(WorldEvent::SpellBook(book)),
@@ -528,10 +532,17 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
         |error| unreadable(Part::World, &error),
         |value| Message::Event(WorldEvent::Nourishment(value)),
     ));
-    messages.push(
-        crate::quarm::bind_point(body)
-            .map_or_else(|error| unreadable(Part::World, &error), Message::Bind),
-    );
+    match crate::quarm::bind_point(body) {
+        // The move home after death takes the whole point; the client is
+        // told its zone, as Titanium's profile tells it (6.524).
+        Ok(bind) => messages.extend([
+            Message::Bind(bind),
+            Message::Event(WorldEvent::BoundIn {
+                zone_id: bind.zone_id,
+            }),
+        ]),
+        Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
     // The profile lists the player's group as each zone admits them.
     match crate::quarm::profile_group(body) {
         Ok(group) => {
@@ -649,6 +660,7 @@ mod tests {
                 Message::Event(WorldEvent::AutoSplit(true)),
                 Message::Event(WorldEvent::Nourishment(_)),
                 Message::Event(WorldEvent::CoinsElsewhere { .. }),
+                Message::Event(WorldEvent::BoundIn { zone_id: 0 }),
                 Message::Event(WorldEvent::SpellBook(book)),
             ] if book.slots()[0] == Some(73)
         ));
@@ -688,11 +700,24 @@ mod tests {
                     ..
                 },
                 Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Unreadable {
                     part: Part::Spells,
                     ..
                 }
             ]
         ));
+        // The primary bind's zone is the first word of `binds[5]` at 24;
+        // the second bind is not it (6.524).
+        let mut profile = vec![0; 19592];
+        profile[24..28].copy_from_slice(&29u32.to_le_bytes());
+        profile[44..48].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(crate::world::titanium_bind_zone(&profile).unwrap(), 29);
+        profile[24..28].copy_from_slice(&70_000u32.to_le_bytes());
+        assert!(crate::world::titanium_bind_zone(&profile).is_err());
+        assert!(crate::world::titanium_bind_zone(&profile[..24]).is_err());
     }
 
     #[test]
