@@ -20,6 +20,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     request alone clears no feign on EQEmu (1d9cb5c), Quarm (fc75fcf) or
     TAKP (44afcbf).
   - **Breaking:** `WorldEvent` gains `FeignHeld(bool)`.
+- Read TAKP's and Quarm's boat control (6.602), from their own
+  `Handle_OP_ControlBoat` (Quarm fc75fcf, TAKP 44afcbf). Neither server type
+  offers `BoatControl` or `BoatRiding` yet: both wait for the `EQMac`
+  program's steering and riding reads (rows 9a, 9b).
+  - New: `boats::{EQMAC_OPCODE, eqmac}`, `ControlBoat::eqmac`,
+    `boats::riders::{EQMAC_PROFILE_NAME, eqmac_profile_name}` and
+    `quarm::profile_vehicle`.
+  - The 4-byte control (16-bit boat, take or release, a byte only echoed)
+    and its echo are read; a refusal is the `IN_USE` line and no echo.
+  - The Mac profile's boat name (+3256) now arrives as `Message::VehicleName`
+    after the profile's other messages.
 
 - Offer `Tradeskills` and `WorldContainers` on Quarm and TAKP (6.598), from
   their own handlers (Quarm fc75fcf, TAKP 44afcbf).

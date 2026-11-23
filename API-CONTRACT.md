@@ -1618,6 +1618,27 @@ Quarm and TAKP offer `Tradeskills` and `WorldContainers` (6.598), from
 - **Lore.** A pickup the server refuses with a delete of its destination and
   the duplicate-lore line leaves the item in its place, on every server.
 
+TAKP's and Quarm's boat control is read but not offered (6.602), from the
+identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
+`Handle_OP_ControlBoat` at Quarm fc75fcf and TAKP 44afcbf.
+- **Control (0x2641).** 4 bytes: the boat's 16-bit spawn, 1 to take or 0 to
+  give up, and a byte the servers only echo (sent as zero, open row 6.602b).
+  A grant or a release is echoed; a take while another player steers is
+  refused with the `IN_USE` line and no echo, so the take's wait runs out and
+  the session gives it up. Leaving the boat, a zone offer and the player's
+  death each give control back.
+- **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
+  types until the `EQMac` program's steering (a position update under the
+  boat's spawn moves it on both servers) and its board, leave and arrival
+  wire are read (open rows 9a and 9b).
+- **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
+  `Message::VehicleName`, last among the profile's messages. Both servers
+  keep it across zones and clear it on `OP_LeaveBoat` and in a zone without
+  boats.
+- **Casting aboard.** Both servers interrupt every cast while the profile
+  names a boat (`Handle_OP_CastSpell`). Whether the `EQMac` program refuses
+  first is unread (open row 9c).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

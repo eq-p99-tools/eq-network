@@ -657,13 +657,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             vec![Message::SplitRefused]
         }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
-        crate::objects::eqmac::ACTION_OPCODE if body.is_empty() => vec![Message::ContainerReleased],
-        crate::tradeskills::EQMAC_COMBINE_OPCODE => {
-            vec![crate::tradeskills::eqmac_decode(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |answer| Message::Event(WorldEvent::Combine(answer)),
-            )]
-        }
+        _ if let Some(message) = eqmac_crafts_and_boats(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
         _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {
@@ -717,6 +711,24 @@ fn eqmac_training(opcode: u16, body: &[u8]) -> Option<Message> {
         ),
         crate::training::EQMAC_SKILL_OPCODE => crate::training::eqmac_skill(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::SpawnSkill),
+        _ => return None,
+    })
+}
+
+/// TAKP's and Quarm's combine answer and close answer (6.598) and boat
+/// control echo (6.602); None for other messages.
+fn eqmac_crafts_and_boats(opcode: u16, body: &[u8]) -> Option<Message> {
+    Some(match opcode {
+        crate::objects::eqmac::ACTION_OPCODE if body.is_empty() => Message::ContainerReleased,
+        crate::boats::EQMAC_OPCODE => crate::boats::ControlBoat::eqmac(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |packet| Message::Event(WorldEvent::BoatControl(packet)),
+        ),
+        crate::tradeskills::EQMAC_COMBINE_OPCODE => crate::tradeskills::eqmac_decode(body)
+            .map_or_else(
+                |error| unreadable(Part::World, &error),
+                |answer| Message::Event(WorldEvent::Combine(answer)),
+            ),
         _ => return None,
     })
 }
@@ -810,6 +822,8 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
             );
         }
     }
+    // The boat the player rode, which both servers keep across zones (6.602).
+    messages.push(Message::VehicleName(crate::quarm::profile_vehicle(body)));
     messages
 }
 
@@ -1509,7 +1523,7 @@ mod tests {
         ));
         // A profile that cannot be read leaves the spells, the coins, the
         // nourishment, the automatic splitting, the bind point, the group
-        // and the AA unknown.
+        // and the AA unknown, and names no boat.
         assert!(matches!(
             eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
             [
@@ -1547,6 +1561,7 @@ mod tests {
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::MacPoints(
                     None
                 )),
+                Message::VehicleName(None),
             ]
         ));
     }

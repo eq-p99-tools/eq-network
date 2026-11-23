@@ -6,7 +6,7 @@ use super::{
     Reading::{Partly, Read, Unread},
     Reason::Needless,
     ServerMessage,
-    Step::{Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids, Social},
+    Step::{Bazaar, EqMacExchanges, EqMacWorld, PlayerState, Raids, Social},
     BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_AA, EQMAC_DESCRIPTION, EQMAC_ILLUSION,
     EQMAC_PROFILE, EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK,
     LOG_SERVER, OWN_NAME, PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
@@ -69,7 +69,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
         0x2542 => sent("OP_FaceChange", EQMAC, Read(&[Zone])),
         0x2620 => sent("OP_GroupUpdate", EQMAC, Read(&[Zone])),
-        0x2641 => sent("OP_ControlBoat", EQMAC, unasked(LaterSystems)),
+        // Read and tested (6.602); control is not offered until the `EQMac`
+        // program's steering and riding are read.
+        0x2641 => sent("OP_ControlBoat", EQMAC, Read(&[Zone])),
         0x2740 => sent("OP_ShopPlayerSell", EQMAC, Read(&[Zone])),
         0x2840 => sent("OP_ZoneEntry", EQMAC, Read(&[Admission])),
         0x2940 => sent("OP_DeleteSpawn", EQMAC, Read(&[Zone])),

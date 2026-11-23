@@ -929,6 +929,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             *icon,
         )),
         Request::Combine(container) => tradeskills::eqmac_combine(*container),
+        Request::ControlBoat { spawn_id, intent } => crate::boats::eqmac(*spawn_id, *intent),
         Request::ClickDoor(door_id) => doors::eqmac::click(*door_id, sender.spawn()),
         Request::Consume {
             slot,

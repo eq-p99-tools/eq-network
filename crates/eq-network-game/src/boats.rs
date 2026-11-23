@@ -46,8 +46,30 @@ pub fn titanium(spawn_id: u16, intent: Intent) -> Result<crate::command::Encoded
     })
 }
 
-/// Titanium `OP_ControlBoat`; `EQMac`'s different opcode remains unsupported.
+/// Titanium `OP_ControlBoat`.
 pub const TITANIUM_OPCODE: u16 = 0x2c81;
+
+/// `EQMac`'s `OP_ControlBoat` (TAKP and Quarm, 6.602).
+pub const EQMAC_OPCODE: u16 = 0x2641;
+
+/// Encodes an `EQMac` control intent (`ControlBoat_Struct`, 4 bytes): the
+/// boat's 16-bit spawn, then 1 to take control or 0 to give it up, then a
+/// byte both servers only echo. TAKP's and Quarm's `Handle_OP_ControlBoat`
+/// drop any other length. The last byte is zero here: what the `EQMac`
+/// program writes there is unread (row 6.602b).
+///
+/// # Errors
+/// Rejects the zero entity ID. This does not establish vessel eligibility.
+pub fn eqmac(spawn_id: u16, intent: Intent) -> Result<crate::command::EncodedCommand> {
+    ensure!(spawn_id != 0, "boat control requires a vessel ID");
+    let mut body = vec![0; 4];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[2] = u8::from(intent == Intent::Acquire);
+    Ok(crate::command::EncodedCommand {
+        opcode: EQMAC_OPCODE,
+        body,
+    })
+}
 
 /// The received control byte. Only one selects the boat in Titanium's handler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -69,6 +91,8 @@ pub struct ControlBoat {
     pub action: Action,
     /// Bytes 5..8: unread by the inspected `EQEmu` handler. Native Titanium's
     /// sender does not initialize them; they are not a nonce or ownership ID.
+    /// `EQMac`'s packet has one such byte, kept first; the other two are
+    /// zero there.
     pub unknown: [u8; 3],
 }
 
@@ -89,12 +113,78 @@ impl ControlBoat {
             unknown: body[5..8].try_into()?,
         })
     }
+
+    /// Reads `EQMac`'s 4-byte control echo: TAKP and Quarm send it back,
+    /// with the byte the client sent last, when they grant or end control.
+    /// A refusal is the `IN_USE` string and no echo.
+    ///
+    /// # Errors
+    /// Rejects every body length other than four bytes.
+    pub fn eqmac(body: &[u8]) -> Result<Self> {
+        ensure!(body.len() == 4, "invalid EQMac boat-control length");
+        Ok(Self {
+            boat_id: u32::from(u16::from_le_bytes([body[0], body[1]])),
+            action: match body[2] {
+                0 => Action::Release,
+                1 => Action::Acquire,
+                value => Action::Unknown(value),
+            },
+            unknown: [body[3], 0, 0],
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{message, world::WorldEvent};
+
+    #[test]
+    fn mac_control_is_four_bytes_both_ways() {
+        let take = eqmac(0x0123, Intent::Acquire).unwrap();
+        assert_eq!(take.opcode, 0x2641);
+        assert_eq!(take.body, [0x23, 0x01, 1, 0]);
+        assert_eq!(
+            eqmac(0x0123, Intent::Release).unwrap().body,
+            [0x23, 0x01, 0, 0]
+        );
+        assert!(eqmac(0, Intent::Acquire).is_err());
+        let echo = [0x23, 0x01, 1, 0x7f];
+        let expected = ControlBoat {
+            boat_id: 0x0123,
+            action: Action::Acquire,
+            unknown: [0x7f, 0, 0],
+        };
+        for (protocol, read) in [
+            ("takp", message::eqmac(EQMAC_OPCODE, &echo)),
+            ("quarm", message::quarm(EQMAC_OPCODE, &echo)),
+        ] {
+            assert!(
+                matches!(
+                    read.as_slice(),
+                    [message::Message::Event(WorldEvent::BoatControl(notice))] if *notice == expected
+                ),
+                "{protocol}"
+            );
+        }
+        assert_eq!(
+            ControlBoat::eqmac(&[0x23, 0x01, 0, 0]).unwrap().action,
+            Action::Release
+        );
+        assert_eq!(
+            ControlBoat::eqmac(&[0x23, 0x01, 2, 0]).unwrap().action,
+            Action::Unknown(2)
+        );
+        for length in [0, 3, 5, 8] {
+            assert!(matches!(
+                message::eqmac(EQMAC_OPCODE, &vec![0; length]).as_slice(),
+                [message::Message::Unreadable {
+                    part: message::Part::World,
+                    ..
+                }]
+            ));
+        }
+    }
 
     #[test]
     fn dispatch_preserves_unread_fields_and_never_coerces_a_flag() {

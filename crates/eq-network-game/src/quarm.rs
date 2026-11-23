@@ -671,6 +671,14 @@ pub fn profile_auto_split(body: &[u8]) -> Result<bool> {
     crate::split::eqmac_profile(&unpack(body, true)?)
 }
 
+/// The boat the packed profile names (`boat`, +3256), which TAKP and Quarm
+/// keep across zones (6.602); None when it names none or cannot be read,
+/// which the profile's other readers report.
+#[must_use]
+pub fn profile_vehicle(body: &[u8]) -> Option<String> {
+    crate::boats::riders::eqmac_profile_name(&unpack(body, true).ok()?)
+}
+
 /// The separate, uncompressed own-character zone-entry projection.
 #[derive(Clone, Debug)]
 pub struct OwnSpawn {

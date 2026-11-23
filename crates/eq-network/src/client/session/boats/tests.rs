@@ -353,3 +353,136 @@ fn another_boats_take_while_one_is_pending_stays_refused() {
     });
     assert_eq!(outcome.sent.len(), 1);
 }
+
+/// A control echo as TAKP's or Quarm's wire reads it.
+fn mac_echo(wire: &'static dyn super::super::wire::Wire, body: &[u8]) -> Message {
+    let messages = wire.messages(0x2641, body, eq_network_game::inventory::ItemRules::Takp);
+    assert!(matches!(
+        messages.as_slice(),
+        [Message::Event(WorldEvent::BoatControl(_))]
+    ));
+    messages.into_iter().next().unwrap()
+}
+
+const MAC: [super::super::super::ServerProtocol; 2] = [
+    super::super::super::ServerProtocol::Takp,
+    super::super::super::ServerProtocol::Quarm,
+];
+
+/// TAKP's and Quarm's 4-byte control (6.602): built and tested, but not
+/// offered until the `EQMac` program's steering and riding are read.
+#[test]
+fn mac_control_is_four_bytes_and_releases_on_leaving_zoning_or_dying() {
+    let offer = Message::ZoneOffer(eq_network_game::zoning::ZoneOffer {
+        zone_id: 2,
+        instance_id: 0,
+        position: Position::default(),
+        reason: 0,
+        to_bind: false,
+        solicited: true,
+    });
+    let death = Message::Event(WorldEvent::Death(eq_network_game::zoning::Death {
+        spawn_id: 7,
+        killer_id: 0,
+        corpse_id: 0,
+        bind_zone_id: 0,
+        corpse_name: None,
+    }));
+    for protocol in MAC {
+        let wire = server_type(protocol).wire();
+        // Granted, then each way of leaving gives control back.
+        for ending in ["leave", "zone", "death"] {
+            let outcome = testing::run_on(wire, |out| {
+                let (mut world, sample) = admitted(out, 141);
+                let mut boats = Boats::default();
+                boats
+                    .handle(
+                        &acquire(sample, world.body.position().unwrap()),
+                        &mut world,
+                        out,
+                    )
+                    .unwrap();
+                boats
+                    .observe(&mac_echo(wire, &[8, 0, 1, 0]), &mut world, out)
+                    .unwrap();
+                assert!(matches!(
+                    boats.control.as_ref().unwrap().state(),
+                    ControlState::Acquired(_)
+                ));
+                match ending {
+                    "leave" => {
+                        world.body.record_carrier_support(None);
+                        boats.tick(Instant::now(), &mut world, out).unwrap();
+                    }
+                    "zone" => boats.observe(&offer, &mut world, out).unwrap(),
+                    _ => {
+                        world.own_spawn = Some(7);
+                        boats.observe(&death, &mut world, out).unwrap();
+                    }
+                }
+                assert!(
+                    matches!(
+                        boats.control.as_ref().unwrap().state(),
+                        ControlState::Releasing(_)
+                    ),
+                    "{ending}"
+                );
+                boats
+                    .observe(&mac_echo(wire, &[8, 0, 0, 0]), &mut world, out)
+                    .unwrap();
+                assert!(matches!(
+                    boats.control.as_ref().unwrap().state(),
+                    ControlState::Released(_)
+                ));
+            });
+            assert_eq!(
+                outcome
+                    .sent
+                    .iter()
+                    .map(|packet| (packet.opcode, packet.body.clone()))
+                    .collect::<Vec<_>>(),
+                [(0x2641, vec![8, 0, 1, 0]), (0x2641, vec![8, 0, 0, 0])],
+                "{protocol:?} {ending}"
+            );
+        }
+    }
+}
+
+/// In use: the server sends `IN_USE` and no echo. The wait runs out and the
+/// session gives up the take, as on Titanium.
+#[test]
+fn a_mac_take_refused_in_use_is_given_up_when_its_wait_runs_out() {
+    for protocol in MAC {
+        let outcome = testing::run_on(server_type(protocol).wire(), |out| {
+            let (mut world, sample) = admitted(out, 141);
+            let mut boats = Boats::default();
+            boats
+                .handle(
+                    &acquire(sample, world.body.position().unwrap()),
+                    &mut world,
+                    out,
+                )
+                .unwrap();
+            boats
+                .tick(
+                    Instant::now() + WAIT + Duration::from_millis(1),
+                    &mut world,
+                    out,
+                )
+                .unwrap();
+            assert!(!matches!(
+                boats.control.as_ref().unwrap().state(),
+                ControlState::Acquired(_) | ControlState::Acquiring { .. }
+            ));
+        });
+        assert_eq!(
+            outcome
+                .sent
+                .iter()
+                .map(|packet| packet.body.clone())
+                .collect::<Vec<_>>(),
+            [vec![8, 0, 1, 0], vec![8, 0, 0, 0]],
+            "{protocol:?}"
+        );
+    }
+}
