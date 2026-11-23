@@ -249,8 +249,8 @@ pub enum GameCommand {
         created: std::time::Instant,
     },
     /// Send a petition to the server's staff ([`crate::reports::petition`]).
-    /// A person reads it, so a host sends one only when the player types
-    /// it.
+    /// A person reads it, so the session sends one of a kind in any 10
+    /// seconds, whether it was typed or came from a script.
     SendPetition {
         /// Current zone admission.
         session_id: u64,
@@ -980,8 +980,8 @@ pub enum GameCommand {
     /// Swap to bandolier set `set` (0 to 3): the server puts the set's
     /// items in the weapon slots and returns what they held, telling the
     /// client nothing; the session predicts every move or refuses
-    /// ([`crate::bandolier::swap()`]). Only on the player's own click or key,
-    /// never from a script or a social.
+    /// ([`crate::bandolier::swap()`]), whether from a click, a key, a social
+    /// or a script.
     SwapBandolier {
         /// Current zone admission.
         session_id: u64,
@@ -1258,8 +1258,8 @@ pub enum GameCommand {
         created: std::time::Instant,
     },
     /// Take a task the last offer holds ([`crate::tasks::offers`]). The
-    /// giver must still be in the zone. A host sends it only on the
-    /// player's own click, never from a script, social or hotbutton.
+    /// giver must still be in the zone. A host may send it from a click, a
+    /// social, a hotbutton or a script.
     AcceptTask {
         /// Current zone admission.
         session_id: u64,
@@ -1274,8 +1274,8 @@ pub enum GameCommand {
         session_id: u64,
     },
     /// Cancel a journal entry, losing its progress
-    /// ([`crate::tasks::offers`]). A host sends it only on the player's own
-    /// confirmed choice, never from a script, social or hotbutton.
+    /// ([`crate::tasks::offers`]). A host asks the player first when it
+    /// comes from a click; a script's own step asks nothing.
     CancelTask {
         /// Current zone admission.
         session_id: u64,

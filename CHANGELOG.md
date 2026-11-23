@@ -5,6 +5,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Lift the hosts' script holds (6.572): a host may now send a report, a
+  bandolier swap, a task's acceptance or a task's cancel from a script, a
+  social or a hotbutton as well as from the player's own typing or click,
+  since a script may do whatever the player can. Documentation only: the
+  session never knew where a command came from, and its checks and paces
+  hold whatever sends it.
+
 - Read the guild bank as stock `EQEmu` tells a Titanium client of it
   (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
   emptied), the deposit answer, the bare acknowledgement and the clear, by
