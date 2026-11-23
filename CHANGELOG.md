@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `/who all` and friends on Quarm and TAKP (6.583), each from its own
+  handlers (Quarm fc75fcf, TAKP 44afcbf): `who::eqmac::{request, decode,
+  unmatched}` for the 140-byte request and the 16-bit answer, and
+  `friends::eqmac_request`. The answer is the same `WorldEvent::WhoList`;
+  the Mac LFG mark comes as the player's `tag` (12314) and AFK as the
+  `rank` (12311), so `WhoPlayer` keeps its fields. One query at a time, at
+  least a second apart; one asked sooner is refused. Source-derived, not
+  live. `WhoPlayer`'s `Debug` now leaves out the account's name.
+
+  **Breaking** (for exhaustive matches): `message::Message` gains
+  `WhoUnmatched`, the `EQMac` zone's string 5029 in place of an answer.
+
 - Offer `Looting` on TAKP (6.577), from TAKP's own corpse handlers at
   EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
   the echo before the server's checks, and an empty cursor before an item

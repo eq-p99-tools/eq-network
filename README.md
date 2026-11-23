@@ -89,8 +89,8 @@ each.
 | `Splitting` | Sharing coin with the group | Yes | Yes | – | – |
 | **People** | | | | | |
 | `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
-| `Who` | `/who` | Yes | Yes | – | – |
-| `FriendsWho` | Friends online | Yes | Yes | – | – |
+| `Who` | `/who` | Yes | Yes | Yes | Yes |
+| `FriendsWho` | Friends online | Yes | Yes | Yes | Yes |
 | `Grouping` | Groups | Yes | Yes | Yes | Yes |
 | `Raiding` | Raids | – | Yes | – | – |
 | `Listing` | AFK, anonymous and roleplaying | Yes | Yes | Yes | Yes |

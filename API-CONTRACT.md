@@ -1461,6 +1461,20 @@ for an item request sooner than 10 ms after the last on the corpse
 (`loot_cooldown_timer`), so the session never sends one sooner and refuses
 one asked sooner. Delivery and coins stay with the inventory owner.
 
+Quarm and TAKP offer `Who` and `FriendsWho` the same way, each from its own
+handlers (6.583): the 140-byte `Who_All_Struct` of 16-bit fields, and the
+friends' comma list ending in its only NUL (Quarm `strcpy`s it), with no name
+past the 64 bytes the worlds read. The answer, `OP_WhoAllResponse` (0x0b20),
+is read into the same `WorldEvent::WhoList`; when nobody matched, the zone
+sends string 5029 instead, which reaches the host as chat. Its account name,
+sent only to a game master, stays out of `WhoPlayer`'s `Debug`, and an answer
+that doesn't read is a gap with no sample. One who or friends query is in
+flight at a time: the next waits for the answer, the 5029 line or 5 seconds,
+and comes at least a second after the last, a pace of the session's own (open
+row 6.583a for the program's). One asked sooner is refused and may be asked
+again. A plain `/who` stays the host's own list of the zone, as on Titanium
+(open row 6.583b).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

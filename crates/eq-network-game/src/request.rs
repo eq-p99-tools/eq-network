@@ -948,6 +948,8 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             opcode: crate::names::EQMAC_SURNAME_OPCODE,
             body: crate::names::surname_request(sender.name, surname)?,
         }),
+        Request::Who(filter) => who::eqmac::request(filter),
+        Request::WhoFriends(names) => crate::friends::eqmac_request(names),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }

@@ -861,6 +861,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
         ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
+        crate::who::eqmac::RESPONSE_OPCODE => {
+            vec![WorldEvent::WhoList(crate::who::eqmac::decode(body)?)]
+        }
         ZONE_WEATHER => vec![WorldEvent::Weather(crate::clock::weather(body)?)],
         // Quarm's zones send their part of the rules at every zone-in.
         crate::rules::EQMAC_LOG_SERVER_OPCODE => {

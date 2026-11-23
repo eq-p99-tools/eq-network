@@ -16,6 +16,11 @@ const PROFILE_OPCODE: u16 = 0x75df;
 /// What a zone packet says.
 #[derive(Debug)]
 pub enum Message {
+    /// The `EQMac` zone's string 5029 in place of a who answer: no player
+    /// matched ([`crate::who::eqmac::NO_RESULTS`]). The line itself still
+    /// reaches the host as chat; this tells the session the query was
+    /// answered.
+    WhoUnmatched,
     /// Read-only Titanium AA facts, scoped and published by the server feature.
     AlternateAdvancement(crate::alternate_advancement::Update),
     /// News the host hears about too.
@@ -625,6 +630,9 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
                     Message::MerchantList,
                 ),
             ]
+        }
+        crate::who::eqmac::FORMATTED_OPCODE if crate::who::eqmac::unmatched(opcode, body) => {
+            vec![Message::WhoUnmatched]
         }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],

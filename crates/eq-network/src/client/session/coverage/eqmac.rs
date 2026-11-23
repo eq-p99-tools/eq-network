@@ -41,7 +41,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0741 => sent("OP_ChannelMessage", EQMAC, Read(&[Chat])),
         0x0840 => sent("OP_MoneyUpdate", EQMAC, planned(Bazaar)),
         0x0980 => sent("OP_SetChatServer", EQMAC, Read(&[World])),
-        0x0b20 => sent("OP_WhoAllResponse", EQMAC, planned(EqMacWorld)),
+        // Players' names and, for a game master, accounts: no sample.
+        0x0b20 => sent_private("OP_WhoAllResponse", EQMAC, Read(&[Zone])),
         0x0b40 => sent("OP_ShopRequest", EQMAC, Read(&[Zone])),
         0x0c40 => sent("OP_ShopInventoryPacket", EQMAC, Read(&[Zone])),
         0x1040 => sent("OP_TradeReset", EQMAC, planned(EqMacExchanges)),

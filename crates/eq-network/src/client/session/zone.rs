@@ -3264,6 +3264,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -3273,6 +3274,7 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::GameplayDepartures,
+                Capability::FriendsWho,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters
             ]
@@ -3296,6 +3298,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -3306,6 +3309,7 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::GameplayDepartures,
+                Capability::FriendsWho,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters
             ]
