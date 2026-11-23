@@ -1002,13 +1002,19 @@ mod shared {
 /// `EQEmu` lowers a fall by the player's fall damage reductions and takes
 /// drowning and lava as sent (`Client::Handle_OP_EnvDamage`).
 ///
-/// Inferred, and unverified until read: the liquid amounts and their timing
-/// are our host's calculation, not the program's formula (read R49-3); and
-/// that P99's server takes our reports as it takes the official client's,
-/// since its own module hooks the fall routine and is not read (recording
-/// checklist 6.332 for falls, 6.491 for drowning and lava). R25's door
-/// contact report is not sent (6.491).
-const TITANIUM_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
+/// The liquid amounts and their timing are the program's (read R49-3); the
+/// host works them out. Inferred: that P99's server takes our reports, and
+/// the damage record after each liquid one, as it takes the official
+/// client's, since its own module hooks the fall routine and is not read
+/// (recording checklist 6.332 for falls, 6.491 for drowning and lava; its
+/// first use there is the attended liquid row). R25's door contact report
+/// is not sent (6.491).
+const TITANIUM_HAZARDS: [Hazard; 4] = [
+    Hazard::Falling,
+    Hazard::Drowning,
+    Hazard::Lava,
+    Hazard::ZoneHeat,
+];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`
 /// program reports one as `OP_EnvDamage` and then `OP_Damage` (from the
@@ -2532,7 +2538,6 @@ mod tests {
         }
     }
 
-
     /// The hazards a server type's policy takes reports of, with the
     /// session on the local network or not.
     fn hazard_capabilities(protocol: ServerProtocol, local_only: bool) -> Vec<Capability> {
@@ -3193,8 +3198,8 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer,
         // and both read the AA facts the air counter needs (6.491).
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 39),
-            (ServerProtocol::EqEmu, 53),
+            (ServerProtocol::Project1999, 40),
+            (ServerProtocol::EqEmu, 54),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());

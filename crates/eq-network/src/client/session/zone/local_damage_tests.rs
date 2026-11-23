@@ -69,7 +69,9 @@ fn report(hazard: Hazard, session_id: u64) -> ClientCommand {
                 sampled_at: Instant::now(),
             },
         },
-        Hazard::Freezing => unreachable!("this fixture reports only fall, drowning and lava"),
+        Hazard::Freezing | Hazard::ZoneHeat => {
+            unreachable!("this fixture reports only fall, drowning and lava")
+        }
     }
 }
 
@@ -132,13 +134,13 @@ fn an_accepted_local_report_and_repeated_server_echo_send_only_one_stand() {
             Ok(())
         });
         outcome.result.unwrap();
-        assert_eq!(
-            outcome.sent,
-            [
-                hazards::titanium_damage(7, hazard, 13).unwrap(),
-                command::titanium_posture(7, Posture::Standing).unwrap(),
-            ]
-        );
+        // Each report is followed by the damage record (read R49-3 c, 3a).
+        let mut expected = vec![
+            hazards::titanium_damage(7, hazard, 13).unwrap(),
+            hazards::titanium_damage_record(7, hazard, 13).unwrap(),
+        ];
+        expected.push(command::titanium_posture(7, Posture::Standing).unwrap());
+        assert_eq!(outcome.sent, expected);
         assert_eq!(world.posture.current(), Some(PostureState::Standing));
         assert_eq!(
             outcome

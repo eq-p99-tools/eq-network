@@ -884,6 +884,20 @@ pub enum WorldEvent {
         /// Opaque revision to echo when reporting the sample.
         revision: u64,
     },
+    /// The session sent a report of damage the world did to the player, as
+    /// the server type takes it. The Titanium program prints its own line
+    /// for each such report (read R49-3 e), so a front end can too.
+    HazardReported {
+        /// The admission that sent the report.
+        session_id: u64,
+        /// What did the damage.
+        hazard: crate::hazards::Hazard,
+        /// The amount reported.
+        amount: u32,
+        /// Whether the damage record followed the report (Titanium's
+        /// drowning, lava and cold), whose echo a front end may then expect.
+        record: bool,
+    },
     /// P99 spell-table facts, delivered in world/zone receive order even
     /// before profile admission. Installed definitions and provider epochs
     /// remain host-owned; unavailable updates must not fall back silently.

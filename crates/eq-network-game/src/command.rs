@@ -1743,7 +1743,9 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::LiquidDamage { hazard, .. } => match hazard {
                 crate::hazards::LiquidHazard::Drowning => Capability::Drowning,
-                crate::hazards::LiquidHazard::Lava => Capability::LavaHeat,
+                crate::hazards::LiquidHazard::Lava | crate::hazards::LiquidHazard::ZoneHeat => {
+                    Capability::LavaHeat
+                }
             },
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,

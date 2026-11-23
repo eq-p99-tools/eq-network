@@ -1952,8 +1952,14 @@ mod tests {
             outcome.result.unwrap();
             let sent: Vec<_> = if taken {
                 [Hazard::Drowning, Hazard::Lava]
-                    .map(|hazard| hazards::titanium_damage(7, hazard, 13).unwrap())
-                    .to_vec()
+                    .into_iter()
+                    .flat_map(|hazard| {
+                        [
+                            hazards::titanium_damage(7, hazard, 13).unwrap(),
+                            hazards::titanium_damage_record(7, hazard, 13).unwrap(),
+                        ]
+                    })
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -2076,8 +2082,11 @@ mod tests {
             outcome.sent,
             [
                 hazards::titanium_damage(7, Hazard::Drowning, 13).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Drowning, 13).unwrap(),
                 hazards::titanium_damage(7, Hazard::Lava, 13).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Lava, 13).unwrap(),
                 hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Falling, 160).unwrap(),
             ]
         );
         assert_eq!(outcome.unreliable, []);

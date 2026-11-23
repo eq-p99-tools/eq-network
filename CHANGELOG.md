@@ -11,11 +11,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can now drown and burn with this client**, where before only falls were
   reported there. The EQEmu and P99 policies take falls, drowning and lava
   whether or not the session is on the local network, and both read the AA
-  facts the air counter needs. A host withholds every report with its own
-  setting (the client's Take Environmental Damage). Inferred until read:
-  the liquid amounts and timing are the host's calculation, not the
-  program's formula (R49-3), and that P99's server takes them as it takes
-  the official client's (6.491). TAKP and Quarm are unchanged.
+  facts the air counter needs, unlisted (the AA requests stay local only,
+  6.581). A host withholds every report with its own setting (the client's
+  Take Environmental Damage). TAKP and Quarm are unchanged.
+  - From reads R49-3 and R49-3a: after each Titanium report, falls
+    included, the session sends the program's damage record, `OP_Damage`
+    0x5c78 (`hazards::titanium_damage_record`). `EQEmu` only relays it.
+    P99's handling is unknown until the attended liquid row (6.491).
+  - The record is skipped below the program's death floor, -10, where the
+    session can count the player's item HP. No Titanium server type can
+    yet (inferred, 6.491b).
+  - No Titanium report in the freeze stance or for a carrier race, as the
+    program skips them.
+  - Zone 200's lava is its own type, 244 (`LiquidHazard::ZoneHeat`,
+    `Hazard::ZoneHeat`), and Titanium freezing encodes as 246.
+  - New `WorldEvent::HazardReported { session_id, hazard, amount, record }`
+    after every report sent, for the program's own damage line.
+  - **Breaking:** `WorldEvent::HazardReported`; `ZoneHeat` on `LiquidHazard`
+    and `Hazard`; `Hazard` is `Serialize`.
 - Offer emotes, yells, buff cancels, book deletes and moves, surnames,
   petitions and bug reports on Quarm and TAKP (6.604 E1 to E6), from each
   server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is
