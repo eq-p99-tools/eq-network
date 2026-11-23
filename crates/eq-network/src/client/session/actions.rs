@@ -207,6 +207,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AnswerResurrection { .. }
         | ClientCommand::AnswerSacrifice { .. }
         | ClientCommand::AnswerTranslocate { .. }
+        | ClientCommand::AnswerDuel { .. }
         | ClientCommand::RespondToPopup { .. }
         | ClientCommand::InspectPlayer { .. }
         | ClientCommand::SetInspectNote { .. }
@@ -380,6 +381,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AnswerResurrection { session_id, .. }
         | ClientCommand::AnswerSacrifice { session_id, .. }
         | ClientCommand::AnswerTranslocate { session_id, .. }
+        | ClientCommand::AnswerDuel { session_id, .. }
         | ClientCommand::RespondToPopup { session_id, .. }
         | ClientCommand::InspectPlayer { session_id, .. }
         | ClientCommand::SetInspectNote { session_id, .. }
@@ -568,6 +570,11 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             WorldEvent::SacrificeRefused { session_id, reason }
         }
         ClientCommand::AnswerTranslocate { offer_id, .. } => WorldEvent::TranslocateRefused {
+            offer_id: *offer_id,
+            session_id,
+            reason,
+        },
+        ClientCommand::AnswerDuel { offer_id, .. } => WorldEvent::DuelRefused {
             offer_id: *offer_id,
             session_id,
             reason,

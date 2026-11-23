@@ -26,7 +26,7 @@ use super::{
     character::Character,
     clock::Clock,
     combat::Combat,
-    confirmations::{Sacrifice, Translocate},
+    confirmations::{Duel, Sacrifice, Translocate},
     control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
@@ -436,6 +436,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Accepting or declining another player's challenge to a duel.
+    fn duel(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Reading books and notes.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -558,6 +563,7 @@ pub(super) trait ServerType: Sync {
             self.resurrection(setup),
             self.sacrifice(setup),
             self.translocate(setup),
+            self.duel(setup),
             self.reading(setup),
             self.tradeskills(setup),
             self.map(setup),
@@ -667,11 +673,11 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
-        Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
-        Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
-        MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading, Resurrection,
-        Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills,
-        Training, Transfers, Translocate, Who,
+        Combat, Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect,
+        GroundObjects, Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing,
+        Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids,
+        Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
+        Targeting, Ticks, Tradeskills, Training, Transfers, Translocate, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -806,6 +812,10 @@ mod shared {
 
     pub(super) fn translocate(timeout: std::time::Duration) -> Box<dyn Feature> {
         Box::new(Translocate::new(timeout))
+    }
+
+    pub(super) fn duel(echoes_challenge: bool) -> Box<dyn Feature> {
+        Box::new(Duel::new(echoes_challenge))
     }
 
     pub(super) fn reading() -> Box<dyn Feature> {
@@ -1369,6 +1379,13 @@ impl ServerType for EqEmu {
     /// `EQEmu` moves the player itself (`Client::Handle_OP_Translocate`).
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
+    }
+
+    /// Answered on the player's word as `Client::Handle_OP_DuelAccept` and
+    /// `Handle_OP_DuelDecline` read it, from source; not yet checked live
+    /// (checklist 6.492). P99, TAKP and Quarm wait for their checks.
+    fn duel(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::duel(false))
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -2428,7 +2445,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 45),
+            (ServerProtocol::EqEmu, 46),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());

@@ -1427,6 +1427,19 @@ identity and caller stamp without accepting old motion or reasserting policy
 on every render frame.
 
 
+## Duel challenges
+
+Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
+so far), another player's challenge comes as `WorldEvent::DuelOffer` with a
+`socials::DuelQuestion`, beside the `WorldEvent::Duel` news it came in.
+Answer it with `GameCommand::AnswerDuel`, copying `id` into `offer_id` and
+its admission into `session_id`; only the player's own choice should send a
+yes. The question has no local deadline and nothing declines it on the
+player's behalf. It closes with `WorldEvent::ConsentClosed`: `AnswerSent`
+after an answer, `Interrupted` on zoning, death or logout, a newer
+challenge, the duel's start or the challenger's refusal. A stale answer is
+refused with `WorldEvent::DuelRefused` and sends nothing.
+
 ## Resurrection and translocate consent
 
 A live session exposes `WorldEvent::Resurrection` and

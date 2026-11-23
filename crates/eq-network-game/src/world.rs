@@ -645,12 +645,14 @@ pub enum Capability {
     /// Titanium's `/stopcast`: ending one's own cast without moving. The
     /// host must refuse it for a mounted player, as the program does.
     StoppingCasts,
+    /// Accepting or declining a challenge to a duel.
+    Dueling,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 68] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -718,6 +720,7 @@ impl Capability {
         Self::BoatRiding,
         Self::Yelling,
         Self::StoppingCasts,
+        Self::Dueling,
     ];
 }
 
@@ -1742,9 +1745,20 @@ pub enum WorldEvent {
         reason: String,
     },
     /// News of a duel: a challenge or its acceptance, its start, or a
-    /// client turning it down ([`crate::socials`]). Nothing answers a
-    /// challenge yet.
+    /// client turning it down ([`crate::socials`]). Where the server type
+    /// answers duels, a challenge also comes as a [`WorldEvent::DuelOffer`].
     Duel(crate::socials::DuelUpdate),
+    /// A challenge to a duel the player may accept or decline, once.
+    DuelOffer(crate::socials::DuelQuestion),
+    /// An answer to a duel was not sent, and why.
+    DuelRefused {
+        /// The offer the command named.
+        offer_id: crate::confirmations::ConsentId,
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// News of the player's guild ([`crate::guild`]). The session keeps no
     /// roster.
     Guild(crate::guild::GuildUpdate),
@@ -2462,6 +2476,7 @@ mod tests {
             Capability::BoatRiding => 64,
             Capability::Yelling => 65,
             Capability::StoppingCasts => 66,
+            Capability::Dueling => 67,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
