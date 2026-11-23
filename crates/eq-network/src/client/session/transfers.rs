@@ -1346,6 +1346,35 @@ mod tests {
     }
 
     #[test]
+    fn a_zone_point_that_keeps_the_heading_saves_the_players_cut_to_a_whole_number() {
+        let point = zoning::ZonePoint {
+            number: 1,
+            zone_id: 4,
+            instance_id: 0,
+            destination: Position {
+                x: 10.0,
+                y: 20.0,
+                z: 3.0,
+                heading: 999.0,
+            },
+        };
+        let standing = Position {
+            x: -5.0,
+            y: 6.0,
+            z: 1.0,
+            heading: 479.5,
+        };
+        let offer = point.request(standing).unwrap();
+        let mut world = World::new(5);
+        let save = save_on_leaving(&offer, &mut world).unwrap();
+        assert_eq!(save.position.map(|position| position.heading), Some(479.5));
+        // As recorded: the save holds 479, not 480.
+        let body = zoning::titanium_save_on_zone(&save).body;
+        assert_eq!(&body[17..21], &479u32.to_le_bytes());
+        assert_eq!(&body[5..9], &20.0f32.to_le_bytes());
+    }
+
+    #[test]
     fn only_a_boat_transfer_saves_the_place_aboard_and_the_boat() {
         use eq_network_game::{movement::carrier_world, world::SpawnKind, GameDialect};
         let boat_at = Position {
