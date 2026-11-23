@@ -16,6 +16,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the liquid amounts and timing are the host's calculation, not the
   program's formula (R49-3), and that P99's server takes them as it takes
   the official client's (6.491). TAKP and Quarm are unchanged.
+- Offer emotes, yells, buff cancels, book deletes and moves, surnames,
+  petitions and bug reports on Quarm and TAKP (6.604 E1 to E6), from each
+  server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is
+  source-derived and not yet checked live.
+  - New: `socials::{EQMAC_EMOTE_OPCODE, eqmac_emote, eqmac_social_emote,
+    eqmac_heard_emote, eqmac_yell}`, `spells::eqmac_delete` and
+    `buffs::cancel::eqmac_packet`.
+  - **Emote.** 1026 bytes: a zero word, then the text as Titanium writes it.
+    The social-emote word (0xffff) is inferred from Titanium's (row 11a).
+    Animations stay Titanium only.
+  - **Yell.** An empty `OP_YellForHelp` at 0xda41.
+  - **Buff cancel.** One 20-byte record for a beneficial buff only, on both
+    servers. TAKP fades any spell, but the session does not ask it to.
+  - **Book.** A delete is 8 bytes and waits for the echo; the local book
+    changes only on an echo with `success` 1. Both servers delete the spell in
+    their database but keep it in the live profile until the next load. The
+    move was already built and is now offered.
+  - **Surname.** The 100-byte request. The session first refuses, as the
+    servers' comments say the program does (inferred): a character under
+    level 20, or a surname over 19 characters. A surname already held is
+    the server's to refuse.
+  - **Reports.** A petition is the text and a NUL. A bug report is now the
+    1131-byte short record (it was 3340), with only the reporter and the
+    text; the servers fill in the place and target. Quarm runs with
+    petitions off, and says so.
+  - Held for reads of the `EQMac` program: inspecting, titles and duels
+    (rows 11e to 11g).
+
 - Offer `/disc` and `/shield` on Quarm and TAKP (6.603 G1, G2), from each
   server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is
   source-derived and not yet checked live.

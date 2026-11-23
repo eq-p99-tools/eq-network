@@ -3108,15 +3108,16 @@ mod tests {
         assert!(eqemu.contains(&Capability::StoppingCasts));
         // Held off P99 until checked there.
         assert!(!p99.contains(&Capability::StoppingCasts));
+        // Both Mac servers take an empty yell (6.604 E2).
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let mac = offered(protocol);
-            assert!(!mac.contains(&Capability::Yelling), "{protocol:?}");
+            assert!(mac.contains(&Capability::Yelling), "{protocol:?}");
             assert!(!mac.contains(&Capability::StoppingCasts), "{protocol:?}");
         }
     }
 
     #[test]
-    fn emote_animations_are_titanium_offers_only_and_each_generation_has_its_disciplines() {
+    fn every_generation_emotes_and_has_its_disciplines() {
         use crate::{client::ServerProtocol, world::Capability};
         let offered = |protocol| {
             Features::new(
@@ -3142,7 +3143,8 @@ mod tests {
         // (6.603 G1).
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let mac = offered(protocol);
-            assert!(!mac.contains(&Capability::Emoting), "{protocol:?}");
+            // Mac emotes are words only (6.604 E1); animations stay Titanium.
+            assert!(mac.contains(&Capability::Emoting), "{protocol:?}");
             assert!(mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
             assert!(mac.contains(&Capability::DisciplineReuse), "{protocol:?}");
         }
@@ -3317,9 +3319,12 @@ mod tests {
                 Capability::Resurrection,
                 Capability::Reading,
                 Capability::Tradeskills,
+                Capability::DeletingSpells,
+                Capability::MovingSpells,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
+                Capability::Emoting,
                 Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::Sacrifice,
@@ -3328,12 +3333,17 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::WorldContainers,
+                Capability::CancellingBuffs,
                 Capability::GameplayDepartures,
                 Capability::UsingDisciplines,
                 Capability::FriendsWho,
                 Capability::Splitting,
+                Capability::Yelling,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters,
+                Capability::Surnaming,
+                Capability::Petitioning,
+                Capability::ReportingBugs,
                 Capability::Shielding,
                 Capability::BazaarSearching,
                 Capability::DisciplineReuse
@@ -3686,6 +3696,8 @@ mod manual_combine_tests;
 #[cfg(test)]
 mod eqmac_tradeskill_tests;
 
+#[cfg(test)]
+mod eqmac_book_tests;
 #[cfg(test)]
 mod eqmac_discipline_tests;
 

@@ -85,7 +85,9 @@ fn cancellation_policy_gate_keeps_admission_age_and_lifecycle_boundaries() {
             "Constructed",
             AutoEat::default(),
         );
-        assert!(!features
+        // Both Mac servers cancel a beneficial buff from their own handlers
+        // (6.604 E3, source-derived).
+        assert!(features
             .capabilities()
             .contains(&crate::world::Capability::CancellingBuffs));
     }

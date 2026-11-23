@@ -948,6 +948,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Forget { gem, spell_id } => Ok(spells::eqmac_forget(*gem, *spell_id)),
         Request::Scribe { slot, spell_id } => spells::eqmac_scribe(*slot, *spell_id),
         Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
+        Request::DeleteSpell { slot } => spells::eqmac_delete(*slot),
+        Request::Emote(text) => socials::eqmac_emote(text),
+        Request::SocialEmote(text) => socials::eqmac_social_emote(text),
+        Request::YellForHelp => Ok(socials::eqmac_yell()),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
         Request::DestroyCoins(destroy) => destroy.encode_eqmac(),
         Request::BledOut { level } => crate::quarm::bled_out(sender.spawn(), *level),
@@ -1352,12 +1356,13 @@ mod tests {
             command::titanium_camp()
         );
         // `/yell` and `/stopcast` send empty bodies (R45); the Mac-era
-        // generation sends neither.
+        // generation sends an empty yell at its own opcode (6.604 E2).
         for (request, opcode) in [(Request::YellForHelp, 0x61ef), (Request::StopSong, 0x4839)] {
             let packet = titanium(&request, PLAYER).unwrap();
             assert_eq!((packet.opcode, packet.body.len()), (opcode, 0));
         }
-        assert!(eqmac(&Request::YellForHelp, PLAYER).is_err());
+        let packet = eqmac(&Request::YellForHelp, PLAYER).unwrap();
+        assert_eq!((packet.opcode, packet.body.len()), (0xda41, 0));
         // An emote's animation is the 4-byte animation record (R47).
         let packet = titanium(&Request::EmoteAnimation(0x4d), PLAYER).unwrap();
         assert_eq!(packet.opcode, 0x2acf);

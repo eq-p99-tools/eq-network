@@ -1748,10 +1748,31 @@ impl ServerType for Quarm {
     /// assistee's target, or the player's own spawn when it has none or
     /// stands past 250. Ends of 0 to 32000, in order, and one assist at a
     /// time for 5 s are the session's own ([`Socials::eqmac`]; 6.585b,
-    /// 6.585c). Emotes and yells wait for their own reads. Source-derived,
-    /// not live (6.585).
+    /// 6.585c), and emotes and yells from their own `Handle_OP_Emote` and
+    /// `Handle_OP_YellForHelp` (6.604 E1, E2). Source-derived, not live
+    /// (6.585, 6.604).
     fn socials(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Socials::eqmac()))
+    }
+
+    /// Cancelling a beneficial buff in the 20-byte `OP_Buff` its own
+    /// `Handle_OP_Buff` reads (6.604 E3), source-derived, not live.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Buffs::eqmac()))
+    }
+
+    /// Asked and answered as its own `Handle_OP_Surname` reads it
+    /// (6.604 E5), source-derived, not live.
+    fn surnames(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Surnames::eqmac()))
+    }
+
+    /// Petitions and bug reports as its own `Handle_OP_Petition` and
+    /// `Handle_OP_Bug` read them (6.604 E6), source-derived, not live.
+    fn reports(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::reports::Reports::new(
+            super::reports::Listed::EQMAC,
+        )))
     }
 
     /// Corpses in the `EQMac` program's packets
@@ -1859,10 +1880,16 @@ impl ServerType for Quarm {
     }
 
     /// Quarm's `OPMemorizeSpell` handles scribing, memorizing and forgetting
-    /// with the shared book packet. Moving and deleting book entries remain
-    /// unchecked, as on TAKP (see `docs/public-server-gaps.md`).
+    /// with the shared book packet. Moving and deleting book entries follow
+    /// Quarm's own `Handle_OP_SwapSpell` and `Handle_OP_DeleteSpell`
+    /// (6.604 E4): each waits for the echo, and a deletion changes the book
+    /// only on success 1. The server leaves the live profile holding a
+    /// deleted spell until the next load (a gap fact).
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::spellbook(Edits::default()))
+        offer(shared::spellbook(Edits {
+            deleting: true,
+            moving: true,
+        }))
     }
 
     /// Source-backed `EQMac` abilities, with Frenzy and unfinished exchanges excluded.
@@ -2133,14 +2160,16 @@ impl ServerType for Takp {
     }
 
     /// Memorizing, forgetting and scribing spells in TAKP's 256-slot book.
-    /// Moving a spell in the book waits for its check on TAKP. Deleting
-    /// stays off: TAKP reports a deletion done even for an empty slot and
-    /// keeps the spell memorizable until the player zones
-    /// (`Client::Handle_OP_DeleteSpell`), unchecked live.
+    /// Moving and deleting book entries follow TAKP's own
+    /// `Handle_OP_SwapSpell` and `Handle_OP_DeleteSpell` at 44afcbf
+    /// (6.604 E4): each waits for the echo, and a deletion changes the book
+    /// only on success 1, which TAKP sends only for a slot that held a
+    /// spell. The server leaves the live profile holding a deleted spell
+    /// until the next load (a gap fact).
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::spellbook(Edits {
-            deleting: false,
-            moving: false,
+            deleting: true,
+            moving: true,
         }))
     }
 
@@ -2240,10 +2269,31 @@ impl ServerType for Takp {
     /// assistee's target, or the player's own spawn when it has none or
     /// stands past 250. Ends of 0 to 32000, in order, and one assist at a
     /// time for 5 s are the session's own ([`Socials::eqmac`]; 6.585b,
-    /// 6.585c). Emotes and yells wait for their own reads. Source-derived,
-    /// not live (6.585).
+    /// 6.585c), and emotes and yells from their own `Handle_OP_Emote` and
+    /// `Handle_OP_YellForHelp` (6.604 E1, E2). Source-derived, not live
+    /// (6.585, 6.604).
     fn socials(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Socials::eqmac()))
+    }
+
+    /// Cancelling a beneficial buff in the 20-byte `OP_Buff` its own
+    /// `Handle_OP_Buff` reads (6.604 E3), source-derived, not live.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Buffs::eqmac()))
+    }
+
+    /// Asked and answered as its own `Handle_OP_Surname` reads it
+    /// (6.604 E5), source-derived, not live.
+    fn surnames(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Surnames::eqmac()))
+    }
+
+    /// Petitions and bug reports as its own `Handle_OP_Petition` and
+    /// `Handle_OP_Bug` read them (6.604 E6), source-derived, not live.
+    fn reports(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::reports::Reports::new(
+            super::reports::Listed::EQMAC,
+        )))
     }
 
     /// Corpses in the `EQMac` program's packets
@@ -2806,11 +2856,13 @@ mod tests {
         // from its own handlers (6.583), and rolls, assists and splits the
         // same way (6.585), corpses (6.591), pets (6.595), and resurrection and
         // sacrifice answers (6.596), training (6.597), tradeskills and
-        // world containers (6.598), and `/disc` and `/shield` (6.603). Other
+        // world containers (6.598), `/disc` and `/shield` (6.603), and emotes,
+        // yells, buff cancels, book edits, surnames, petitions and bug reports
+        // (6.604). Other
         // features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 32);
+        assert_eq!(quarm.features(&setup).len(), 35);
         assert_eq!(
             offers(quarm),
             [
@@ -2837,9 +2889,12 @@ mod tests {
                 Capability::Resurrection,
                 Capability::Reading,
                 Capability::Tradeskills,
+                Capability::DeletingSpells,
+                Capability::MovingSpells,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
+                Capability::Emoting,
                 Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::Sacrifice,
@@ -2848,17 +2903,22 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::WorldContainers,
+                Capability::CancellingBuffs,
                 Capability::UsingDisciplines,
                 Capability::FriendsWho,
                 Capability::Splitting,
+                Capability::Yelling,
                 Capability::ApplyingPoison,
+                Capability::Surnaming,
+                Capability::Petitioning,
+                Capability::ReportingBugs,
                 Capability::Shielding,
                 Capability::BazaarSearching,
                 Capability::DisciplineReuse,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 34);
+        assert_eq!(takp.features(&setup).len(), 37);
         // TAKP offers what Quarm does, and the bleed-out report after the
         // environmental damage.
         let mut expected = offers(quarm);
@@ -3288,17 +3348,21 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_lists_the_surname_request() {
-        // A surname stays for good, or days: each server type is listed
-        // after its own live check (6.507), and only EQEmu's handler waits
-        // for it next. P99 needs an attended run, and TAKP and Quarm theirs.
-        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Surnaming));
+    fn eqemu_and_the_mac_servers_list_the_surname_request() {
+        // A surname stays for good, or days: EQEmu after its own live check
+        // (6.507), and TAKP and Quarm from their own handlers (6.604 E5,
+        // source-derived). P99 needs an attended run.
         for protocol in [
-            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
-            ServerProtocol::EqEmuRof2,
         ] {
+            assert!(
+                offers(server_type(protocol)).contains(&Capability::Surnaming),
+                "{protocol:?}"
+            );
+        }
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmuRof2] {
             assert!(
                 !offers(server_type(protocol)).contains(&Capability::Surnaming),
                 "{protocol:?}"

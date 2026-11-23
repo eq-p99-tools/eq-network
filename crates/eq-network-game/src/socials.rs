@@ -65,6 +65,8 @@ pub const ASSIST_OPCODE: u16 = 0x7709;
 pub const YELL_OPCODE: u16 = 0x61ef;
 /// `EQMac`'s `OP_YellForHelp`.
 pub const EQMAC_YELL_OPCODE: u16 = 0xda41;
+/// `EQMac`'s `OP_Emote` (TAKP and Quarm, Mac 0x4015), both ways.
+pub const EQMAC_EMOTE_OPCODE: u16 = 0x1540;
 /// `OP_VoiceMacroOut`: a voice macro spoken to the player (Titanium).
 pub const VOICE_MACRO_OPCODE: u16 = 0x2ec6;
 /// `OP_InspectRequest`: another player asks to inspect the player
@@ -295,6 +297,59 @@ pub fn emote(text: &str) -> Result<EncodedCommand> {
         opcode: EMOTE_OPCODE,
         body,
     })
+}
+
+/// `EQMac`'s emote (6.604 E1): `Emote_Struct`, exactly 1026 bytes, a
+/// 16-bit word, 0 here, then the text, which starts with a space, as
+/// Titanium's does. TAKP's and Quarm's own `Handle_OP_Emote` drop any other
+/// length, put the player's name before the text, cut it at 512 bytes and
+/// pass the word on. What the `EQMac` program writes in the word, and
+/// whether it adds the space, is row 11a.
+///
+/// # Errors
+/// Rejects an empty emote, one the server would cut, and one with a NUL.
+pub fn eqmac_emote(text: &str) -> Result<EncodedCommand> {
+    let titanium = emote(text)?;
+    Ok(eqmac_body(0, &titanium.body[4..]))
+}
+
+/// `EQMac`'s social emote: the word 0xffff, as Titanium's social emote
+/// leads with 0xffffffff (read R47b; on `EQMac` inferred, row 11a), then
+/// the text as the worker built it.
+///
+/// # Errors
+/// Rejects an emote with no words, one the server would cut, and one with
+/// a NUL.
+pub fn eqmac_social_emote(text: &str) -> Result<EncodedCommand> {
+    let titanium = social_emote(text)?;
+    Ok(eqmac_body(u16::MAX, &titanium.body[4..]))
+}
+
+fn eqmac_body(word: u16, text: &[u8]) -> EncodedCommand {
+    let mut body = word.to_le_bytes().to_vec();
+    body.extend_from_slice(text);
+    EncodedCommand {
+        opcode: EQMAC_EMOTE_OPCODE,
+        body,
+    }
+}
+
+/// How the players near hear the player's emote on `EQMac`: the word, then
+/// the name and the text (TAKP's and Quarm's `Handle_OP_Emote`).
+#[must_use]
+pub fn eqmac_heard_emote(name: &str, text: &str) -> Vec<u8> {
+    heard_emote(name, text)[2..].to_vec()
+}
+
+/// `EQMac`'s `/yell` (6.604 E2): `OP_YellForHelp`, empty. TAKP's and
+/// Quarm's own `Handle_OP_YellForHelp` read no body; what the `EQMac`
+/// program sends is row 11b.
+#[must_use]
+pub fn eqmac_yell() -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_YELL_OPCODE,
+        body: Vec::new(),
+    }
 }
 
 /// A social emote (Titanium 0x49e0c1, read R47b): `0xffffffff`, then the
