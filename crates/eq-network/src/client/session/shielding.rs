@@ -5,8 +5,9 @@
 //! and answers each refusal, the start and the end with a line of its own,
 //! so the session adds none. It holds no pending state: each word sends one
 //! packet, paced so a held hotbutton or a script loop cannot stream them.
-//! Only stock `EQEmu` lists it, from source, not yet checked live
-//! (checklist 6.517).
+//! Stock `EQEmu` lists it from its source (checklist 6.517), and TAKP and
+//! Quarm, whose own handlers make the same checks, from theirs (6.603 G2);
+//! none is checked live yet.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -109,5 +110,32 @@ mod tests {
         };
         let sent = testing::run(|out| feature.handle(&shield(9), &mut world, out));
         assert_eq!(sent.sent.len(), 1);
+    }
+
+    #[test]
+    fn a_mac_shield_is_two_bytes_and_paced_the_same() {
+        use crate::client::{session::servers, ServerProtocol};
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+            let wire = servers::server_type(protocol).wire();
+            let mut world = World::new(5);
+            // 10 ms short of the pace: refused, nothing sent.
+            let mut feature = Shielding {
+                sent: Instant::now().checked_sub(PACE.saturating_sub(Duration::from_millis(10))),
+            };
+            let early = testing::run_on(wire, |out| feature.handle(&shield(9), &mut world, out));
+            assert!(refused(&early), "{protocol:?}");
+            // Once the pace has passed: the 2-byte `Shielding_Struct`.
+            let mut feature = Shielding {
+                sent: Instant::now().checked_sub(PACE),
+            };
+            let sent =
+                testing::run_on(wire, |out| feature.handle(&shield(0x0102), &mut world, out));
+            assert_eq!(sent.sent.len(), 1, "{protocol:?}");
+            assert_eq!(
+                (sent.sent[0].opcode, sent.sent[0].body.clone()),
+                (0x4b42, vec![0x02, 0x01]),
+                "{protocol:?}"
+            );
+        }
     }
 }

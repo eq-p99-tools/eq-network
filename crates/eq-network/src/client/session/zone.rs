@@ -974,7 +974,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 145;
+    const KINDS: usize = 146;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1063,6 +1063,7 @@ mod tests {
             ClientCommand::ClearPotionBelt { .. } => 142,
             ClientCommand::SwapBandolier { .. } => 143,
             ClientCommand::UseBeltItem(_) => 144,
+            ClientCommand::AskDisciplineReuse { .. } => 145,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1493,6 +1494,10 @@ mod tests {
             ClientCommand::Shield {
                 session_id,
                 spawn_id: 9,
+                created,
+            },
+            ClientCommand::AskDisciplineReuse {
+                session_id,
                 created,
             },
             ClientCommand::AcceptTask {
@@ -3103,7 +3108,7 @@ mod tests {
     }
 
     #[test]
-    fn emote_animations_and_disciplines_are_titanium_offers_only() {
+    fn emote_animations_are_titanium_offers_only_and_each_generation_has_its_disciplines() {
         use crate::{client::ServerProtocol, world::Capability};
         let offered = |protocol| {
             Features::new(
@@ -3120,11 +3125,18 @@ mod tests {
                 titanium.contains(&Capability::UsingDisciplines),
                 "{protocol:?}"
             );
+            assert!(
+                !titanium.contains(&Capability::DisciplineReuse),
+                "{protocol:?}"
+            );
         }
+        // TAKP's and Quarm's `/disc` by number, and the bare `/disc`
+        // (6.603 G1).
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let mac = offered(protocol);
             assert!(!mac.contains(&Capability::Emoting), "{protocol:?}");
-            assert!(!mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
+            assert!(mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
+            assert!(mac.contains(&Capability::DisciplineReuse), "{protocol:?}");
         }
     }
 
@@ -3309,59 +3321,23 @@ mod tests {
                 Capability::Meals,
                 Capability::WorldContainers,
                 Capability::GameplayDepartures,
+                Capability::UsingDisciplines,
                 Capability::FriendsWho,
                 Capability::Splitting,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters,
-                Capability::BazaarSearching
+                Capability::Shielding,
+                Capability::BazaarSearching,
+                Capability::DisciplineReuse
             ]
         );
-        assert_eq!(
-            features(crate::client::ServerProtocol::Takp),
-            [
-                Capability::Casting,
-                Capability::Spellbook,
-                Capability::Inventory,
-                Capability::Trading,
-                Capability::Giving,
-                Capability::Moving,
-                Capability::Falling,
-                Capability::Targeting,
-                Capability::Combat,
-                Capability::Looting,
-                Capability::Talking,
-                Capability::Camping,
-                Capability::Doors,
-                Capability::GroundItems,
-                Capability::Zoning,
-                Capability::Abilities,
-                Capability::Who,
-                Capability::Corpses,
-                Capability::Pets,
-                Capability::Training,
-                Capability::Resurrection,
-                Capability::Reading,
-                Capability::Tradeskills,
-                Capability::Grouping,
-                Capability::Listing,
-                Capability::Rolling,
-                Capability::Assisting,
-                Capability::EnvironmentalDamage,
-                Capability::BleedingOut,
-                Capability::Sacrifice,
-                Capability::Translocate,
-                Capability::Jumping,
-                Capability::Posture,
-                Capability::Meals,
-                Capability::WorldContainers,
-                Capability::GameplayDepartures,
-                Capability::FriendsWho,
-                Capability::Splitting,
-                Capability::ApplyingPoison,
-                Capability::ServerFilters,
-                Capability::BazaarSearching
-            ]
-        );
+        let mut expected = features(crate::client::ServerProtocol::Quarm);
+        let at = expected
+            .iter()
+            .position(|offered| *offered == Capability::EnvironmentalDamage)
+            .unwrap();
+        expected.insert(at + 1, Capability::BleedingOut);
+        assert_eq!(features(crate::client::ServerProtocol::Takp), expected);
     }
 
     #[test]
@@ -3701,6 +3677,9 @@ mod manual_combine_tests;
 
 #[cfg(test)]
 mod eqmac_tradeskill_tests;
+
+#[cfg(test)]
+mod eqmac_discipline_tests;
 
 #[cfg(test)]
 mod terminal_tests;
