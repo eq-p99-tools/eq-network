@@ -146,7 +146,10 @@ impl Feature for Transition {
         let ClientCommand::ClickDoor { door_id, .. } = *command else {
             unreachable!("only door clicks are owned");
         };
-        out.request(&Request::ClickDoor(door_id))?;
+        out.request(&Request::ClickDoor {
+            door_id,
+            held: None,
+        })?;
         match self {
             Self::Death => world.lifecycle.mark_dead(),
             Self::Departure => {

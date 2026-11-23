@@ -6,6 +6,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - Read `/played`'s three Titanium profile fields (read R49-8 a, checklist 6.490b): the account's entitled days (+0x3314), the character's creation time (+0x32ec) and its played minutes (+0x32f4), as `WorldEvent::PlayedTime` with each profile. Breaking: a new `WorldEvent` variant.
+- A Titanium door click names the item held on the cursor, as read R49-22b
+  reads the program (checklist 6.537, gap 3.4).
+  - Bytes 8 to 11 of `OP_ClickDoor` carry the cursor item's ID from the
+    session's own inventory, or -1 with nothing there or the inventory not
+    loaded.
+  - Bytes 4 to 7 carry the player's Pick Lock value (at most 254) for a
+    lockpick (item type 12, not a container), and 0 for anything else, keys
+    included.
+  - Byte 1 stays 3, as recorded: it is stack contents, not a field.
+  - Stock `EQEmu` reads none of it, so keyed doors behave as before there.
+    `EQMac` still refuses a click with an item on the cursor; RoF2 sends -1.
+  - Not yet built: trapped door types (item -1 and the Disarm Traps value;
+    the read lists only part of the types) and type 57 contact clicks.
+  - **Breaking:** `doors::titanium_click` takes `held: Option<HeldItem>`, and
+    `Request::ClickDoor` becomes `Request::ClickDoor { door_id, held }`. New:
+    `doors::{HeldItem, LOCKPICK_ITEM_TYPE}`.
 - Send and hear `/surname` as read R49-10 reads the Titanium program (6.507, the client's #616 follow-up).
   - A quoted surname's spaces now go as given; only an empty word, a control character, anything outside ASCII or 32 bytes and more are refused, in the encoder and the session alike. The session no longer trims the word.
   - Any answer word but 0 is taken (`accepted: true`), where 2 and more were refused before.

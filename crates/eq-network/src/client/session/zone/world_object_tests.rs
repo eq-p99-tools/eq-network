@@ -99,7 +99,10 @@ fn eqmac_admission_replays_state_and_offers_guarded_ordinary_door_use() {
         );
         assert_eq!(
             wire.encode(
-                &eq_network_game::request::Request::ClickDoor(3),
+                &eq_network_game::request::Request::ClickDoor {
+                    door_id: 3,
+                    held: None
+                },
                 eq_network_game::request::Sender {
                     name: "Tester",
                     spawn_id: Some(7)
