@@ -1247,6 +1247,48 @@ fn a_generation_may_fall_faster_than_the_provisional_limit() {
     assert_eq!(eqmac.position().z.to_bits(), (-20.0f32).to_bits());
 }
 #[test]
+fn a_fast_fall_keeps_its_sign_on_each_generations_wire() {
+    // 10 down in 0.1 s, 100 units a second: 5 a tick (6.617). Titanium's
+    // field is a float and holds it; the Mac-era client packs sixteenths of
+    // a tick in 11 signed bits, -64 to 63, and holds it too.
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut fall = request(now, 0.0);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -10.0;
+    let mut session = setup(start)
+        .with_falls(true)
+        .with_fall_speed(Some(super::super::EQMAC_FALL_SPEED));
+    let mut sent = None;
+    session
+        .send_move_sample(&fall, now, |sample| {
+            sent = Some(*sample);
+            Ok(())
+        })
+        .unwrap();
+    let sample = sent.unwrap();
+    assert!((sample.delta[2] + 5.0).abs() < 0.0001, "{:?}", sample.delta);
+    let packed_z = |sample: &PositionPacket| {
+        let body = crate::quarm::client_update(sample).unwrap().body;
+        let packed = u32::from_le_bytes(body[11..15].try_into().unwrap());
+        // Bits 11 to 21, sign extended.
+        #[allow(clippy::cast_possible_wrap)]
+        {
+            ((packed << 10) as i32) >> 21
+        }
+    };
+    assert_eq!(word(&sample.encode().unwrap(), 8), (-5.0f32).to_bits());
+    assert_eq!(packed_z(&sample), -80);
+    // Past what the packed field holds, it stays at its downward end, as
+    // the program clamps it, and never wraps to a rise.
+    let beyond = PositionPacket {
+        delta: [0.0, 0.0, -200.0],
+        ..sample
+    };
+    assert_eq!(packed_z(&beyond), -64 * 16);
+    assert_eq!(word(&beyond.encode().unwrap(), 8), (-200.0f32).to_bits());
+}
+#[test]
 fn a_jump_rises_past_a_step_once_the_session_announces_it() {
     let start = Instant::now();
     let now = start + Duration::from_millis(50);
