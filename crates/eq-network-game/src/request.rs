@@ -438,6 +438,8 @@ pub enum Request {
     MoveCoins(CoinTransfer),
     /// Destroy coins from the cursor.
     DestroyCoins(CoinDestroy),
+    /// A Warrior's `/shield` of this player ([`crate::shielding`]).
+    Shield(u16),
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -681,6 +683,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DropCursor => inventory::titanium_ground_drop(),
         Request::MoveCoins(transfer) => transfer.encode()?,
         Request::DestroyCoins(destroy) => destroy.encode()?,
+        Request::Shield(target) => crate::shielding::titanium_shield(*target)?,
         Request::Consume {
             slot,
             meal,
@@ -952,6 +955,15 @@ mod tests {
         };
         assert!(eqmac(&Request::BledOut { level: 34 }, unspawned).is_err());
         assert!(titanium(&Request::BledOut { level: 34 }, PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_sends_a_shield() {
+        let packet = titanium(&Request::Shield(42), PLAYER).unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x3fe6, vec![42, 0, 0, 0]));
+        assert!(titanium(&Request::Shield(0), PLAYER).is_err());
+        // No EQMac opcode is known yet (6.517).
+        assert!(eqmac(&Request::Shield(42), PLAYER).is_err());
     }
 
     #[test]
