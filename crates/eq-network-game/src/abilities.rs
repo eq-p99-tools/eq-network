@@ -44,9 +44,9 @@ const TREASURE_SENSE_TRAPS_OPCODE: u16 = 0x07a8;
 const TREASURE_DISARM_TRAPS_OPCODE: u16 = 0x41b9;
 /// And its Pick Lock, which sends nothing anywhere else.
 const TREASURE_PICK_LOCK_OPCODE: u16 = 0x069d;
-/// The class the Titanium program sends its treasure messages for: a class
-/// byte (read R15b), which `EQEmu` calls `LDoN` treasure (recording checklist
-/// 6.432, inferred).
+/// The class the Titanium program sends its treasure messages for: the
+/// target's class byte, spawn +0x252 from the spawn record's byte +0x14b
+/// (reads R15b, R49-31 c), which `EQEmu` calls `LDoN` treasure.
 pub const TREASURE_CLASS: u8 = 62;
 
 /// `OP_CancelSneakHide`: the server ended the player's hiding and sneaking.

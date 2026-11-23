@@ -15,6 +15,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is the host's to build (row 10c). Its 10-second reuse is the program's
   own (read 10e). `abilities::eqmac::SUPPORTED` grows to 16; not breaking
   beyond that constant's length.
+- Begging and Pick Pockets reach as the Titanium program measures them
+  (read R49-31 b, checklist 6.631): from origin to origin, flat in (x, y),
+  height ignored, at most 15, rather than the bandage's reach. **Breaking:**
+  `Reaches` gains a public field, `beg_pick`; code that builds a `Reaches`
+  by literal must add it. The Mac-era program keeps the bandage's reach
+  until it is read. P99 sees only this reach change: its world's ruleset
+  isn't 4, so the ruleset-4 player lines don't apply there.
+- Pick Pockets on a corpse, or any target that is neither a player nor an
+  NPC, is refused with the program's line 0x3076 (read R49-31 e) rather
+  than this library's own words. Begging's invisibility test and the trap
+  skills' class 62 are now read (R49-31 a, c), no longer inferred.
+- Train languages on TAKP and Quarm as the `EQMac` program does (read
+  6.597, from TAKP 44afcbf and Quarm fc75fcf `IncreaseLanguageSkill`).
+  - New: `training::{LanguageLevels, EQMAC_TABLE_LANGUAGES,
+    EQMAC_TABLE_RACES, eqmac_language_trainable, eqmac_program_cost}` and
+    `ClientConfig::installed_language_levels`, the program's minimum-level
+    table a host reads from the installed program. No table values are
+    kept here; without one, language training stays shut.
+  - The offer lists the languages the player speaks; a practice runs the
+    program's gate in its order and refuses with its lines (0x327c to
+    0x327f, 0x2f21), sending nothing; a sent practice is resolved at once
+    as the program does, a prediction the next profile replaces.
+  - **Breaking:** `WorldEvent::TrainingRefused` gains `string_id` and
+    `arguments`.
+  - Source-derived, not live; the first public use is attended.
 
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
