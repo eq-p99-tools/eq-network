@@ -172,6 +172,8 @@ pub enum Request {
     SetAnonymity(Anonymity),
     /// Whether the player's helm shows to others.
     ShowHelm(bool),
+    /// Say the player looks for a group (true), or no longer.
+    SetLooking(bool),
     /// Say the player is seen again, as a Titanium client answers the
     /// server's end of its hiding: its own appearance, invisibility 0
     /// ([`abilities::titanium_unhide`]).
@@ -436,6 +438,8 @@ pub enum Request {
     MoveCoins(CoinTransfer),
     /// Destroy coins from the cursor.
     DestroyCoins(CoinDestroy),
+    /// A Warrior's `/shield` of this player ([`crate::shielding`]).
+    Shield(u16),
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -562,6 +566,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             listing::titanium_anonymity(sender.spawn(), *anonymity)?
         }
         Request::ShowHelm(show) => listing::titanium_show_helm(sender.spawn(), *show)?,
+        Request::SetLooking(on) => listing::titanium_looking(*on),
         Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
         Request::YellForHelp => socials::titanium_yell(),
         Request::EmoteAnimation(animation) => {
@@ -678,6 +683,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DropCursor => inventory::titanium_ground_drop(),
         Request::MoveCoins(transfer) => transfer.encode()?,
         Request::DestroyCoins(destroy) => destroy.encode()?,
+        Request::Shield(target) => crate::shielding::titanium_shield(*target)?,
         Request::Consume {
             slot,
             meal,
@@ -817,6 +823,17 @@ mod tests {
     };
 
     #[test]
+    fn lfg_goes_only_on_titanium() {
+        assert_eq!(
+            titanium(&Request::SetLooking(true), PLAYER).unwrap(),
+            crate::listing::titanium_looking(true)
+        );
+        // TAKP's `OP_LFGCommand` is a world-stage message of its own, not
+        // read (checklist 6.515).
+        assert!(eqmac(&Request::SetLooking(true), PLAYER).is_err());
+    }
+
+    #[test]
     fn eqmac_trades_in_its_own_bodies_naming_the_partner() {
         assert_eq!(
             eqmac(&Request::Trade(42), PLAYER).unwrap(),
@@ -938,6 +955,15 @@ mod tests {
         };
         assert!(eqmac(&Request::BledOut { level: 34 }, unspawned).is_err());
         assert!(titanium(&Request::BledOut { level: 34 }, PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_sends_a_shield() {
+        let packet = titanium(&Request::Shield(42), PLAYER).unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x3fe6, vec![42, 0, 0, 0]));
+        assert!(titanium(&Request::Shield(0), PLAYER).is_err());
+        // No EQMac opcode is known yet (6.517).
+        assert!(eqmac(&Request::Shield(42), PLAYER).is_err());
     }
 
     #[test]

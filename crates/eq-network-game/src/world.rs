@@ -676,12 +676,17 @@ pub enum Capability {
     /// Destroying coins from the cursor
     /// ([`crate::command::GameCommand::DestroyCoins`]).
     DestroyingCoins,
+    /// Saying the player looks for a group, `/lfg` ([`crate::listing`]).
+    LookingForGroup,
+    /// A Warrior's `/shield` of another player
+    /// ([`crate::command::GameCommand::Shield`]).
+    Shielding,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 79] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -759,6 +764,8 @@ impl Capability {
         Self::SendingFeedback,
         Self::ChatChannels,
         Self::DestroyingCoins,
+        Self::LookingForGroup,
+        Self::Shielding,
     ];
 }
 
@@ -2603,6 +2610,8 @@ mod tests {
             Capability::SendingFeedback => 74,
             Capability::ChatChannels => 75,
             Capability::DestroyingCoins => 76,
+            Capability::LookingForGroup => 77,
+            Capability::Shielding => 78,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

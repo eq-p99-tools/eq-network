@@ -1564,6 +1564,21 @@ identity and caller stamp without accepting old motion or reasserting policy
 on every render frame.
 
 
+## Looking for a group
+
+Where the server type takes `/lfg` (`Capability::LookingForGroup`: stock
+`EQEmu` so far, from its source and not yet checked live), send
+`GameCommand::LookForGroup` with `on: Some(true)` or `Some(false)` to set
+the flag, or `None` to turn it over. The session sends Titanium's 80-byte
+`OP_LFGCommand` with only the flag set; no level range or comment. `EQEmu`
+tells every other client and never the sender, so the session keeps the
+player's flag itself: from the admission's spawn record, then each change it
+sent, or the server's own word for the player's spawn. A change is told with
+`WorldEvent::ListingSet { change: ListingChange::Looking(on) }`; asking for
+the state the player is already in sends again but tells nothing. Two
+changes are at least 500 ms apart; a refusal is
+`WorldEvent::ListingRefused` and sends nothing (checklist 6.515).
+
 ## Duel challenges
 
 Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
@@ -1593,6 +1608,19 @@ nothing is sent. Both bounds and every refusal line are this crate's,
 pending a read of the program (checklist 6.492b). The server says its own
 line when the other player is considering another duel or the player has
 already accepted one.
+
+## Shielding
+
+Where the server type takes `/shield` (`Capability::Shielding`: stock
+`EQEmu` so far, from its source and not yet checked live), send
+`GameCommand::Shield` with the spawn id of the player to shield. The server
+checks the level (30), the class (Warrior), its rule, the 3-minute recast,
+the target (no NPC, not oneself) and the distance (15), and answers each
+refusal, the start and the end with a line of its own; nothing answers on
+`OP_Shielding`. The session refuses only spawn id 0 and a shield within
+500 ms of the last one (`WorldEvent::SocialRefused`, nothing sent). Checks
+the original makes before it sends (oneself, the class, the level) are the
+host's: they may only be stricter than the server's.
 
 ## Surnames
 

@@ -40,7 +40,7 @@ use super::{
     hazards::Hazards,
     hiding::HideAnswer,
     inventory::{Allowances, Belongings},
-    listing::{Helm, Listing},
+    listing::{Helm, Listing, Looking},
     looting::Looting,
     map::Map,
     motion::Motion,
@@ -51,6 +51,7 @@ use super::{
     raids::Raids,
     reading::Reading,
     resurrection::Resurrection,
+    shielding::Shielding,
     socials::{Socials, Surnames},
     spellbook::{Edits, Spellbook},
     talk::Talk,
@@ -494,6 +495,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// A Warrior's `/shield` of another player.
+    fn shielding(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -519,6 +525,11 @@ pub(super) trait ServerType: Sync {
     /// Showing or hiding the player's helm, where the client generation has
     /// the option.
     fn helm(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Saying the player looks for a group, `/lfg` (checklist 6.515).
+    fn looking(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -611,11 +622,13 @@ pub(super) trait ServerType: Sync {
             self.listing(setup),
             self.socials(setup),
             self.surnames(setup),
+            self.shielding(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
             self.ticks(setup),
             self.helm(setup),
+            self.looking(setup),
             self.reports(setup),
             self.dialogs(),
             self.channels(setup),
@@ -717,8 +730,8 @@ mod shared {
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect,
         GroundObjects, Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing,
-        Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids,
-        Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
+        Looking, Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes,
+        Raids, Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
         Targeting, Ticks, Tradeskills, Training, Transfers, Translocate, Who,
     };
 
@@ -895,6 +908,10 @@ mod shared {
 
     pub(super) fn helm() -> Box<dyn Feature> {
         Box::new(Helm)
+    }
+
+    pub(super) fn looking() -> Box<dyn Feature> {
+        Box::<Looking>::default()
     }
 
     pub(super) fn raids() -> Box<dyn Feature> {
@@ -1485,6 +1502,13 @@ impl ServerType for EqEmu {
         offer(shared::helm())
     }
 
+    /// Titanium's `OP_LFGCommand` as `Client::Handle_OP_LFGCommand` reads
+    /// it, from source; not yet checked live (checklist 6.515). P99, TAKP
+    /// and Quarm wait for their own checks.
+    fn looking(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::looking())
+    }
+
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
     /// no handler there.
     fn reports(&self, _setup: &Setup<'_>) -> Provided {
@@ -1504,6 +1528,13 @@ impl ServerType for EqEmu {
     /// answer are built and listed by no server type.
     fn surnames(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Surnames>::default())
+    }
+
+    /// Sent as `Client::Handle_OP_Shielding` reads it, from source; not
+    /// yet checked live (checklist 6.517). P99 waits for an attended check,
+    /// and TAKP and Quarm for theirs: no `EQMac` encoder is built.
+    fn shielding(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Shielding>::default())
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -2539,7 +2570,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 48),
+            (ServerProtocol::EqEmu, 50),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2556,6 +2587,7 @@ mod tests {
             Capability::BoatControl,
             Capability::Petitioning,
             Capability::ReportingBugs,
+            Capability::LookingForGroup,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
@@ -2620,6 +2652,24 @@ mod tests {
         ] {
             assert!(
                 !offers(server_type(protocol)).contains(&Capability::Surnaming),
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_eqemu_lists_shielding() {
+        // From `EQEmu`'s source alone (6.517): P99 waits for an attended
+        // run, TAKP and Quarm for theirs, and RoF2 for its own wire.
+        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Shielding));
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::Shielding),
                 "{protocol:?}"
             );
         }

@@ -5,6 +5,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A Warrior's `/shield` of another player (gap 3.6, checklist 6.517).
+  `GameCommand::Shield` sends Titanium's 4-byte `OP_Shielding` (0x3fe6), the
+  target's spawn id widened to 32 bits, as stock `EQEmu`'s
+  `Client::Handle_OP_Shielding` reads it (`Shielding_Struct`). The server
+  checks the level, class, rule, recast, target and distance and answers
+  each with a line we already read, so nothing new is decoded. The session
+  keeps no pending state: it refuses spawn id 0 and a second shield within
+  500 ms (`SocialRefused`, nothing sent). Only stock `EQEmu` offers the new
+  `Capability::Shielding`: P99 waits for an attended check, TAKP and Quarm
+  for their own (no `EQMac` opcode is known, and the `EQMac` encoder refuses
+  it), and RoF2 sends nothing yet.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request` and
+  `Capability` (`Capability::ALL` holds 79; command kind 124), and the new
+  `shielding` module.
+- Say the player looks for a group with `/lfg` (gap 3.6, checklist 6.515).
+  `GameCommand::LookForGroup { session_id, on }` sends Titanium's
+  `OP_LFGCommand` (0x68ac), 80 bytes with only the flag set
+  (`listing::titanium_looking`), as `Client::Handle_OP_LFGCommand` reads
+  it, under the new `Capability::LookingForGroup`, which only stock `EQEmu`
+  lists (from source, not yet checked live). The server tells the sender
+  nothing, so the session keeps the flag from the admission's spawn record
+  and each change sent, tells a change with `ListingSet`, and paces two
+  changes 500 ms apart. `EQMac` refuses. **Breaking:** new variants on the
+  exhaustive `GameCommand`, `Request` and `Capability` (`Capability::ALL`
+  holds 78).
 - Read RoF2's spawn movement and removal as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.514). `rof2_player::position` reads the
   24-byte `OP_ClientUpdate` (0x7dfc), which RoF2 gets unencoded, into

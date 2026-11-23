@@ -826,6 +826,15 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Say the player looks for a group, or no longer: `/lfg`. `on` sets
+    /// it; None turns it the other way (checklist 6.515, the word forms
+    /// pending R49-6i).
+    LookForGroup {
+        /// Current zone admission.
+        session_id: u64,
+        /// The state asked for, or None to turn it over.
+        on: Option<bool>,
+    },
     /// Turn away from the keyboard, or back: `/afk`.
     ToggleAway {
         /// Current zone admission.
@@ -1100,6 +1109,17 @@ pub enum GameCommand {
         /// When the player requested the action.
         created: std::time::Instant,
     },
+    /// A Warrior's `/shield` of another player
+    /// ([`crate::shielding`]). The server checks the level, class, recast,
+    /// target and distance, and answers each case with a line of its own.
+    Shield {
+        /// Current zone admission.
+        session_id: u64,
+        /// The player to shield.
+        spawn_id: u16,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -1232,6 +1252,7 @@ impl GameCommand {
             Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
             Self::UseKnightAbility { .. } => "UseKnightAbility",
+            Self::Shield { .. } => "Shield",
             Self::UseDiscipline { .. } => "UseDiscipline",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
@@ -1255,6 +1276,7 @@ impl GameCommand {
             Self::DeclineGroup { .. } => "DeclineGroup",
             Self::Disband { .. } => "Disband",
             Self::ToggleAway { .. } => "ToggleAway",
+            Self::LookForGroup { .. } => "LookForGroup",
             Self::ToggleAnonymous { .. } => "ToggleAnonymous",
             Self::ToggleRoleplay { .. } => "ToggleRoleplay",
             Self::ShowHelm { .. } => "ShowHelm",
@@ -1361,6 +1383,7 @@ impl GameCommand {
             | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::UseKnightAbility { session_id, .. }
+            | Self::Shield { session_id, .. }
             | Self::UseDiscipline { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
@@ -1387,6 +1410,7 @@ impl GameCommand {
             | Self::DeclineGroup { session_id, .. }
             | Self::Disband { session_id }
             | Self::ToggleAway { session_id }
+            | Self::LookForGroup { session_id, .. }
             | Self::ToggleAnonymous { session_id }
             | Self::ToggleRoleplay { session_id }
             | Self::ShowHelm { session_id, .. }
@@ -1517,6 +1541,7 @@ impl GameCommand {
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
+            Self::Shield { .. } => Capability::Shielding,
             Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
             Self::WhoFriends { .. } => Capability::FriendsWho,
@@ -1548,6 +1573,7 @@ impl GameCommand {
             Self::ToggleAway { .. }
             | Self::ToggleAnonymous { .. }
             | Self::ToggleRoleplay { .. } => Capability::Listing,
+            Self::LookForGroup { .. } => Capability::LookingForGroup,
             Self::ShowHelm { .. } => Capability::ShowingHelm,
             Self::Random { .. } => Capability::Rolling,
             Self::Surname { .. } => Capability::Surnaming,
@@ -1614,6 +1640,7 @@ impl GameCommand {
             | Self::DeclineGroup { .. }
             | Self::Disband { .. }
             | Self::ToggleAway { .. }
+            | Self::LookForGroup { .. }
             | Self::ToggleAnonymous { .. }
             | Self::ToggleRoleplay { .. }
             | Self::ShowHelm { .. }
@@ -1700,6 +1727,7 @@ impl GameCommand {
             | Self::ChatChannel { created, .. }
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
+            | Self::Shield { created, .. }
             | Self::UseDiscipline { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
@@ -1908,6 +1936,7 @@ pub fn encode(
         | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::UseKnightAbility { .. }
+        | GameCommand::Shield { .. }
         | GameCommand::UseDiscipline { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
@@ -1933,6 +1962,7 @@ pub fn encode(
         | GameCommand::DeclineGroup { .. }
         | GameCommand::Disband { .. }
         | GameCommand::ToggleAway { .. }
+        | GameCommand::LookForGroup { .. }
         | GameCommand::ToggleAnonymous { .. }
         | GameCommand::ToggleRoleplay { .. }
         | GameCommand::ShowHelm { .. }
