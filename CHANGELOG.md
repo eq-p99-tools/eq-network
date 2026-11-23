@@ -13,6 +13,33 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   720-slot book where Titanium's is 400. A bar refresh carries the server's
   casting slot and reduction. Coverage lists the three. An admitted RoF2
   session hands the host each and still sends and offers nothing.
+
+- Measure a Titanium door click from the point clicked on the door
+  (checklist 6.530, read R16b and R16e). `GameCommand::ClickDoor` gains
+  `point: Option<Position>`, where the host's click ray hit the door's
+  model as drawn. With a point, the session admits the click when the
+  point is no more than the player's size and 20 from the player in 3-D
+  (`doors::Doors::check_click_at`, `doors::Clicked`), so a lift resting
+  above can be called from its deck by the part clicked. The size is the
+  own spawn's as the server told it; where that is 0 or unheard, `EQEmu`'s
+  race size (inferred); 0 for an unlisted race. A point that is not finite
+  or lies more than 200 and the size from the door is refused in our own
+  words (our guard). With no point the origin rule is unchanged, and
+  `EQMac` ignores the point. Melee reach takes the player's size from the
+  same helper, with the same numbers.
+  **Breaking:** a new field on `GameCommand::ClickDoor`.
+
+- A boat take asked again while one is pending goes again (6.533). The
+  program sets nothing before a take's echo, so its held-boat test
+  (`[0x905cf8]` in 0x4a7356) fails while the take waits and a second
+  interaction sends a second take; gate 0x494c09 passes on a race-141 carrier
+  before its busy checks. That is inferred from read R35's pieces in
+  combination, not read as one path. The session now sends the same 8-byte
+  `OP_ControlBoat` take for the same incarnation, leaving the pending entry,
+  its 5 s deadline and the fence as the first take set them, so repeated
+  clicks never extend the wait; stock `EQEmu` echoes each take, one echo
+  grants and later ones change nothing. A take for another vessel while one
+  is pending stays refused.
 - Read RoF2's buffs as stock `EQEmu` sends them, labelled inferred for
   RoF2 (6.527). The new `rof2_buffs` module reads `OP_Buff` (0x659c, 100
   bytes) into Titanium's `BuffUpdate`: fade word 1 is `FadeBySpell` and 2

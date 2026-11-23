@@ -1186,6 +1186,7 @@ mod tests {
             ClientCommand::ClickDoor {
                 session_id,
                 door_id: 1,
+                point: None,
                 created,
             },
             ClientCommand::PickUp {
@@ -2823,6 +2824,7 @@ mod tests {
             let click = ClientCommand::ClickDoor {
                 session_id: 5,
                 door_id: 3,
+                point: None,
                 created: Instant::now(),
             };
             assert_eq!(
@@ -2852,6 +2854,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
+            point: None,
             created: Instant::now(),
         };
         let mut world = World::new(5);

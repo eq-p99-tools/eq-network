@@ -468,6 +468,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| camp.notice(&click, &mut world, out));
@@ -495,6 +496,7 @@ mod tests {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
+            point: None,
             created: Instant::now(),
         };
         let stand = ClientCommand::SetPosture {
