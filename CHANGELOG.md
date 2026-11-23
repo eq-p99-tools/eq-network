@@ -36,6 +36,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     chat line with the server's string number and color. Before, it was
     dropped.
 
+- A jump never stands a seated player or ends a feign held standing (6.599,
+  Adam 11-23).
+  - **Seated jump:** a sitting or looting player's `Jump` is refused with a
+    diagnostic, and nothing is sent or stood, as Titanium's jump waits on
+    the can-move flag (read R19 c, 0x4a1d74). The Mac-era client is inferred
+    the same, and a read is requested. New: `feign::{JumpGate, TITANIUM_JUMP,
+    EQMAC_JUMP}` and `GameDialect::jump_gate()`.
+  - **Feign held standing:** with Move While Feigned (6.454), the press or a
+    feign spell's landing reports the new `WorldEvent::FeignHeld(true)`. Any
+    posture sent or reported, or death, reports `FeignHeld(false)`, before
+    that posture's own report. A camp's owed stand reports none. Hosts drop
+    the jump's crouch posture reports while a feign is held. The jump
+    request alone clears no feign on EQEmu (1d9cb5c), Quarm (fc75fcf) or
+    TAKP (44afcbf).
+  - `FeignHeld(true)` means pressed or landed and held, not that the roll
+    succeeded: after a failed feign it stays true until the next posture,
+    and a standing-still jump in that window skips its crouch reports too
+    (row 6.599a).
+  - **Breaking:** `WorldEvent` gains `FeignHeld(bool)`.
+
 - Read TAKP's and Quarm's boat control (6.602), from their own
   `Handle_OP_ControlBoat` (Quarm fc75fcf, TAKP 44afcbf). Neither server type
   offers `BoatControl` or `BoatRiding` yet: both wait for the `EQMac`
