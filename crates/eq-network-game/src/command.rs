@@ -1577,6 +1577,7 @@ fn encode_cast(
     match dialect {
         GameDialect::Titanium => Ok(crate::spells::titanium_cast(gem, spell_id, target_id)),
         GameDialect::EqMac => crate::spells::eqmac_cast(gem, spell_id, target_id),
+        GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     }
 }
 
@@ -1698,6 +1699,7 @@ pub fn encode(
                 opcode: crate::items::EQMAC_LINK_OPCODE,
                 body: crate::items::eqmac_request(link_body)?.to_vec(),
             },
+            GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
         }),
         GameCommand::SelectTarget { spawn_id, .. } => encode_target(dialect, *spawn_id),
         GameCommand::Consider { .. } | GameCommand::AutoAttack { .. } => {
@@ -1808,6 +1810,7 @@ pub fn encode(
                 opcode: match dialect {
                     GameDialect::Titanium => 0x1004,
                     GameDialect::EqMac => 0x0741,
+                    GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
                 },
                 body: chat::encode_outbound_for(dialect, message, character)?,
             })
@@ -1832,6 +1835,7 @@ fn encode_target(dialect: GameDialect, spawn_id: Option<u16>) -> Result<EncodedC
             opcode: 0x6241,
             body: target.to_le_bytes().to_vec(),
         },
+        GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     })
 }
 
@@ -1865,6 +1869,7 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
     match dialect {
         GameDialect::Titanium => {}
         GameDialect::EqMac => anyhow::bail!("posture is not implemented for this dialect"),
+        GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     }
     anyhow::ensure!(spawn_id != 0, "posture requires an own-spawn ID");
     let mut body = spawn_id.to_le_bytes().to_vec();
@@ -1882,6 +1887,7 @@ fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCo
     match dialect {
         GameDialect::Titanium => {}
         GameDialect::EqMac => return encode_eqmac_trade(command),
+        GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
     }
     let (opcode, body) = match command {
         GameCommand::Loot { corpse_id, .. } => (
@@ -1961,11 +1967,13 @@ fn encode_combat(dialect: GameDialect, command: &GameCommand) -> Result<EncodedC
                 opcode: combat::EQMAC_CONSIDER_OPCODE,
                 body: combat::eqmac_consider_request(*own_id, *target_id)?.to_vec(),
             },
+            GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
         }),
         (dialect, GameCommand::AutoAttack { enabled, .. }) => Ok(EncodedCommand {
             opcode: match dialect {
                 GameDialect::Titanium => combat::AUTO_ATTACK_OPCODE,
                 GameDialect::EqMac => combat::EQMAC_AUTO_ATTACK_OPCODE,
+                GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
             },
             body: combat::auto_attack(*enabled).to_vec(),
         }),

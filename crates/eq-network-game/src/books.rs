@@ -197,7 +197,8 @@ impl BookText {
         match (dialect, self.kind) {
             (GameDialect::Titanium | GameDialect::EqMac, 0) => Some(ReadingWindow::Note),
             (GameDialect::Titanium, 1) | (GameDialect::EqMac, _) => Some(ReadingWindow::Book),
-            (GameDialect::Titanium, _) => None,
+            // RoF2's kinds are not read yet.
+            (GameDialect::Titanium | GameDialect::Rof2, _) => None,
         }
     }
 }

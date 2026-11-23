@@ -23,6 +23,7 @@ structured, with item-link data, for consumers that only talk.
 | `EqEmu` | Titanium | A stock EQEmu server |
 | `Quarm` | Windows TAKP/`EQMac` | Project Quarm |
 | `Takp` | Windows TAKP/`EQMac` | A stock TAKP server |
+| `EqEmuRof2` | RoF2 (placeholder) | Nothing yet: a configuration naming it is refused before anything is sent, and it has no name to choose it by |
 
 Each server type names the client generation's wire it speaks and provides the
 features it offers. Every session reports the `Capability` values it offers,

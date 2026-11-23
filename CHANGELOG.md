@@ -5,6 +5,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add RoF2 as a placeholder client generation and server type, so each
+  decision a third generation needs has an answer before any of it is built.
+  `GameDialect::Rof2` and `ServerProtocol::EqEmuRof2` (stock `EQEmu` with the
+  RoF2 client) exist, and nothing pretends they work. A configuration naming
+  `EqEmuRof2` is refused when the client is made, before a socket opens. Its
+  wire keeps every refusing default, its server type offers no features, and
+  it has no `FromStr` name, so `EQ_PROTOCOL` and similar settings cannot
+  choose it. Every packet layout refuses it ("not built for RoF2 yet"). Each
+  program rule without a read is absent (`None`), or Titanium's value on an
+  arm of its own marked `inferred for RoF2 (6.489)`; grep that token for the
+  owed reads. `Wire::reaches()` and `Wire::window_closes()` lose their
+  Titanium defaults, so each generation states its own. Titanium and `EQMac`
+  answer as before. **Breaking:** the new variants on both exhaustive enums.
+
 - Make every client-generation and server-type decision exhaustive, so a
   third generation (such as RoF2) or a new server type breaks each place
   that must decide what it does, instead of taking another generation's

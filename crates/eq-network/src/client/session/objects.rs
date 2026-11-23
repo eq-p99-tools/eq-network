@@ -50,11 +50,17 @@ impl Default for GroundObjects {
 impl GroundObjects {
     /// The generation's pickup result ownership. Server policy chooses this
     /// when offering the feature; no `EQMac` capability is enabled by decoding.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub(super) fn for_generation(generation: eq_network_game::GameDialect) -> Self {
         Self {
             results: match generation {
                 eq_network_game::GameDialect::EqMac => PickupResults::SeparateCursorDelivery,
                 eq_network_game::GameDialect::Titanium => PickupResults::Existing,
+                // Titanium's, inferred for RoF2 (6.489).
+                eq_network_game::GameDialect::Rof2 => PickupResults::Existing,
             },
         }
     }

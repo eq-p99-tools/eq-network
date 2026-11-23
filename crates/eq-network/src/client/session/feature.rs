@@ -302,19 +302,25 @@ impl World {
             local_eqemu: config.local_only
                 && match config.protocol {
                     ServerProtocol::EqEmu => true,
-                    ServerProtocol::Project1999 | ServerProtocol::Quarm | ServerProtocol::Takp => {
-                        false
-                    }
+                    // RoF2's server type offers no local fixtures yet.
+                    ServerProtocol::Project1999
+                    | ServerProtocol::Quarm
+                    | ServerProtocol::Takp
+                    | ServerProtocol::EqEmuRof2 => false,
                 },
             sight: super::sight::Sight::new(config.sight_catalog.clone().filter(|_| {
                 match GameDialect::from(config.protocol) {
                     GameDialect::Titanium => true,
-                    GameDialect::EqMac => false,
+                    // RoF2's vision spells are not read yet.
+                    GameDialect::EqMac | GameDialect::Rof2 => false,
                 }
             })),
             pad_boundaries: match config.protocol {
                 ServerProtocol::Project1999 => config.installed_zone_boundaries.clone(),
-                ServerProtocol::EqEmu | ServerProtocol::Quarm | ServerProtocol::Takp => None,
+                ServerProtocol::EqEmu
+                | ServerProtocol::Quarm
+                | ServerProtocol::Takp
+                | ServerProtocol::EqEmuRof2 => None,
             },
             ..Self::new(session_id)
         }

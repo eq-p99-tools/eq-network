@@ -104,6 +104,10 @@ const SELECT_A_TARGET: u32 = 5825;
 const OUT_OF_REACH: u32 = 124;
 
 /// Why the player cannot use the ability on their target, if they cannot.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn target_refusal(
     ability: Ability,
     dialect: GameDialect,
@@ -134,10 +138,16 @@ fn target_refusal(
     // Taunt reaches 150 units, and the server says so itself beyond that.
     match dialect {
         GameDialect::Titanium if !ability.strikes() => return None,
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 if !ability.strikes() => return None,
         GameDialect::Titanium | GameDialect::EqMac => {}
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => {}
     }
     match dialect {
         GameDialect::Titanium => {}
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => {}
         GameDialect::EqMac => {
             return (!eqmac::in_melee_range(position, target.position)).then(|| {
                 Refusal::official("Your target is out of reach", OUT_OF_REACH, Vec::new())
@@ -192,6 +202,10 @@ impl Abilities {
 
     /// The admitted player and where they are, if the server type lists the
     /// ability and the player has it.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn usable<'w>(
         &self,
         ability: Ability,
@@ -207,6 +221,8 @@ impl Abilities {
         let skills = player.skills.as_deref().unwrap_or_default();
         let known = match dialect {
             GameDialect::Titanium => ability.known(skills, player.race),
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => ability.known(skills, player.race),
             GameDialect::EqMac => eqmac::known(ability, skills, player.race, player.class),
         };
         if !known {
@@ -225,6 +241,10 @@ impl Abilities {
 
     /// The target the ability's packet names, which only a strike or taunt
     /// needs, or why the player cannot use it now.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn aim(
         &self,
         ability: Ability,
@@ -235,6 +255,8 @@ impl Abilities {
         let ((own_id, position), player) = self.usable(ability, world, dialect)?;
         match dialect {
             GameDialect::Titanium => {}
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => {}
             GameDialect::EqMac => {
                 self.eqmac_refusal(ability, world, player)?;
             }
@@ -587,7 +609,8 @@ impl Feature for Abilities {
         }
         let titanium = match out.wire.dialect() {
             GameDialect::Titanium => true,
-            GameDialect::EqMac => false,
+            // RoF2's class tools are not read yet.
+            GameDialect::EqMac | GameDialect::Rof2 => false,
         };
         if titanium && class_tools::checks(ability) {
             return self.use_class_tool(

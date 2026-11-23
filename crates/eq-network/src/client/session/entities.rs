@@ -362,6 +362,10 @@ impl Feature for Entities {
     }
 
     /// Keeps the table current; a corpse keeps its spawn ID.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn observe(
         &mut self,
         message: &Message,
@@ -385,6 +389,8 @@ impl Feature for Entities {
         }
         let sneak_ends_itself = match self.dialect {
             GameDialect::Titanium => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => false,
             GameDialect::EqMac => true,
         };
         if sneak_ends_itself && matches!(event, WorldEvent::HideAndSneakEnded) {

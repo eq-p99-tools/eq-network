@@ -324,6 +324,12 @@ impl Wire for RefusePosition {
     fn dialect(&self) -> GameDialect {
         GameDialect::EqMac
     }
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        EqMac.window_closes()
+    }
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        EqMac.reaches()
+    }
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         if matches!(request, Request::Position(_)) {
             anyhow::bail!("synthetic position codec refusal");
@@ -335,6 +341,12 @@ impl Wire for RefusePosition {
 impl Wire for RefuseCamp {
     fn dialect(&self) -> GameDialect {
         GameDialect::EqMac
+    }
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        EqMac.window_closes()
+    }
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        EqMac.reaches()
     }
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         if matches!(request, Request::Camp) {
@@ -684,6 +696,12 @@ struct RefuseTitaniumPosition;
 impl Wire for RefuseTitaniumPosition {
     fn dialect(&self) -> GameDialect {
         GameDialect::Titanium
+    }
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        Titanium.window_closes()
+    }
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        Titanium.reaches()
     }
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         if matches!(request, Request::Position(_)) {
