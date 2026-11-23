@@ -111,6 +111,25 @@ fn began(spell_id: u32, duration_ms: u32) -> Message {
     }))
 }
 
+/// The songs whose stop the host heard of, each with the program's line.
+fn stops(output: &testing::Outcome<Result<()>>) -> Vec<u32> {
+    output
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ClientEvent::World(WorldEvent::SongStopped {
+                spell_id,
+                string_id,
+                ..
+            }) => {
+                assert_eq!(*string_id, 0x318f);
+                Some(*spell_id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn mana_ended(spell_id: u32) -> Message {
     Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
         spell_id,
@@ -277,10 +296,15 @@ fn a_gem_click_while_singing_stops_the_song_and_casts_nothing() {
     assert_eq!(output.sent.len(), 1);
     assert_eq!(output.sent[0].opcode, 0x4839);
     assert_eq!(output.sent[0].body, [] as [u8; 0]);
+    // The host hears the stop with the program's line, and no refusal.
+    assert_eq!(stops(&output), [SONG]);
+    assert!(!output
+        .events
+        .iter()
+        .any(|event| matches!(event, ClientEvent::World(WorldEvent::CastRejected { .. }))));
     assert!(output.events.iter().any(|event| matches!(
         event,
-        ClientEvent::World(WorldEvent::CastRejected { spell_id: OTHER_SONG, reason, .. })
-            if reason == SONG_STOPPED
+        ClientEvent::Diagnostic(text) if text == SONG_STOPPED
     )));
     assert_eq!(bard.casting.song, None);
     // The next click casts.
@@ -310,9 +334,12 @@ fn a_forgets_answer_stops_the_song_and_a_memorizes_leaves_it() {
     let output = bard.hear(&gem_answer(2));
     assert_eq!(output.sent.len(), 1);
     assert_eq!(output.sent[0].opcode, 0x4839);
+    assert_eq!(stops(&output), [SONG]);
     assert_eq!(bard.casting.song, None);
-    // With no song, a forget's answer sends nothing.
-    assert_eq!(bard.hear(&gem_answer(2)).sent, []);
+    // With no song, a forget's answer sends nothing and says nothing.
+    let output = bard.hear(&gem_answer(2));
+    assert_eq!(output.sent, []);
+    assert_eq!(stops(&output), Vec::<u32>::new());
 
     let mut mac = Singer::new(Casting::with_song_stop(), BARD_CLASS);
     mac.sing();
@@ -373,4 +400,33 @@ fn a_melody_step_the_stop_then_the_next_gem_casts() {
     assert_eq!(output.sent.len(), 1);
     assert_ne!(output.sent[0].opcode, 0x4839);
     assert_eq!(bard.casting.guard.pending(), Some(OTHER_SONG));
+}
+
+#[test]
+fn each_stop_says_the_programs_line_and_the_mac_rules_say_none() {
+    // The player's own stop.
+    let mut bard = Singer::titanium_bard();
+    bard.sing();
+    let output = bard.run(&ClientCommand::StopSong {
+        session_id: bard.world.session_id,
+        created: std::time::Instant::now(),
+    });
+    assert_eq!(stops(&output), [SONG]);
+    // The server's cast update ending the song (mode 3).
+    let mut bard = Singer::titanium_bard();
+    bard.sing();
+    assert_eq!(stops(&bard.hear(&mana_ended(SONG))), [SONG]);
+    // An update that leaves the song says nothing.
+    let mut bard = Singer::titanium_bard();
+    bard.sing();
+    assert_eq!(stops(&bard.hear(&gem_answer(1))), Vec::<u32>::new());
+    // The Mac-era program is unread: its stops say nothing.
+    let mut mac = Singer::new(Casting::with_song_stop(), BARD_CLASS);
+    mac.sing();
+    let output = mac.run(&ClientCommand::StopSong {
+        session_id: mac.world.session_id,
+        created: std::time::Instant::now(),
+    });
+    assert_eq!(output.sent.len(), 1);
+    assert_eq!(stops(&output), Vec::<u32>::new());
 }

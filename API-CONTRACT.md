@@ -61,10 +61,9 @@ a Bard sings, that is, while the session keeps a song of the class's spell
   The rest that wait on a cast still wait. Any other cast, including an
   item cast started alongside the song, holds as before.
 - **A gem cast (`CastSpell`) while singing stops the song** (the empty
-  `0x4839`, as `StopSong` sends) **and casts nothing.** The host gets
-  `WorldEvent::CastRejected` for the gem, reason "The song stopped; the gem
-  did not cast", with no string id. The gem timers the program resets on a
-  stop are the host's to reset (6.542).
+  `0x4839`, as `StopSong` sends) **and casts nothing.** The host gets the
+  stop's `WorldEvent::SongStopped` (below) and no `CastRejected`. The gem
+  timers the program resets on a stop are the host's to reset (6.542).
 - **A forget's answer** (the server's gem clear, mode 2) **stops the song**
   the same way. A memorize's answer leaves it.
 - **An item cast goes alongside the song**, which stays kept. When the
@@ -72,8 +71,20 @@ a Bard sings, that is, while the session keeps a song of the class's spell
   song ends too, with nothing sent; an instant item's end leaves it (read
   R49-21e).
 
+- **Each song stop says the program's line** (0x40f06d, read R49-21):
+  `WorldEvent::SongStopped` carries the song's spell and `string_id`
+  0x318f. That covers the player's stop (`StopSong`, a Bard's
+  `StopCasting`, a gem click while singing, a forget's answer) and the
+  server's cast update ending the song. The read has the program print it
+  unless its Bard songs filter holds 1 (mine only, in read R49-2's values);
+  the host decides by its own filter. The
+  program's mode-1 stops (its own interrupt roll on a hit, and two
+  others) print 0x318e; the session makes none of those, so it never
+  sends that line.
+
 The Mac-era server types keep the earlier rules: the song holds what any
-cast holds, a gem click casts, and the book's answers leave the song alone.
+cast holds, a gem click casts, the book's answers leave the song alone, and
+no `SongStopped` is sent.
 The Mac-era program is unread. First use on P99 is attended.
 
 `Capability::Melody` says where the server type takes a Bard's `/melody`

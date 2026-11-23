@@ -5,6 +5,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Each Bard song stop says the Titanium program's line (0x40f06d, read
+  R49-21): `WorldEvent::SongStopped { session_id, spell_id, string_id }`,
+  with 0x318f, at the player's stop, a gem click while singing, a forget's
+  answer and the server's cast update ending the song. The Mac-era server
+  types send none.
+  - **Breaking:** the new `WorldEvent` variant. A gem click that stops the
+    song no longer sends `CastRejected`; the stop's `SongStopped` says it.
 - The Titanium buff slot finder's steps 4 and 6 and the effect-327 top, as
   read R49-22e reads 0x414071 (checklist 6.612).
   - **Breaking:** `buffs::placement::Finder` is now

@@ -507,6 +507,7 @@ impl Casting {
         if !class_song(song, world) {
             self.song = None;
             self.item_cast = false;
+            self.report_song_stopped(song, world, out)?;
             return out
                 .log
                 .diagnostic("A song not of the class stops here only; nothing is sent".into());
@@ -514,6 +515,7 @@ impl Casting {
         out.request(&Request::StopSong)?;
         self.song = None;
         self.item_cast = false;
+        self.report_song_stopped(song, world, out)?;
         if self.guard.active() {
             self.guard.stop_deadline = Some(Instant::now() + SONG_STOP_WAIT);
             Ok(())
@@ -575,6 +577,21 @@ impl Casting {
         }))
     }
 
+    /// Tells the host a song stopped under the Titanium program's rules, with
+    /// the line the program prints at the stop (0x40f06d, read R49-21): a
+    /// stop of mode 0 (the player's) or 3 (the server's cast update) says
+    /// 0x318f. The Mac-era program is unread, so it says nothing there.
+    fn report_song_stopped(&self, song: Song, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.song_rules != SongRules::Titanium {
+            return Ok(());
+        }
+        out.log.send(ClientEvent::World(WorldEvent::SongStopped {
+            session_id: world.session_id,
+            spell_id: song.spell,
+            string_id: SONG_STOP_LINE,
+        }))
+    }
+
     /// The server's cast update for a spell, keep-casting clear, ends the
     /// song as the program's 0x40f06d does (read R16): the current one for
     /// spell -1; any song for a spell of the player's class, or for another
@@ -583,11 +600,9 @@ impl Casting {
     /// Titanium rules, a Bard's non-song also ends it while the item-cast
     /// flag is set, with nothing sent; an instant one leaves it (read
     /// R49-21e). The flag clears either way.
-    fn song_reported(&mut self, spell: u32, world: &World) {
+    fn song_reported(&mut self, spell: u32, world: &World) -> Option<Song> {
         let item_cast = std::mem::take(&mut self.item_cast);
-        let Some(song) = self.song else {
-            return;
-        };
+        let song = self.song?;
         let player = world.player.as_ref();
         let bard = player.is_some_and(|p| p.class == Some(BARD_CLASS));
         let class_spell = player.is_some_and(|p| p.memorized_spells.contains(&Some(spell)));
@@ -600,7 +615,9 @@ impl Casting {
             || item_cast
         {
             self.song = None;
+            return Some(song);
         }
+        None
     }
 
     /// The player's own cast start, with the cast time the server sends
@@ -647,9 +664,6 @@ impl Casting {
         // host's (6.542).
         if self.singing(world).is_some() {
             self.stop_song(world, out)?;
-            if let Some(event) = rejected(command, SONG_STOPPED) {
-                out.log.send(ClientEvent::World(event))?;
-            }
             return out.log.diagnostic(SONG_STOPPED.into());
         }
         // The program refuses a cast while the player lies, and neither
@@ -1017,7 +1031,9 @@ impl Feature for Casting {
             keep_casting: false,
         })) = message
         {
-            self.song_reported(*spell_id, world);
+            if let Some(song) = self.song_reported(*spell_id, world) {
+                self.report_song_stopped(song, world, out)?;
+            }
         }
         // A forget's answer stops the song as the program's 0x308e
         // handler does (kind 2, 0x4eb9b7, read R49-21c); a memorize's
@@ -1089,8 +1105,12 @@ fn class_song(song: Song, world: &World) -> bool {
     })
 }
 
-/// What the host is told when a gem click stopped the song instead.
+/// What the log says when a gem click stopped the song instead; the host
+/// is told by `WorldEvent::SongStopped`.
 const SONG_STOPPED: &str = "The song stopped; the gem did not cast";
+
+/// The program's line at a song stop of mode 0 or 3 (0x40f06d, read R49-21).
+const SONG_STOP_LINE: u32 = 0x318f;
 
 fn report_unconfirmed_stop(
     session_id: u64,
