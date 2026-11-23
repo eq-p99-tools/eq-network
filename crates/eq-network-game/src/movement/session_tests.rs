@@ -812,7 +812,7 @@ fn stationary_turns_encode_rate_and_the_hosts_stop_sends_a_zero_rate() {
 }
 
 #[test]
-fn falls_need_permission_and_carry_the_descent_in_position_only() {
+fn falls_need_permission_and_carry_their_descent_speed() {
     let start = Instant::now();
     let now = start + Duration::from_millis(100);
     let mut fall = request(now, 0.5);
@@ -829,7 +829,10 @@ fn falls_need_permission_and_carry_the_descent_in_position_only() {
     session
         .send_move(&fall, now, |packet| {
             let body = &packet.body[..];
-            assert_eq!(word(body, 8), 0.0f32.to_bits());
+            // 4 down in 0.1 s: 40 a second, 2 a tick, as the program's
+            // update carries the actor's own vertical speed (R49-27 (c),
+            // 6.617).
+            assert!((f32::from_bits(word(body, 8)) + 2.0).abs() < 0.0001);
             assert_eq!(word(body, 28), (-4.0f32).to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 12);
             Ok(())
@@ -1260,7 +1263,14 @@ fn a_jump_rises_past_a_step_once_the_session_announces_it() {
         .send_move(&rise, now, |_| panic!("no jump was announced"))
         .is_err());
     session.jumped();
-    session.send_move(&rise, now, |_| Ok(())).unwrap();
+    session
+        .send_move(&rise, now, |packet| {
+            // The rise's own speed, 2.03 in 50 ms: 40.6 a second, 2.03 a
+            // tick (6.617).
+            assert!((f32::from_bits(word(&packet.body, 8)) - 2.03).abs() < 0.0001);
+            Ok(())
+        })
+        .unwrap();
     assert_eq!(session.position().z.to_bits(), 2.03f32.to_bits());
     // Without the generation's jump read, the announcement admits nothing.
     let mut unread = setup(start).with_falls(true);

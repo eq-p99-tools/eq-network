@@ -2161,6 +2161,19 @@ ascent. The tracker expires as accepted samples pass the jump apex. It does
 not establish a landing. None represents a native movement
 rule, safe server threshold or detection guarantee.
 
+A sample's velocity fields carry the player's own velocity in the
+generation's wire scale (checklist 6.617). A swim stroke carries all three.
+On land, a `Fall` sample, or one made while a tracked jump still rises,
+carries its vertical speed too. Titanium builds its update from the actor's
+own velocity fields (`eqgame.exe` 0x465244, read R49-27 (c)), and other
+clients' pickers draw the rise and the fall from that vertical speed
+(0x44fa8f). Grounded samples, slope following, flight and a still rider send
+0 vertical. A rider's vertical speed is its own and leaves out the boat's
+motion. Inferred: the program sends its field's value at the moment it
+sends, and the session sends the sample's mean over its interval in its
+place. The Mac-era sender is also taken to do the same. Sending 0 here was
+our departure, and it applies on every server type, P99 included.
+
 `SetBookOptions { session_id, memorize_without_sitting }` is an explicit
 memorization departure: no automatic sitting and no local five-second
 preparation. Scribing retains its existing posture and delay. Spell ownership,

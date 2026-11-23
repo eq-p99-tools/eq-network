@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A jump or fall on land sends the player's own vertical speed, as the
+  Titanium program's update does (0x465244, read R49-27 (c), checklist
+  6.617). Other clients draw our jumps and falls from it. Until now they saw
+  only the height change, with a vertical speed of 0, and drew us standing.
+  Ground steps, slopes, flight and a still rider still send 0, and a rider's
+  speed leaves out the boat. The value is the sample's mean vertical speed
+  over its interval, where the program sends the instant's value
+  (inferred). The change applies on every server type, P99 included.
 - Each Bard song stop says the Titanium program's line (0x40f06d, read
   R49-21): `WorldEvent::SongStopped { session_id, spell_id, string_id }`,
   with 0x318f, at the player's stop, a gem click while singing, a forget's

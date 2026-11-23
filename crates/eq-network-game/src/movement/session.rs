@@ -1169,6 +1169,11 @@ impl MotionSession {
         };
         guard.speed = Some(speed);
         let swimming = request.mode.is_water_motion();
+        // In the air on land: a fall, or a jump still rising when the
+        // sample is made (taken before the guard spends it).
+        let airborne = !swimming
+            && !self.options.fly
+            && (request.mode == MovementMode::Fall || guard.jumped_at.is_some());
         let (from_heading, to_heading) = guard.own_headings(request);
         let displacement = guard.accept_with_modes(
             request,
@@ -1177,13 +1182,19 @@ impl MotionSession {
             lateral_rate,
             (self.swimming, swim_backward, swim_caps),
         )?;
-        // Following a slope has no vertical stroke. Ordinary falls still
-        // carry their descent in absolute Z. For a swim stroke Titanium
-        // copies all three tick velocities into its existing update fields.
+        // Following a slope has no vertical stroke. Titanium builds the
+        // update from the actor's own three velocity fields (0x465244, read
+        // R49-27 (c)): a swim stroke's, and in the air on land a jump's or
+        // fall's vertical speed, which other clients' pickers read for the
+        // rise and fall poses (0x44fa8f). On the ground it stays 0, and a
+        // still rider's own z is 0 (6.470). The program sends the field's
+        // value at the moment it sends; the sample's mean over its interval
+        // stands in for it (inferred, recording checklist 6.617). The
+        // Mac-era sender is taken to do the same (inferred, 6.617).
         let delta = guard.shoreline_velocity.unwrap_or([
             displacement[0] / elapsed * velocity_scale,
             displacement[1] / elapsed * velocity_scale,
-            if swimming {
+            if swimming || airborne {
                 displacement[2] / elapsed * velocity_scale
             } else {
                 0.0
