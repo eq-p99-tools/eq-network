@@ -532,7 +532,14 @@ custody of the scribe that timed out (inferred, recording checklist 6.462).
 After it, the exact late book insertion holds the cursor again for the
 removal that follows; that removal becomes `InventoryUpdate::Consume` while
 the model still holds the scroll on the cursor at the scribe's revision, and
-`InventoryUpdate::Invalidated` otherwise, marking the inventory stale. Known
+`InventoryUpdate::Invalidated` otherwise, marking the inventory stale until
+the next zone-in's inventory (nothing refreshes it mid-zone on either
+generation). The late hold passes updates that leave the cursor alone (a
+`Set`, `Remove`, `Consume`, `Used` or `Deduct` of another slot), since the
+server sends the confirmation and the removal from one handler and answers
+later requests after both; anything else naming the cursor, a `Snapshot`,
+an `Invalidated`, or 5 s since the confirmation ends it, and the update then
+passes unchanged (recording checklist 6.526). Known
 limit of an unanswered edit: its reply identity keeps refusing a
 wire-identical retry until the next admission.
 

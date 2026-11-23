@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep a late scribe answer's hold until its cursor removal (6.526). A
+  scribe that timed out and then got its late book confirmation, after the
+  player moved the scroll, lost its receipt to any other inventory update,
+  so the cursor removal that followed applied as a plain removal. The
+  receipt now passes updates that leave the cursor alone, so that removal
+  still marks the inventory stale. Anything else naming the cursor, a
+  snapshot, an invalidation or 5 s since the confirmation ends it; a
+  cursor removal 5 s or more after the confirmation is now a plain removal.
+
 - Read RoF2's chat and the server's own lines as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.521). `chat::parse_for` with
   `GameDialect::Rof2` now reads `OP_ChannelMessage` (0x2b2d) in its own
