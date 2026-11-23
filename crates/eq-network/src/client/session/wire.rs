@@ -672,6 +672,7 @@ mod tests {
                     shield: &mut shield,
                     key: b"EXAMPLEKEY",
                     checksums: &mut checksums,
+                    filters: &eq_network_game::filters::ServerFilters::default(),
                     log: &mut log,
                 },
             )

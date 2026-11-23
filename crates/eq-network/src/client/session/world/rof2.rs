@@ -100,7 +100,8 @@ fn world_at(
         ensure!(!stop.is_cancelled(), "shutdown requested");
         if !entered {
             let choice = match &selection {
-                Some(list) => Selection::poll(list, context.commands, log)?,
+                // No server filters are kept: RoF2's filter packet is not built.
+                Some(list) => Selection::poll(list, context.commands, None, log)?,
                 None => None,
             };
             match choice {

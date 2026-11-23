@@ -909,15 +909,6 @@ fn quarms_move_to_bind_names_the_zone_and_place_without_a_heading() {
 }
 
 #[test]
-fn mac_filters_enable_every_chat_and_combat_category() {
-    let filters = server_filters();
-    for index in 0..17 {
-        let value = u32::from_le_bytes(filters[index * 4..index * 4 + 4].try_into().unwrap());
-        assert_eq!(value, u32::from((5..=14).contains(&index)));
-    }
-}
-
-#[test]
 fn the_time_of_day_is_news() {
     let mut body = vec![13, 0, 1, 1];
     body.extend_from_slice(&3100u16.to_le_bytes());

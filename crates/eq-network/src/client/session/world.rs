@@ -380,9 +380,12 @@ fn titanium_owned(
         suggestions.tick(log)?;
         if !entered {
             let choice = match &selection {
-                Some(list) => {
-                    crate::client::selection::Selection::poll(list, context.commands, log)?
-                }
+                Some(list) => crate::client::selection::Selection::poll(
+                    list,
+                    context.commands,
+                    Some((&context.server_filters, server.wire().dialect())),
+                    log,
+                )?,
                 None => None,
             };
             match choice {
@@ -759,6 +762,7 @@ pub(super) mod tests {
             commands: None,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(false),
+            server_filters: std::cell::RefCell::default(),
             riding: std::sync::Arc::default(),
         };
         let mut received = Vec::new();

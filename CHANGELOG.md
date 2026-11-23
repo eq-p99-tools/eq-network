@@ -15,6 +15,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configuration is refused before a socket opens, and the RoF2 handoff,
   zone connection and admission still refuse.
 
+- Take the server filters from the host and send a change again (parity
+  item 6). The filter packet (Titanium `OP_SetServerFilter` 0x6563, 29
+  words; `EQMac` 0xff41, 17 words) was a fixed array sent at zone-in.
+  `eq_network_game::filters` now names each word's kind (`FilterCategory`)
+  and mode (`FilterMode`: show, hide, mine only, group only), placed and
+  valued as the servers that read it do (`EQEmu`'s and TAKP's
+  `Client::ServerFilter`); `ServerFilters::default()` is today's packet
+  byte for byte on both generations, and RoF2 refuses.
+  `FilterCategory::modes(dialect)` says which kinds and modes a generation
+  takes; `ServerFilters::fitted` and `check` use it.
+  `ClientConfig::server_filters` is the character's starting set, checked in
+  `validate`. `GameCommand::ChooseServerFilters` at the character list keeps
+  a set for the character entered next, so its first zone-in carries it on
+  every server type. `GameCommand::SetServerFilters` mid-zone keeps a
+  change for every later zone-in, and sends it at once only where the
+  server type reads one then (`EQEmu`); elsewhere it waits for the next
+  zone-in (6.494e). The session answers `WorldEvent::ServerFiltersKept` or
+  `ServerFiltersRefused`; capabilities `ServerFilters` (every server type)
+  and `ServerFiltersAtOnce` (`EQEmu`). Which official option sets each word,
+  and when the official client sends the packet again, are unread (6.494b
+  and c). **Breaking:** `chat::server_filters` and `quarm::server_filters`
+  are removed; `ClientConfig` gains the public field `server_filters`; the
+  new variants on the exhaustive `GameCommand`, `WorldEvent` and
+  `Capability` enums.
+
 - Build RoF2's login stage, character list and world login info from
   `EQEmu`'s public source, labelled inferred for RoF2 (6.497). The login is
   Titanium's exchange read through the login server's opcodes for clients

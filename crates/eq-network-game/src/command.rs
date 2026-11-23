@@ -50,6 +50,15 @@ pub enum GameCommand {
         /// Server slot to enter.
         slot: u8,
     },
+    /// The server filters for the character entered next from the current
+    /// character list: its first zone-in sends them, on every server type.
+    /// A later return to the list forgets them again.
+    ChooseServerFilters {
+        /// Identity supplied with the character list.
+        selection_id: u64,
+        /// The character's filters.
+        filters: crate::filters::ServerFilters,
+    },
     /// Create a character from the current character-selection screen.
     CreateCharacter {
         /// Identity supplied with the character list.
@@ -538,6 +547,17 @@ pub enum GameCommand {
         session_id: u64,
         /// Reject expired requests rather than replaying an immediate logout.
         created: std::time::Instant,
+    },
+    /// Change the current character's server filters. Every later zone-in
+    /// sends them; where the server type takes a change mid-zone
+    /// ([`crate::world::Capability::ServerFiltersAtOnce`]) they are sent at
+    /// once too. When the official client sends them again is unread
+    /// (recording checklist 6.494c).
+    SetServerFilters {
+        /// Current zone admission.
+        session_id: u64,
+        /// The character's filters.
+        filters: crate::filters::ServerFilters,
     },
     /// Enable or disable automatic P99 list presence replies for this
     /// character until returning to character selection. Disabling cancels
@@ -1065,6 +1085,8 @@ impl GameCommand {
         match self {
             Self::SelectServer { .. } => "SelectServer",
             Self::SelectCharacter { .. } => "SelectCharacter",
+            Self::ChooseServerFilters { .. } => "ChooseServerFilters",
+            Self::SetServerFilters { .. } => "SetServerFilters",
             Self::DeleteCharacter(_) => "DeleteCharacter",
             Self::CreateCharacter { .. } => "CreateCharacter",
             Self::GenerateName { .. } => "GenerateName",
@@ -1190,6 +1212,7 @@ impl GameCommand {
         match self {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
+            | Self::ChooseServerFilters { .. }
             | Self::GenerateName { .. }
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
@@ -1239,6 +1262,7 @@ impl GameCommand {
             | Self::ApplyPoison { session_id, .. }
             | Self::AutoEat { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
+            | Self::SetServerFilters { session_id, .. }
             | Self::SetMovementOptions { session_id, .. }
             | Self::SetBookOptions { session_id, .. }
             | Self::ExitAtOnce { session_id, .. }
@@ -1318,6 +1342,7 @@ impl GameCommand {
         Some(match self {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
+            | Self::ChooseServerFilters { .. }
             | Self::GenerateName { .. }
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. } => return None,
@@ -1362,6 +1387,7 @@ impl GameCommand {
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::ApplyPoison { .. } => Capability::ApplyingPoison,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
+            Self::SetServerFilters { .. } => Capability::ServerFilters,
             Self::SendChat(_)
             | Self::SendChatInAdmission { .. }
             | Self::InspectItem { .. }
@@ -1453,6 +1479,7 @@ impl GameCommand {
             Self::LiquidDamage { observation, .. } => Some(observation.sampled_at),
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
+            | Self::ChooseServerFilters { .. }
             | Self::GenerateName { .. }
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
@@ -1463,6 +1490,7 @@ impl GameCommand {
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
             | Self::AnswerListPolls { .. }
+            | Self::SetServerFilters { .. }
             | Self::SetBookOptions { .. }
             | Self::EnvironmentalDamage { .. }
             // The latest report stands however long it waited.
@@ -1686,6 +1714,7 @@ pub fn encode(
             anyhow::bail!("choosing a world requires the login controller")
         }
         GameCommand::SelectCharacter { .. }
+        | GameCommand::ChooseServerFilters { .. }
         | GameCommand::DeleteCharacter(_)
         | GameCommand::CreateCharacter { .. }
         | GameCommand::GenerateName { .. } => {
@@ -1757,6 +1786,7 @@ pub fn encode(
         | GameCommand::ApplyPoison { .. }
         | GameCommand::AutoEat { .. }
         | GameCommand::AnswerListPolls { .. }
+        | GameCommand::SetServerFilters { .. }
         | GameCommand::SetMovementOptions { .. }
         | GameCommand::SetBookOptions { .. }
         | GameCommand::ExitAtOnce { .. }

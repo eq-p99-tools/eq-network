@@ -188,14 +188,25 @@ impl Selection {
     }
 
     /// Ignores stale choices and discards zone actions without sending packets.
-    /// A discarded Move still receives a local result.
+    /// A discarded Move still receives a local result. Server filters chosen
+    /// for the character entered next are kept in `filters`, checked against
+    /// the generation's packet.
     pub fn poll(
         &self,
         commands: Option<&Receiver<ClientCommand>>,
+        filters: Option<(
+            &std::cell::RefCell<eq_network_game::filters::ServerFilters>,
+            eq_network_game::GameDialect,
+        )>,
         log: &mut Events<'_>,
     ) -> Result<Option<Choice>> {
         for command in commands.into_iter().flat_map(Receiver::try_iter).take(64) {
             log.refuse_move(&command, "The player is at character selection")?;
+            if let Some((kept, dialect)) = filters {
+                if super::session::server_filters::choose(&command, self.id, dialect, kept, log)? {
+                    continue;
+                }
+            }
             if let Some(choice) = self.choose(command) {
                 return Ok(Some(choice));
             }
@@ -383,13 +394,16 @@ mod tests {
         let mut log = Events::new(&config, &mut handler);
         assert_eq!(
             selection
-                .poll(Some(&receiver), &mut log)
+                .poll(Some(&receiver), None, &mut log)
                 .unwrap()
                 .and_then(Choice::entered)
                 .as_deref(),
             Some("Example")
         );
-        assert!(selection.poll(Some(&receiver), &mut log).unwrap().is_none());
+        assert!(selection
+            .poll(Some(&receiver), None, &mut log)
+            .unwrap()
+            .is_none());
         drop(log);
         assert!(matches!(
             events.as_slice(),

@@ -12,13 +12,13 @@ use crate::client::session::{feature::World, put_string, ClientEvent, Connection
 use crate::world::PlayerState;
 use anyhow::{bail, ensure, Result};
 use eq_network_game::{
-    clock,
+    clock, filters,
     quarm::{
         self, ZONE_AVATAR_READY, ZONE_CHANGE_REQUEST, ZONE_CLIENT_UPDATE, ZONE_DATA_RATE,
         ZONE_ENTRY, ZONE_EXPERIENCE_READY, ZONE_NEW, ZONE_PLAYER_PROFILE, ZONE_REQUEST_NEW,
-        ZONE_REQUEST_SPAWNS, ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
+        ZONE_REQUEST_SPAWNS, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
     },
-    zones,
+    zones, GameDialect,
 };
 use eq_network_transport::Application;
 
@@ -164,9 +164,8 @@ impl Admission for EqMacAdmission {
                     self.profile.is_some(),
                     "zone became ready before player profile"
                 );
-                handshake
-                    .session
-                    .send(ZONE_SERVER_FILTER, &quarm::server_filters())?;
+                let filters = filters::encode(GameDialect::EqMac, handshake.filters)?;
+                handshake.session.send(filters.opcode, &filters.body)?;
                 // The first position completes the entry and triggers the
                 // server's version check.
                 handshake
@@ -257,6 +256,7 @@ mod tests {
             key: &[],
             checksums: &mut checksums,
             log: &mut log,
+            filters: &eq_network_game::filters::ServerFilters::default(),
         };
         let mut admission = EqMacAdmission::start("Example", &mut handshake).unwrap();
         let mut own = [0; 356];
@@ -351,6 +351,7 @@ mod tests {
             key: &[],
             checksums: &mut checksums,
             log: &mut log,
+            filters: &eq_network_game::filters::ServerFilters::default(),
         };
         let mut admission = EqMacAdmission::start("Example", &mut handshake).unwrap();
         let mut read = |admission: &mut EqMacAdmission, world: &mut World, opcode, body: &[u8]| {
@@ -428,7 +429,7 @@ mod tests {
                 ZONE_REQUEST_NEW,
                 ZONE_REQUEST_SPAWNS,
                 ZONE_EXPERIENCE_READY,
-                ZONE_SERVER_FILTER,
+                quarm::ZONE_SERVER_FILTER,
                 ZONE_SPAWN_APPEARANCE,
                 ZONE_CLIENT_UPDATE,
             ]
@@ -451,6 +452,7 @@ mod tests {
             key: &[],
             checksums: &mut checksums,
             log: &mut log,
+            filters: &eq_network_game::filters::ServerFilters::default(),
         };
         let mut admission = EqMacAdmission::start("Example", &mut handshake).unwrap();
         let mut description = [0; 96];

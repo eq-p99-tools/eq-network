@@ -1,5 +1,36 @@
 # API and integration contracts
 
+## Server filters
+
+`ClientConfig::server_filters` is the set a character starts with; the
+default is the packet each generation's client is known to send.
+`ClientConfig::validate` refuses a mode the generation's packet cannot say
+(`ServerFilters::check`), as do both commands below, so a kept set always
+encodes at zone-in. `FilterCategory::modes(dialect)` is the one statement of
+which kinds and modes a generation takes: empty for a kind its packet lacks
+(left out, whatever its mode) and for RoF2. `ServerFilters::fitted(dialect)`
+returns a set reset to each kind's default wherever the generation cannot
+say its mode.
+
+At the character list, `GameCommand::ChooseServerFilters { selection_id,
+filters }` keeps a set for the character entered next; send it before
+`SelectCharacter`. The character's first zone-in sends it on every server
+type. A return to the character list restores the config's set, so the host
+sends `ChooseServerFilters` again before each entry. In a zone,
+`GameCommand::SetServerFilters { session_id, filters }` keeps a change for
+every later zone-in of the character. It goes to the zone at once only
+where the session offers `Capability::ServerFiltersAtOnce` (`EQEmu`, whose
+`Client::Handle_OP_SetServerFilter` reads it while connected); elsewhere
+the next zone-in carries it, until the program read (6.494c) and a live
+check (6.494e) say more. Every server type offers `Capability::ServerFilters`.
+Each command answers `WorldEvent::ServerFiltersKept { session_id, sent }`
+(`session_id` is `None` at the character list) or
+`WorldEvent::ServerFiltersRefused`, after which the prior set stands.
+
+The kinds are named for what the servers do with each word. Which official
+option sets each word, and with which values, is unread (6.494b), so a set
+built from these kinds may be one the official options cannot produce.
+
 ## Own-player update gates
 
 `UpdateGate::Flagged` applies the generation's `FlagRule` and packet packing.
