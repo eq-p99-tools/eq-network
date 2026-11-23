@@ -5,6 +5,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The chat-channel link now tells the log why it ended (a diagnostic "Chat server link ended: ...": the connect failure, an unanswered login, the server's session end, a transport error, a silent server, or an unreadable message by opcode and length), never naming the address, key or mailbox. A local look found the link ending at once after the server took the login, with nothing logged to say why.
+
 - The chat-channel link logs in to a stock chat server: a chat server's stream carries its opcodes in one byte (`EQEmu`'s `ucs/clientlist.cpp`, `opcode_size = 1`), but the link used the zones' two-byte opcodes. So the server read the login's lead 0 as an empty mailbox, refused the key as the wrong size and dropped the link (local EQEmu look, checklist 6.616). `transport::Session::with_one_byte_opcodes` carries them in one byte both ways, and the chat link uses it, so the login goes as 0x01, 0, then the mailbox, as read R49-12 a gives the Titanium program's.
 
 - P99's expansion list is read: its `OP_ExpansionInfo` body is 46 bytes (capture-derived: the mask first, then bytes that differ per session and zeros), and `rules::expansions` refused any body but 4 bytes, so P99's mask was dropped. It now takes the first word from a 4- or 46-byte body (`rules::P99_EXPANSIONS_LENGTH`) and leaves the rest unread. P99 recordings give 0x3 (Kunark and Velious), so `WorldEvent::Expansions` now reaches P99 sessions too.
