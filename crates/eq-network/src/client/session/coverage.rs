@@ -281,6 +281,14 @@ const ILLUSION: &[Part] = &[
         Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
     ),
 ];
+/// What the session leaves unread of Titanium's `OP_BazaarSearch`.
+const BAZAAR_SEARCH: &[Part] = &[Part(
+    "the parcel delivery costs (action 29)",
+    Reason::Needless(
+        "EQEmu sends them after each search's results; only RoF and later have parcels \
+         (zone/trading.cpp Client::SendBazaarDeliveryCosts)",
+    ),
+)];
 /// What the session leaves unread of a rename.
 const RENAME: &[Part] = &[
     Part(
@@ -626,7 +634,7 @@ impl Unheard {
                         part: part.to_string(),
                         error: error.clone(),
                     };
-                    log.gap(opcode, name, body, gap)?;
+                    gap_of(log, (opcode, name, body), gap)?;
                     kept.push(message);
                     continue;
                 }
@@ -635,7 +643,7 @@ impl Unheard {
                     continue;
                 }
             };
-            log.gap(opcode, name, body, GapKind::UnknownKind { kind })?;
+            gap_of(log, (opcode, name, body), GapKind::UnknownKind { kind })?;
             if self.kinds.insert((opcode, kind)) {
                 let name = name.unwrap_or("an unlisted message");
                 log.diagnostic(format!(
@@ -666,7 +674,11 @@ impl Unheard {
         let length = body.len();
         let message = wire.coverage(opcode);
         if let Some(gap) = gap_at(message.as_ref(), self.stage, length) {
-            log.gap(opcode, message.map(|message| message.name), body, gap)?;
+            gap_of(
+                log,
+                (opcode, message.map(|message| message.name), body),
+                gap,
+            )?;
         }
         if message.is_some_and(|message| !message.told_at(self.stage, length))
             || !self.told.insert(opcode)
@@ -686,6 +698,32 @@ impl Unheard {
             "{} sent {name} (0x{opcode:04x}, {length} bytes), left unread: {why}",
             self.stage
         ))
+    }
+}
+
+/// The messages whose gaps keep no sample of their body, only their opcode
+/// and length: the bazaar's and traders', which list other players' sales
+/// and name traders (6.550).
+const UNSAMPLED: [&str; 6] = [
+    "OP_BazaarSearch",
+    "OP_BecomeTrader",
+    "OP_Trader",
+    "OP_TraderShop",
+    "OP_TraderBuy",
+    "OP_Barter",
+];
+
+/// Counts a gap, with a sample of its body unless its message is one of
+/// [`UNSAMPLED`].
+fn gap_of(
+    log: &mut Events<'_>,
+    (opcode, name, body): (u16, Option<&'static str>, &[u8]),
+    gap: GapKind,
+) -> Result<()> {
+    if name.is_some_and(|name| UNSAMPLED.contains(&name)) {
+        log.gap_unsampled(opcode, name, body.len(), gap)
+    } else {
+        log.gap(opcode, name, body, gap)
     }
 }
 
@@ -878,6 +916,51 @@ mod tests {
             _ => None,
         });
         assert!(parts.is_some_and(|parts| !parts.is_empty()));
+    }
+
+    #[test]
+    fn the_bazaars_and_traders_gaps_keep_no_sample() {
+        use crate::client::{Gap, GapStage};
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        // A trader's sign, still planned, and the search's unknown kind and
+        // unreadable rows.
+        unheard
+            .tell(&Titanium, 0x2844, &[1, 2, 3], &mut log)
+            .unwrap();
+        let unreadable = Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error: "bazaar results not whole rows".into(),
+        };
+        unheard
+            .sift(
+                &Titanium,
+                (0x1ee9, &[7; 95]),
+                vec![Message::UnknownKind(22), unreadable],
+                &mut log,
+            )
+            .unwrap();
+        // The search itself, read but for its needless part, is no gap.
+        unheard.tell(&Titanium, 0x1ee9, &[7; 96], &mut log).unwrap();
+        log.end_stage().unwrap();
+        drop(log);
+        let told: Vec<_> = gaps
+            .iter()
+            .map(|gap| (gap.opcode, gap.min_length, gap.sample.is_none()))
+            .collect();
+        assert_eq!(
+            told,
+            [(0x2844, 3, true), (0x1ee9, 95, true), (0x1ee9, 95, true)]
+        );
     }
 
     #[test]

@@ -353,6 +353,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             }
         }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
+        crate::bazaar::SEARCH_OPCODE => return bazaar(body, messages),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
@@ -608,6 +609,20 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
     messages
 }
 
+/// What the server's `OP_BazaarSearch` adds to the packet's messages: an
+/// event; nothing for the parcel costs `EQEmu` sends after a search's
+/// results, which only `RoF` and later use (the coverage table's needless
+/// part); or a kind no server is known to send Titanium.
+fn bazaar(body: &[u8], mut messages: Vec<Message>) -> Vec<Message> {
+    messages.extend(match crate::bazaar::answer(body) {
+        Ok(crate::bazaar::Answer::Event(event)) => Some(Message::Event(WorldEvent::Bazaar(event))),
+        Ok(crate::bazaar::Answer::DeliveryCosts) => None,
+        Ok(crate::bazaar::Answer::Other(kind)) => Some(Message::UnknownKind(kind)),
+        Err(error) => Some(unreadable(Part::World, &error)),
+    });
+    messages
+}
+
 /// What an action says: a spell's, the spin, or a kind no server is known
 /// to send.
 fn action(action: anyhow::Result<crate::buffs::Action>) -> Message {
@@ -666,6 +681,34 @@ mod tests {
                     endurance: 80
                 })
             ]
+        ));
+    }
+
+    #[test]
+    fn a_bazaar_answer_is_an_event_nothing_a_kind_or_unreadable() {
+        let mut done = vec![0; 20];
+        done[0] = 12;
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &done)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::SearchDone
+            ))]
+        ));
+        let mut costs = vec![0; 14];
+        costs[0] = 29;
+        assert!(titanium(crate::bazaar::SEARCH_OPCODE, &costs).is_empty());
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &[22, 0, 0, 0])[..],
+            [Message::UnknownKind(22)]
+        ));
+        let mut short_row = vec![0; crate::bazaar::ROW_LENGTH - 1];
+        short_row[0] = 7;
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &short_row)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
         ));
     }
 

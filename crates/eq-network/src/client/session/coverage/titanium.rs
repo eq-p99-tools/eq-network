@@ -7,9 +7,10 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
-    BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
-    MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
+    BAZAAR_SEARCH, BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK,
+    MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
+    RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
+    VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -121,7 +122,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1db5 => sent("OP_AdventureInfo", EQEMU, planned(LaterSystems)),
         0x1dde => sent("OP_OnLevelMessage", EQEMU, Partly(&[Zone], POPUP)),
         0x1e51 => sent("OP_Stun", EQEMU, Read(&[Zone])),
-        0x1ee9 => sent("OP_BazaarSearch", EQEMU, planned(Bazaar)),
+        // The search's results, end and welcome (6.550); P99 has no Bazaar.
+        0x1ee9 => sent("OP_BazaarSearch", EQEMU, Partly(&[Zone], BAZAAR_SEARCH)),
         0x1f21 => sent(
             "OP_RaidUpdate",
             EQEMU,

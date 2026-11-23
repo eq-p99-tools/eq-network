@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Search the Bazaar on stock `EQEmu`, read only (6.550, slice 1). The new
+  `bazaar` module builds `OP_BazaarSearch` (0x1ee9) searches and welcome
+  requests and reads the results, the search's end and the welcome.
+  `GameCommand::BazaarSearch` and `BazaarWelcome` go only in the Bazaar,
+  one at a time and 2 s apart (ours, inferred), and are refused with the
+  new `WorldEvent::BazaarRefused`; answers come as `WorldEvent::Bazaar`.
+  `Capability::BazaarSearching` is offered by no server type until the
+  local live row passes. Gaps of the bazaar's and traders' messages keep no
+  sample. **Breaking:** new `GameCommand`, `WorldEvent` and `Capability`
+  variants.
 - Take an item's song as the class's when the host's installed spell data
   says so (gap 3.5, checklist 6.542, part 2). The new
   `ItemUse::installed_class_spell: Option<bool>` is the host's word; with
