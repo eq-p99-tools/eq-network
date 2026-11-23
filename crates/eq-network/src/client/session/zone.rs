@@ -896,7 +896,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 112;
+    const KINDS: usize = 113;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -930,6 +930,7 @@ mod tests {
             ClientCommand::YellForHelp { .. } => 109,
             ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::SocialEmote { .. } => 111,
+            ClientCommand::ApplyPoison { .. } => 112,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1359,6 +1360,11 @@ mod tests {
             ClientCommand::Consume {
                 session_id,
                 slot: InventorySlot(22),
+                created,
+            },
+            ClientCommand::ApplyPoison {
+                session_id,
+                slot: InventorySlot(23),
                 created,
             },
             ClientCommand::AnswerListPolls {
@@ -2965,7 +2971,8 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
-                Capability::GameplayDepartures
+                Capability::GameplayDepartures,
+                Capability::ApplyingPoison,
             ]
         );
         assert_eq!(
@@ -2995,7 +3002,8 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
-                Capability::GameplayDepartures
+                Capability::GameplayDepartures,
+                Capability::ApplyingPoison,
             ]
         );
     }

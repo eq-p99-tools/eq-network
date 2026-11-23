@@ -2133,6 +2133,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::ApplyingPoison,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
@@ -2163,7 +2164,8 @@ mod tests {
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
-                Capability::Meals
+                Capability::Meals,
+                Capability::ApplyingPoison,
             ]
         );
         for server in [quarm, takp] {
