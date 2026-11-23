@@ -180,10 +180,12 @@ target themselves. Quarm runs with petitions off, and answers with a line.
 
 A `BugReport` carries its category (the servers' names), the player's text,
 and, when the host knows them, the player's place and heading and the
-target's spawn and name. The session names the reporter. The fields the
-program fills from what this library lacks (the 128 bytes at 160, time
-played, the word at 464, and three of the window's four check boxes) go
-zero. The system information, where the program names the machine's
+target's spawn and name, and the window's other three check boxes
+(`repeatable`, `crash`, `character_flags`). On Titanium the four boxes set
+the mask at 532 as the program's Send does (1, 2, 4 for the target, 8; read
+R49-23). The session names the reporter. The fields the program fills from
+what this library lacks (the 128 bytes at 160, time played, and the word at
+464) go zero. The system information, where the program names the machine's
 processor, video card and driver, always stays empty. Text is trimmed,
 must not be empty or hold a NUL, and must fit what the program sends (a
 petition 1023 bytes, a bug report 1024 on Titanium and 1023 on `EQMac`,

@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Breaking:** `BugReport` carries the Titanium bug report window's other
+  three check boxes: `repeatable`, `crash` and `character_flags` (checklist
+  6.511 C1b, read R49-23 send pass). With the target, they set the mask at
+  532 as the program's Send (0x4e9f7a) does: 1, 2, 4 and 8, the bits
+  `EQEmu`'s `Bug::InformationFlag` reads. Before, only the target's bit was
+  set. Struct literals add the three fields.
 - `GameCommand::InspectSpawn { session_id, spawn_id, created }` inspects a
   player by spawn ID without selecting them, for the Titanium program's
   right-click inspect (checklist 6.644, reads R49-16 and R49-16e). It sends
