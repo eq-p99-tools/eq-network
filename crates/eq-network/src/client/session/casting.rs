@@ -599,7 +599,6 @@ impl Casting {
         out.log.diagnostic(refusal.1)
     }
 
-    /// Casts an item's click effect at a target the player can see.
     /// Uses the item a belt slot names from the first slot the player wears
     /// it in or carries it in a pack, by the whole item-click path (6.568
     /// B3). A bag is not a click slot (`check_item_cast`), nor the cursor
@@ -632,6 +631,7 @@ impl Casting {
         }
     }
 
+    /// Casts an item's click effect at a target the player can see.
     fn use_item(
         &mut self,
         request: &ItemUse,
