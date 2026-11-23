@@ -681,3 +681,185 @@ fn the_saved_z_outlives_the_boat_until_the_next_save() {
         (None, Some(4.0))
     );
 }
+
+/// Where a Mac-era server saved a rider: a world point near the boat at
+/// [`AT`] (TAKP 44afcbf and Quarm fc75fcf write world points; 6.641).
+const MAC_PROFILE: Position = Position {
+    x: 103.0,
+    y: 48.0,
+    z: 3.0,
+    heading: 140.0,
+};
+
+/// A Mac-era arrival whose profile names `name`, with the boat in at the
+/// profile when `boat_in` holds.
+fn mac_arrival(out: &mut Out<'_, '_>, riders: &mut Riders, boat_in: bool) -> World {
+    let mut world = admitted_at(out, MAC_PROFILE);
+    world.safe_point = Some(Position {
+        x: -5.0,
+        y: 6.0,
+        z: 7.0,
+        heading: 0.0,
+    });
+    if boat_in {
+        boat(&mut world, 8, "SirensBane02", AT);
+    }
+    riders
+        .admit(&Message::VehicleName(Some(BOAT.into())), &mut world)
+        .unwrap();
+    riders.admitted(&mut world, out).unwrap();
+    world
+}
+
+#[test]
+fn a_mac_era_rider_is_placed_once_at_the_profiles_world_point_on_the_boat() {
+    // Read 9c (0x53df6e lines 49-74): the boat found by name, the player
+    // stood at the profile's position, linked to it; no 0x3710.
+    let mut riders = Riders::for_generation(GameDialect::EqMac);
+    let outcome = testing::run_on(mac_wire(), |out| {
+        let mut world = mac_arrival(out, &mut riders, true);
+        let local = carrier_local(AT, MAC_PROFILE);
+        assert!(matches!(
+            world.arrival,
+            Some(Pending::Aboard { local: held, .. }) if held == local
+        ));
+        assert!(world.motion_held());
+        // The host's sweep lands at the world point the profile named.
+        let restored = carrier_world(AT, local);
+        assert!((restored.x - MAC_PROFILE.x).abs() < 0.01);
+        assert!((restored.y - MAC_PROFILE.y).abs() < 0.01);
+        let swept = Position {
+            z: restored.z - 0.5,
+            ..restored
+        };
+        riders
+            .handle(&placement(Some(swept)), &mut world, out)
+            .unwrap();
+        assert!(world.arrival.is_none() && !world.motion_held());
+        assert_eq!(world.vehicle.as_deref(), Some(BOAT));
+        (swept, local)
+    });
+    let (swept, local) = outcome.result;
+    assert_eq!(outcome.sent, []);
+    let arrivals = arrivals(&outcome.events);
+    assert!(
+        matches!(arrivals[0], Arrival::Aboard { name, profile, local: held, .. }
+        if name == BOAT && *profile == MAC_PROFILE && *held == local)
+    );
+    assert_eq!(arrivals[1], &Arrival::Placed { position: swept });
+}
+
+#[test]
+fn the_mac_era_takes_no_second_try() {
+    // Titanium's +25 retry (0x4aba14) has no Mac read: there it is the
+    // safe point.
+    let mut riders = Riders::for_generation(GameDialect::EqMac);
+    let outcome = testing::run_on(mac_wire(), |out| {
+        let mut world = mac_arrival(out, &mut riders, true);
+        let retry = carrier_world(
+            AT,
+            Position {
+                x: RETRY[0],
+                y: RETRY[1],
+                z: RETRY[2],
+                heading: carrier_local(AT, MAC_PROFILE).heading,
+            },
+        );
+        riders
+            .handle(&placement(Some(retry)), &mut world, out)
+            .unwrap();
+        world.body.position()
+    });
+    let safe = Position {
+        x: -5.0,
+        y: 6.0,
+        z: 7.0,
+        heading: 0.0,
+    };
+    assert_eq!(outcome.result, Some(safe));
+    assert_eq!(
+        arrivals(&outcome.events).last(),
+        Some(&&Arrival::SafePoint { position: safe })
+    );
+}
+
+#[test]
+fn a_mac_era_rider_waits_for_a_missing_boat_without_asking_and_boards_it_when_it_comes() {
+    // Read 9c: state 5, no send; the program looks again.
+    let mut riders = Riders::for_generation(GameDialect::EqMac);
+    let outcome = testing::run_on(mac_wire(), |out| {
+        let mut world = mac_arrival(out, &mut riders, false);
+        let Some(Pending::Waiting { until }) = world.arrival else {
+            panic!("the arrival waits");
+        };
+        assert!(world.motion_held());
+        let before = until.checked_sub(Duration::from_secs(30)).unwrap();
+        riders.tick(before, &mut world, out).unwrap();
+        assert!(matches!(world.arrival, Some(Pending::Waiting { .. })));
+        boat(&mut world, 8, "SirensBane02", AT);
+        riders.tick(before, &mut world, out).unwrap();
+        assert!(matches!(world.arrival, Some(Pending::Aboard { .. })));
+        let restored = carrier_world(AT, carrier_local(AT, MAC_PROFILE));
+        riders
+            .handle(&placement(Some(restored)), &mut world, out)
+            .unwrap();
+        assert!(world.arrival.is_none());
+        restored
+    });
+    assert_eq!(outcome.sent, []);
+    assert_eq!(outcome.unreliable, []);
+    let arrivals = arrivals(&outcome.events);
+    assert_eq!(arrivals[0], &Arrival::Waiting { name: BOAT.into() });
+    assert!(matches!(arrivals[1], Arrival::Aboard { .. }));
+    assert_eq!(
+        arrivals[2],
+        &Arrival::Placed {
+            position: outcome.result
+        }
+    );
+}
+
+#[test]
+fn a_mac_era_wait_ends_at_the_safe_point_after_60_s() {
+    // The bound and the safe point are inferred from Titanium (Q-M2).
+    let mut riders = Riders::for_generation(GameDialect::EqMac);
+    let outcome = testing::run_on(mac_wire(), |out| {
+        let mut world = mac_arrival(out, &mut riders, false);
+        let Some(Pending::Waiting { until }) = world.arrival else {
+            panic!("the arrival waits");
+        };
+        riders.tick(until, &mut world, out).unwrap();
+        assert!(world.arrival.is_none() && world.vehicle.is_none());
+    });
+    assert_eq!(outcome.sent, []);
+    assert_eq!(
+        arrivals(&outcome.events),
+        [
+            &Arrival::Waiting { name: BOAT.into() },
+            &Arrival::SafePoint {
+                position: Position {
+                    x: -5.0,
+                    y: 6.0,
+                    z: 7.0,
+                    heading: 0.0,
+                }
+            }
+        ]
+    );
+}
+
+#[test]
+fn a_mac_era_profile_without_a_boat_arrives_as_ever() {
+    let outcome = testing::run_on(mac_wire(), |out| {
+        let mut world = admitted_at(out, MAC_PROFILE);
+        let mut riders = Riders::for_generation(GameDialect::EqMac);
+        riders
+            .admit(&Message::VehicleName(None), &mut world)
+            .unwrap();
+        riders.admitted(&mut world, out).unwrap();
+        assert!(world.arrival.is_none() && world.vehicle.is_none());
+        assert_eq!(world.body.position(), Some(MAC_PROFILE));
+    });
+    assert_eq!(outcome.sent, []);
+    assert_eq!(arrivals(&outcome.events), Vec::<&Arrival>::new());
+}

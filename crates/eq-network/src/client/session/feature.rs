@@ -177,7 +177,8 @@ pub(in crate::client) struct World {
     pub(super) session_id: u64,
     /// Whether this admission is on a network-constrained local `EQEmu` connection.
     local_eqemu: bool,
-    /// Installed geometry corroboration, enabled only for the P99 profile.
+    /// Installed geometry corroboration for same-zone zone lines, on the
+    /// Titanium servers.
     pub(super) pad_boundaries: Option<std::sync::Arc<dyn crate::client::InstalledZoneBoundaries>>,
     /// The `EQMac` program's language minimum levels, as the host read them
     /// from the installed program; None, and on other generations, keeps
@@ -207,6 +208,10 @@ pub(in crate::client) struct World {
     /// Whether the player's melee auto attack is on, as last sent; only the
     /// combat feature changes it, and the player's death turns it off.
     pub(super) attacking: bool,
+    /// The world's player-versus-player ruleset, where the world sent one
+    /// (`CharacterSession::world_ruleset`): Pick Pockets on a player tests
+    /// it for 4 (read R49-31 d, e).
+    pub(super) ruleset: Option<u32>,
     /// How the zone session ends, once a feature has decided; see [`World::end`].
     exit: Option<ZoneExit>,
     /// Death and zone transfers, which hold the player's actions.
@@ -286,6 +291,7 @@ impl World {
             grouped: false,
             posture: OwnPosture::default(),
             attacking: false,
+            ruleset: None,
             exit: None,
             lifecycle: ZoneLifecycle::default(),
             zone: (0, 0),
@@ -338,12 +344,14 @@ impl World {
                     GameDialect::Titanium | GameDialect::Rof2 => false,
                 }
             }),
+            // A same-zone zone line places the player locally on the
+            // Titanium servers, as 0x48aaa6 does (read same-zone zone line,
+            // 6.640). The Mac programs and RoF2 are unread, and refuse it.
             pad_boundaries: match config.protocol {
-                ServerProtocol::Project1999 => config.installed_zone_boundaries.clone(),
-                ServerProtocol::EqEmu
-                | ServerProtocol::Quarm
-                | ServerProtocol::Takp
-                | ServerProtocol::EqEmuRof2 => None,
+                ServerProtocol::Project1999 | ServerProtocol::EqEmu => {
+                    config.installed_zone_boundaries.clone()
+                }
+                ServerProtocol::Quarm | ServerProtocol::Takp | ServerProtocol::EqEmuRof2 => None,
             },
             saves: super::saves::Gates {
                 // Stock EQEmu saves on any `OP_Save` (`Handle_OP_Save`).

@@ -71,4 +71,12 @@ pub trait SightCatalog: std::fmt::Debug + Send + Sync {
     fn grants_divine_aura(&self, _spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
         false
     }
+
+    /// The spell's recast time from the installed spell data, which the
+    /// Titanium program's knight specials wait out locally after the
+    /// server refreshes their gem (R49-29 b: the spell's +0x1c). `None`,
+    /// the default, where the host does not know.
+    fn recast(&self, _spell_id: u32) -> Option<std::time::Duration> {
+        None
+    }
 }

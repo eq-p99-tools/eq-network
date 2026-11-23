@@ -23,8 +23,19 @@
 //! 0x4c131d, read 9a; 6.618): `OP_BoardBoat` (the program's 0x41bb, 0xbb41
 //! in this crate's order) reliable on the first frame aboard, and an empty
 //! `OP_LeaveBoat` (0x41bc, 0xbc41 here) unreliable after two frames off.
-//! That cadence is built for [`Riders::for_generation`], and no Mac-era
-//! server type offers riding until its arrival is read.
+//! That cadence is built for [`Riders::for_generation`].
+//!
+//! Its arrival (TAKP 0x53df6e lines 49-74, read 9c; 6.641) finds the
+//! profile's boat by name and stands the player at the profile's position,
+//! linked to the boat. Both Mac servers write that position as a world
+//! point: a zone line's target, the safe point or the boat's own place
+//! (TAKP 44afcbf and Quarm fc75fcf `SendToBoat` and zoning;
+//! source-derived). The host is asked to place the player once, with no
+//! second try. With the boat not in, the program sends nothing and waits,
+//! looking again; the session looks on each tick, and after 60 s uses the
+//! zone's safe point (inferred from Titanium, Q-M2). There is no carry-on
+//! transfer: a Mac rider crosses the zone line standing on the deck. No
+//! Mac-era server type offers riding until an attended first ride.
 use super::{
     feature::{Feature, Out, World},
     transfers::Transfers,
@@ -34,7 +45,7 @@ use anyhow::{Context, Result};
 use eq_network_game::{
     boats::riders::{self, Arrival},
     message::Message,
-    movement::{carrier_world, CarrierSample},
+    movement::{carrier_local, carrier_world, CarrierSample},
     request::Request,
     world::{Capability, Position, WorldEvent},
     zoning::ZoneOffer,
@@ -56,7 +67,8 @@ const UNLINKED_TICKS: u8 = 2;
 /// How long the program waits for the server to carry the player on
 /// (0x4a8afa); the session holds a placement aboard no longer.
 const WAIT: Duration = Duration::from_secs(60);
-/// The program's second try, in the boat's frame (0x4aba14).
+/// The Titanium program's second try, in the boat's frame (0x4aba14). The
+/// Mac-era program has none read (9c), so the Mac era places once.
 const RETRY: [f32; 3] = [0.0, 0.0, 25.0];
 /// The program sweeps for the floor from one unit above the restored point.
 const SWEEP_LIFT: f32 = 1.0;
@@ -224,6 +236,7 @@ impl Riders {
     }
 
     fn placed(
+        dialect: GameDialect,
         position: Option<Position>,
         created: Instant,
         world: &mut World,
@@ -238,6 +251,10 @@ impl Riders {
             // No floor or no link at either try: the safe point.
             return Self::safe_point(world, out);
         };
+        let retries = match dialect {
+            GameDialect::Titanium | GameDialect::Rof2 => true,
+            GameDialect::EqMac => false,
+        };
         let restored = world.carriers.pose(sample, created).map(|pose| {
             let retry = Position {
                 x: RETRY[0],
@@ -248,7 +265,7 @@ impl Riders {
             (carrier_world(pose, local), carrier_world(pose, retry))
         });
         if restored.is_some_and(|(first, retry)| {
-            Self::swept_from(first, position) || Self::swept_from(retry, position)
+            Self::swept_from(first, position) || retries && Self::swept_from(retry, position)
         }) {
             world.arrival = None;
             Self::place(position, world, out)?;
@@ -268,38 +285,89 @@ impl Riders {
         let Some(name) = world.vehicle.clone() else {
             return Ok(());
         };
-        let profile = world
-            .body
-            .position()
-            .context("arrival aboard without a profile position")?;
-        let local = restored(profile, world.riding.saved_z());
         let found = self
             .found
             .take()
             .and_then(|id| world.carriers.latest(id))
             .map(eq_network_game::movement::CarrierReport::sample);
         if let Some(sample) = found {
-            world.arrival = Some(Pending::Aboard {
-                sample,
-                local,
-                until: Instant::now() + WAIT,
-            });
-            return Self::publish(
-                Arrival::Aboard {
-                    name,
-                    sample,
-                    profile,
-                    local,
-                },
-                world,
-                out,
-            );
+            return self.hold_aboard(name, sample, world, out);
         }
-        out.request(&Request::VehicleMissing(name.clone()))?;
+        match self.dialect {
+            GameDialect::Titanium | GameDialect::Rof2 => {
+                out.request(&Request::VehicleMissing(name.clone()))?;
+            }
+            // The Mac-era program sends nothing and waits (0x53df6e state
+            // 5; read 9c).
+            GameDialect::EqMac => {}
+        }
         world.arrival = Some(Pending::Waiting {
             until: Instant::now() + WAIT,
         });
         Self::publish(Arrival::Waiting { name }, world, out)
+    }
+
+    /// The profile's boat is here: hold the player for one placement on it,
+    /// at the profile's position in the boat's frame.
+    fn hold_aboard(
+        &self,
+        name: String,
+        sample: CarrierSample,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let profile = world
+            .body
+            .position()
+            .context("arrival aboard without a profile position")?;
+        let local = match self.dialect {
+            GameDialect::Titanium | GameDialect::Rof2 => restored(profile, world.riding.saved_z()),
+            // The servers' world point, in the boat's frame as it stands
+            // now (source-derived, 6.641).
+            GameDialect::EqMac => {
+                let pose = world
+                    .carriers
+                    .pose(sample, Instant::now())
+                    .context("arrival aboard a boat with no pose")?;
+                carrier_local(pose, profile)
+            }
+        };
+        world.arrival = Some(Pending::Aboard {
+            sample,
+            local,
+            until: Instant::now() + WAIT,
+        });
+        Self::publish(
+            Arrival::Aboard {
+                name,
+                sample,
+                profile,
+                local,
+            },
+            world,
+            out,
+        )
+    }
+
+    /// The Mac-era wait looks for the boat again (0x53df6e state 5; read
+    /// 9c), here once a tick; its own pace is unread (inferred, 6.641).
+    fn look_again(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some(name) = world.vehicle.clone() else {
+            return Ok(());
+        };
+        let found = riders::find(
+            &name,
+            world
+                .spawns
+                .all()
+                .map(|spawn| (spawn.spawn_id, spawn.name.as_str())),
+        )
+        .and_then(|id| world.carriers.latest(id))
+        .map(eq_network_game::movement::CarrierReport::sample);
+        match found {
+            Some(sample) => self.hold_aboard(name, sample, world, out),
+            None => Ok(()),
+        }
     }
 
     /// The server's word that a boat carries its riders on.
@@ -426,7 +494,7 @@ impl Feature for Riders {
         else {
             return Ok(());
         };
-        Self::placed(*position, *created, world, out)
+        Self::placed(self.dialect, *position, *created, world, out)
     }
 
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
@@ -456,6 +524,13 @@ impl Feature for Riders {
             Some(Pending::Waiting { until } | Pending::Aboard { until, .. }) if now >= until
         ) {
             return Self::safe_point(world, out);
+        }
+        let looks_again = match self.dialect {
+            GameDialect::Titanium | GameDialect::Rof2 => false,
+            GameDialect::EqMac => true,
+        };
+        if looks_again && matches!(world.arrival, Some(Pending::Waiting { .. })) {
+            return self.look_again(world, out);
         }
         // No frames run while the arrival is held, nor in a transfer.
         if world.arrival.is_some() || !world.ready() || world.lifecycle.blocks_motion() {

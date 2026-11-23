@@ -822,6 +822,19 @@ pub enum GameCommand {
         /// When inspection was requested.
         created: std::time::Instant,
     },
+    /// Inspect a player by their spawn, without selecting them: the
+    /// Titanium program's right-click on a player, or on the player
+    /// themself, sends its inspect request for the clicked spawn and never
+    /// targets (read R49-16, R49-16e). The caller says the program's
+    /// too-far line; the session still refuses a spawn out of reach.
+    InspectSpawn {
+        /// Current zone admission.
+        session_id: u64,
+        /// The clicked spawn: another visible player, or the player's own.
+        spawn_id: u16,
+        /// When inspection was requested.
+        created: std::time::Instant,
+    },
     /// Configure the known native inspect note for this character and admission.
     SetInspectNote {
         /// Current zone admission.
@@ -1518,6 +1531,7 @@ impl GameCommand {
             Self::DeclineDuel { .. } => "DeclineDuel",
             Self::RespondToPopup { .. } => "RespondToPopup",
             Self::InspectPlayer { .. } => "InspectPlayer",
+            Self::InspectSpawn { .. } => "InspectSpawn",
             Self::SetInspectNote { .. } => "SetInspectNote",
             Self::DropInvisibility { .. } => "DropInvisibility",
             Self::InviteToGroup { .. } => "InviteToGroup",
@@ -1666,6 +1680,7 @@ impl GameCommand {
             | Self::AnswerDuel { session_id, .. }
             | Self::RespondToPopup { session_id, .. }
             | Self::InspectPlayer { session_id, .. }
+            | Self::InspectSpawn { session_id, .. }
             | Self::SetInspectNote { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
             | Self::StopSong { session_id, .. }
@@ -1862,7 +1877,7 @@ impl GameCommand {
             Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
             Self::DeclineDuel { .. } => Capability::DecliningDuels,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
-            Self::InspectPlayer { .. } => Capability::PlayerInspection,
+            Self::InspectPlayer { .. } | Self::InspectSpawn { .. } => Capability::PlayerInspection,
             Self::SetInspectNote { .. } => Capability::InspectAnswer,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
@@ -2008,6 +2023,7 @@ impl GameCommand {
             Self::SwapSpell { created, .. }
             | Self::RespondToPopup { created, .. }
             | Self::InspectPlayer { created, .. }
+            | Self::InspectSpawn { created, .. }
             | Self::BoatControl { created, .. }
             | Self::ArrivalPlacement { created, .. }
             | Self::ClickDoor { created, .. }
@@ -2288,6 +2304,7 @@ pub fn encode(
         | GameCommand::DeclineDuel { .. }
         | GameCommand::RespondToPopup { .. }
         | GameCommand::InspectPlayer { .. }
+        | GameCommand::InspectSpawn { .. }
         | GameCommand::SetInspectNote { .. }
         | GameCommand::DropInvisibility { .. }
         | GameCommand::StopSong { .. }

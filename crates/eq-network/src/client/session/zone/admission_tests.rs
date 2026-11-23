@@ -150,6 +150,7 @@ fn context<'a>(
         riding: std::sync::Arc::default(),
         chat: std::sync::Arc::default(),
         chat_pace: std::sync::Arc::default(),
+        world_ruleset: std::cell::Cell::new(None),
     }
 }
 

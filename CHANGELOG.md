@@ -13,6 +13,77 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The chat-channel link logs in to a stock chat server: a chat server's stream carries its opcodes in one byte (`EQEmu`'s `ucs/clientlist.cpp`, `opcode_size = 1`), but the link used the zones' two-byte opcodes. So the server read the login's lead 0 as an empty mailbox, refused the key as the wrong size and dropped the link (local EQEmu look, checklist 6.616). `transport::Session::with_one_byte_opcodes` carries them in one byte both ways, and the chat link uses it, so the login goes as 0x01, 0, then the mailbox, as read R49-12 a gives the Titanium program's.
 
+- `GameCommand::InspectSpawn { session_id, spawn_id, created }` inspects a
+  player by spawn ID without selecting them, for the Titanium program's
+  right-click inspect (checklist 6.644, reads R49-16 and R49-16e). It sends
+  OP_InspectRequest 0x775d {target, own} under `Capability::PlayerInspection`
+  with `InspectPlayer`'s rules (a visible player or the player's own spawn,
+  under 20 units, one outstanding request per player), and its answer comes
+  back as `WorldEvent::PlayerInspection`. EQEmu and Project 1999 offer it, as
+  they list `PlayerInspection`; TAKP and Quarm do not. **Breaking:** a new
+  `GameCommand` variant, so exhaustive matches add its arm.
+- `Capability::BardRefreshTimers` (checklist 6.642): where the Titanium
+  program's gem timers for a Bard apply (read R49-21 c). A refresh of a
+  Bard's own gem (`OP_MemorizeSpell` kind 3) sets the program's wait before
+  the next spell to now, where anyone else's adds the spell's recovery. It
+  comes with the Titanium song rules, on P99 and stock `EQEmu`; not the
+  Mac-era server types, whose program is unread. The host keeps the timers;
+  nothing is sent for it. **Breaking:** a new `Capability` variant.
+- Build the Mac-era program's arrival aboard a boat (TAKP 0x53df6e, read
+  9c, checklist 6.641), not offered yet: Quarm and TAKP keep `BoatRiding`
+  off until an attended first ride.
+  - The profile's position is taken as a world point, as both servers
+    write it (TAKP 44afcbf and Quarm fc75fcf, source-derived), and
+    `Arrival::Aboard` carries it in the boat's frame. The host's placement
+    is accepted at the first try only.
+  - With the boat not in, nothing is sent; the session looks again each
+    tick and gives up at the safe point after 60 s (inferred from
+    Titanium).
+
+- A knight's special waits as the Titanium program's does (read R49-29 b,
+  checklist 6.626). The program's own slot-9 timer: 10 s from a send, and
+  the spell's recast from the server's refresh of gem 9 (`OP_MemorizeSpell`
+  kind 3). While it runs, the press is refused with the program's line
+  0x2efd and nothing is sent. The server's long reuse (the profile's
+  timer, or the estimate) is still reported in `KnightReuse` but no longer
+  holds the press: after the local wait the press goes and the server
+  refuses it as it does the program's. The program takes 1 s off the
+  recast for each point of the player's effect 0x127, which isn't totalled
+  here, so the wait is never shorter than the program's (inferred). The
+  recast comes from the host's installed spell data through the new
+  default method `SightCatalog::recast`; without it the press keeps
+  today's hold on the server's long reuse. A new zone session starts with
+  no local wait, as the program's actor does. Not breaking: the trait
+  method has a default.
+- Tracking ends silently as the Titanium program's does (read R49-30 c,
+  checklist 6.636): when six minutes pass, when the followed spawn is
+  removed, and when the player dies, `TrackingUpdate::Ended` now carries no
+  line (it carried 0x3189 and 0x30d3). A zone change ends it with the zone
+  session, as before. The two-second report runs only while the player's
+  Tracking skill reads 0 or more as the program's signed value (read
+  R49-30 b). The program's 0x30d3, for a tracked spawn it no longer holds
+  while still tracking, is a state removal never leaves here, so it isn't
+  said (inferred). Not breaking: only which line is sent.
+- Pick Pockets on a player follows the world's ruleset (6.631 follow-up),
+  read from the world's rules packet (`OP_LogServer`, the value
+  `WorldRules::pvp` already decodes). Under ruleset 4 the two flag lines
+  (0x307a, 0x307b) are skipped; the player is refused with 0x307c when
+  not eligible for player combat, and with 0x307d when the target's level
+  is outside five of theirs either way or is 5 or lower. The program's
+  eligibility test reads a team value no packet field is mapped to yet:
+  the player's own PvP flag stands in for it (inferred). Under any other
+  ruleset only the flag lines apply, and this library's own level-range
+  words are gone. A session that hasn't read the rules (the Mac-era and
+  RoF2 worlds today) keeps the flags and the level range in this
+  library's words. Not breaking: the new state is internal.
+- **Breaking:** A same-zone zone line places the player locally on stock
+  EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
+  program's 0x48aaa6 sends one position record and lands the player itself,
+  with no 0x5dd8 and no wait, on any server). `WorldEvent::SameZoneBoundary`
+  is removed: nothing waits for the server to move the player any more, and
+  exhaustive matches drop its arm. The EQEmu profile now takes the host's
+  `InstalledZoneBoundaries`. Quarm, TAKP and RoF2 are unread and still refuse
+  a same-zone line, as before.
 - P99's expansion list is read: its `OP_ExpansionInfo` body is 46 bytes (capture-derived: the mask first, then bytes that differ per session and zeros), and `rules::expansions` refused any body but 4 bytes, so P99's mask was dropped. It now takes the first word from a 4- or 46-byte body (`rules::P99_EXPANSIONS_LENGTH`) and leaves the rest unread. P99 recordings give 0x3 (Kunark and Velious), so `WorldEvent::Expansions` now reaches P99 sessions too.
 
 - TAKP and Quarm keep a duel as the `EQMac` program does (checklist 6.622;

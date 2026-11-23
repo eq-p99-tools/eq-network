@@ -761,12 +761,19 @@ pub enum Capability {
     /// `EQMac`'s `/decline` of a waiting duel challenge
     /// ([`crate::command::GameCommand::DeclineDuel`]).
     DecliningDuels,
+    /// The Titanium program's gem timers for a Bard (read R49-21 c): a
+    /// refresh of the Bard's own gem (`OP_MemorizeSpell` kind 3) starts no
+    /// wait before the next spell, where anyone else's starts the spell's
+    /// recovery. Offered with the Titanium song rules (P99 and stock
+    /// `EQEmu`); the Mac-era program is unread. The host keeps the timers;
+    /// the session sends nothing for it.
+    BardRefreshTimers,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 94] = [
+    pub const ALL: [Self; 95] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -861,6 +868,7 @@ impl Capability {
         Self::ColdWater,
         Self::InspectAnswer,
         Self::DecliningDuels,
+        Self::BardRefreshTimers,
     ];
 }
 
@@ -1075,12 +1083,6 @@ pub enum WorldEvent {
         session_id: u64,
         /// Credential-free reason for the rejection.
         reason: String,
-    },
-    /// A local-only `EQEmu` boundary is staying in this admission. Ordinary
-    /// movement may continue. No landing has been received.
-    SameZoneBoundary {
-        /// Admission that submitted the crossing.
-        session_id: u64,
     },
     /// Received movement within this exact zone admission.
     SameZoneRelocated(crate::zoning::SameZoneRelocation),
@@ -2904,6 +2906,7 @@ fn float(bytes: &[u8], offset: usize) -> Result<f32> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one arm per capability")]
     fn every_capability_is_listed_once_in_order() {
         use super::Capability;
         // A new capability is a compile error here until it has a place.
@@ -3002,6 +3005,7 @@ mod tests {
             Capability::ColdWater => 91,
             Capability::InspectAnswer => 92,
             Capability::DecliningDuels => 93,
+            Capability::BardRefreshTimers => 94,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

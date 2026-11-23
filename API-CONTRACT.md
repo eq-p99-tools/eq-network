@@ -103,6 +103,13 @@ list and runs each step on the player's own gem refresh as `StopSong` then
 the next gem's `CastSpell`; the session adds no command for it. The stop
 ends the song, so the press that follows casts.
 
+`Capability::BardRefreshTimers` says where the Titanium program's gem
+timers for a Bard apply (read R49-21 c): a refresh of the Bard's own gem
+starts no wait before the next spell, where anyone else's starts the
+spell's recovery. It comes with the Titanium song rules (P99 and stock
+`EQEmu`); the Mac-era program is unread, so TAKP and Quarm don't offer it.
+The host keeps the timers.
+
 ## Server filters
 
 `ClientConfig::server_filters` is the set a character starts with; the
@@ -494,9 +501,10 @@ Carried slots remain provisional until covered by received inventory.
 A pack receipt for the same serialized whole item can resolve a single
 direct cursor-to-station route, separately from the station clear.
 
-## P99 local pads
+## Same-zone zone lines
 
-A P99 host can provide `InstalledZoneBoundaries` in `ClientConfig`.
+A P99 or stock EQEmu (Titanium) host can provide `InstalledZoneBoundaries`
+in `ClientConfig`; Quarm, TAKP and RoF2 refuse a same-zone line.
 The worker corroborates the entered boundary with the current approach,
 admission and indexed zone-point record where required. A same-zone pad
 submits an ordinary position report at entry and stages a local landing.
@@ -513,6 +521,14 @@ reply only for a supported choice with a response ID. Closing and expiration
 are local, and a successful send does not establish a quest outcome.
 
 `GameCommand::InspectPlayer` uses the current available `TargetState`.
+`GameCommand::InspectSpawn` inspects a spawn by its ID without selecting it,
+as the Titanium program's right-click on a player or on the player's own
+spawn does (read R49-16, R49-16e; checklist 6.644). It needs
+`Capability::PlayerInspection` and has the same rules: a visible player or
+the player's own spawn, closer than 20 units, one outstanding request per
+player. A spawn out of reach is refused; the caller says the program's
+too-far line (0x305a) before asking. Its answer arrives as
+`WorldEvent::PlayerInspection`, as `InspectPlayer`'s does.
 `WorldEvent::PlayerInspection` carries the equipment names, icons and note
 received for the matching nearby player. These fields carry no inventory
 custody. `GameCommand::SetInspectNote` supplies the admission's known note
@@ -528,8 +544,8 @@ request itself, at most once a second, with the worn places' item names
 and icons and the note from `SetInspectNote`; an absent note answers with an
 empty message, as the program always answers. Each answer emits
 `WorldEvent::InspectedBy` with line 0x57c and the asker's name when the
-asker is a known spawn other than the player. `InspectPlayer` and received
-answers are not offered on `EQMac`.
+asker is a known spawn other than the player. `InspectPlayer`, `InspectSpawn`
+and received answers are not offered on `EQMac`.
 
 ## Titanium observer sight
 
@@ -1897,10 +1913,10 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   refused with the `IN_USE` line and no echo, so the take's wait runs out and
   the session gives it up. Leaving the boat, a zone offer and the player's
   death each give control back.
-- **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
-  types until the `EQMac` program's steering (a position update under the
-  boat's spawn moves it on both servers) and its arrival are read (open row
-  9b and the arrival placement).
+- **Not offered.** `BoatControl` stays off on both server types: read 9c
+  found no boat steering in the `EQMac` program (its controlled spawn is a
+  horse). `BoatRiding` stays off until an attended first ride on each
+  server; the offer is its own change.
 - **Board and leave (built, not offered; 6.618).** The `EQMac` program's
   frame routine (TAKP `eqgame.exe` 0x4c131d, read 9a) sends `OP_BoardBoat`
   (the program's 0x41bb; 0xbb41 in this crate's byte order, as Quarm's
@@ -1913,6 +1929,22 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   checks for them on each accepted motion sample on the Mac era, where
   Titanium uses its 1 s tick. Samples standing in for the program's frames
   is inferred.
+- **Arrival (built, not offered; 6.641).** With a boat named in the
+  profile, the `EQMac` program finds that spawn by name and stands the
+  player at the profile's position, linked to the boat (TAKP `eqgame.exe`
+  0x53df6e, read 9c). Both servers write that position as a world point: a
+  zone line's target, the safe point, or the boat's own place (`SendToBoat`
+  and zoning; source-derived). So the riders feature takes the profile's
+  position as a world point, publishes `Arrival::Aboard` with it in the
+  boat's frame as the boat stands at the arrival, and accepts the host's
+  placement at the first try only: Titanium's second try has no Mac read.
+  With the boat not in, it sends nothing (no 0x3710), publishes
+  `Arrival::Waiting`, looks for the boat again on each tick and holds the
+  player aboard once it comes in; after 60 s it uses the zone's safe point.
+  The bound and the safe point are inferred from Titanium. A Mac rider
+  crosses the zone line standing on the deck; there is no carry-on
+  transfer. In Timorous Deep and Firiona Vie the servers blank the name and
+  place the rider themselves, so that arrival is an ordinary one.
 - **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
   `Message::VehicleName`, last among the profile's messages. Both servers
   keep it across zones and clear it on `OP_LeaveBoat` and in a zone without
