@@ -366,7 +366,8 @@ fn a_twisted_next_song_is_the_one_playing() {
         bard.casting.song,
         Some(Song {
             spell: 203,
-            item: false
+            item: false,
+            awaiting_start: false,
         })
     );
     stopped_with_no_cast_held(&mut bard);
@@ -453,7 +454,8 @@ fn an_items_song_not_of_the_class_stops_here_only() {
         bard.casting.song,
         Some(Song {
             spell: 999,
-            item: true
+            item: true,
+            awaiting_start: false,
         })
     );
     nothing_sent(
@@ -472,4 +474,185 @@ fn only_a_bard_stops_a_song() {
     player.memorized_spells[0] = Some(202);
     bard.world.player.admit(player);
     nothing_sent(&mut bard, "Only Bards can stop a song");
+}
+
+fn began_in(caster_id: u16, spell_id: u16, duration_ms: u32) -> Message {
+    Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+        caster_id,
+        spell_id,
+        duration_ms,
+    }))
+}
+
+#[test]
+fn a_gem_cast_of_100_ms_or_less_is_no_song_once_its_own_start_says_so() {
+    // 0x411f3d keeps a cast as the song only over 100 ms (read R16); the
+    // player's own start carries the time (6.442).
+    assert_eq!(SONG_CAST_MS, 100);
+    for duration_ms in [0, 100] {
+        let mut bard = Bard::new();
+        bard.cast(0, 202);
+        assert!(bard.casting.song.is_some());
+        bard.hear(began_in(7, 202, duration_ms));
+        assert_eq!(bard.casting.song, None);
+        bard.hear(refreshed(0, 202));
+        nothing_sent(&mut bard, "No song is playing");
+    }
+    // Over 100 ms it is the song, and the stop goes out.
+    for duration_ms in [101, 3000] {
+        let mut bard = Bard::new();
+        bard.cast(0, 202);
+        bard.hear(began_in(7, 202, duration_ms));
+        bard.hear(refreshed(0, 202));
+        stopped_with_no_cast_held(&mut bard);
+    }
+}
+
+#[test]
+fn another_casters_start_or_another_spells_keeps_the_song() {
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    bard.hear(began_in(8, 202, 0));
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 202,
+            item: false,
+            awaiting_start: false,
+        })
+    );
+    stopped_with_no_cast_held(&mut bard);
+    // The player's own start of another spell leaves the song to that
+    // spell's cast, as the program's start does.
+    sung(&mut bard, 0, 202);
+    bard.hear(began_in(7, 203, 0));
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 202,
+            item: false,
+            awaiting_start: false,
+        })
+    );
+}
+
+#[test]
+fn a_start_from_an_earlier_zone_visits_spawn_changes_nothing() {
+    // The player was spawn 7; on this visit they are 9, and 7 is someone
+    // else.
+    let mut bard = Bard::new();
+    bard.world.own_spawn = Some(9);
+    let mut player = testing::player(9);
+    player.class = Some(BARD_CLASS);
+    player.memorized_spells[0] = Some(202);
+    bard.world.player.admit(player);
+    let command = ClientCommand::CastSpell {
+        session_id: bard.world.session_id,
+        gem: 0,
+        spell_id: 202,
+        target_id: 9,
+        created: Instant::now(),
+    };
+    bard.command(&command).result.unwrap();
+    bard.hear(began_in(7, 202, 0));
+    assert!(bard.casting.song.is_some());
+    bard.hear(began_in(9, 202, 0));
+    assert_eq!(bard.casting.song, None);
+}
+
+#[test]
+fn with_no_own_start_a_gem_cast_stays_a_song() {
+    // A server that does not echo the start to the caster: as before.
+    let mut bard = Bard::new();
+    bard.cast(0, 202);
+    bard.hear(refreshed(0, 202));
+    stopped_with_no_cast_held(&mut bard);
+}
+
+#[test]
+fn a_singing_bards_movement_is_untouched() {
+    // The song state decides only what a stop sends; singing never holds
+    // or changes movement.
+    use eq_network_game::movement::{HeadingUpdate, MovementMode, MovementRequest};
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    bard.cast(1, 203);
+    let step = ClientCommand::Move(MovementRequest {
+        session_id: 5,
+        mode: MovementMode::Forward,
+        heading: HeadingUpdate::Rate,
+        position: eq_network_game::world::Position::default(),
+        created: Instant::now(),
+        support: None,
+    });
+    assert_eq!(
+        super::super::actions::needs(&step),
+        &[] as &[super::super::actions::Resource]
+    );
+    assert!(!bard.casting.guard.blocks(&step));
+    let output = bard.command(&step);
+    output.result.unwrap();
+    assert_eq!(output.sent, []);
+    assert!(output.events.is_empty());
+}
+
+#[test]
+fn an_items_song_is_left_to_its_records_cast_time() {
+    use eq_network_game::inventory::{
+        ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate, ItemUse,
+    };
+    let mut bard = Bard::new();
+    let slot = InventorySlot(22);
+    let mut item = testing::item(slot.0);
+    item.activation.effect = Some(ClickEffect {
+        spell_id: 202,
+        kind: ClickKind::Expendable,
+        required_level: 0,
+        effect_level: 1,
+        cast_time_ms: 1000,
+        recast_delay_seconds: 0,
+        recast_type: 0,
+    });
+    item.charges = 1;
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+    bard.world.inventory = inventory.into();
+    let command = ClientCommand::UseItem(ItemUse {
+        request_id: 1,
+        session_id: 5,
+        revision: bard.world.inventory.revision(),
+        slot,
+        target_id: 7,
+        created: Instant::now(),
+    });
+    bard.command(&command).result.unwrap();
+    bard.hear(began_in(7, 202, 0));
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 202,
+            item: true,
+            awaiting_start: false,
+        })
+    );
+}
+
+#[test]
+fn only_the_gem_casts_own_start_decides_its_song() {
+    // A gem song kept at 3,000 ms, then a later own start of the same
+    // spell at 0 ms (an item's click of it, say) leaves the song, and the
+    // stop still goes out (reviewer F1).
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    bard.hear(began_in(7, 202, 0));
+    bard.hear(refreshed(0, 202));
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 202,
+            item: false,
+            awaiting_start: false,
+        })
+    );
+    stopped_with_no_cast_held(&mut bard);
 }

@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538, 6.539, 6.541),
-//! and the chat rows from the chat parser (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538, 6.539, 6.541,
+//! 6.544), and the chat rows from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -223,6 +223,17 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x127f => sent("OP_CameraEffect", ROF2, Read(&[Zone])),
         0x5770 => sent("OP_PlayMP3", ROF2, Read(&[Zone])),
         0x5936 => sent("OP_SpellEffect", ROF2, Partly(&[Zone], NIMBUS)),
+        // Targets, charms, cash rewards, linked reuse and the answers to
+        // begging, pick pocketing and bandaging (6.544), unencoded for both
+        // generations, the bytes Titanium gets.
+        0x58e2 => sent("OP_TargetCommand", ROF2, Read(&[Zone])),
+        0x0272 => sent("OP_TargetHoTT", ROF2, Read(&[Zone])),
+        0x5d92 => sent("OP_Charm", ROF2, Read(&[Zone])),
+        0x5f7a => sent("OP_CashReward", ROF2, Read(&[Zone])),
+        0x1619 => sent("OP_LinkedReuse", ROF2, Read(&[Zone])),
+        0x6703 => sent("OP_Begging", ROF2, Read(&[Zone])),
+        0x39e8 => sent("OP_PickPocket", ROF2, Read(&[Zone])),
+        0x0386 => sent("OP_Bind_Wound", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the
