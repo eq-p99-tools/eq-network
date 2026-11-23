@@ -222,6 +222,61 @@ fn synthetic_spawn_batch_preserves_units_identity_and_visibility() {
     );
 }
 #[test]
+fn a_spawn_says_whose_pet_it_is() {
+    // A pet of spawn 7 at +18 (petOwnerId), and a spawn with no owner, in
+    // both packets that carry spawn records: the zone's list and a new spawn.
+    let mut data = vec![0; SPAWN_SIZE * 2];
+    for (record, (id, owner)) in data
+        .as_chunks_mut::<SPAWN_SIZE>()
+        .0
+        .iter_mut()
+        .zip([(20u16, 0x0107u16), (21, 0)])
+    {
+        record[76..78].copy_from_slice(&id.to_le_bytes());
+        record[86] = 1;
+        record[18..20].copy_from_slice(&owner.to_le_bytes());
+    }
+    for opcode in [0x5f41, 0x6b42] {
+        let [WorldEvent::Spawns(spawns)] = &updates(opcode, &packed_spawns(&data)).unwrap()[..]
+        else {
+            panic!("no spawns from {opcode:#06x}");
+        };
+        assert_eq!(spawns[0].pet_owner, Some(0x0107), "{opcode:#06x}");
+        assert_eq!(spawns[1].pet_owner, None, "{opcode:#06x}");
+        assert_eq!(crate::pets::owned_pet(0x0107, spawns.iter()), Some(20));
+    }
+    // One new spawn alone.
+    let [WorldEvent::Spawns(one)] =
+        &updates(0x6b42, &packed_spawns(&data[..SPAWN_SIZE])).unwrap()[..]
+    else {
+        panic!("no spawn");
+    };
+    assert_eq!(one[0].pet_owner, Some(0x0107));
+}
+
+/// Packs spawn records as the Mac servers send them: compressed, the first
+/// and middle words swapped, then each whole word enciphered (the inverse
+/// of `unpack` for spawns).
+fn packed_spawns(data: &[u8]) -> Vec<u8> {
+    const CONSTANT: u64 = 0x6593_65e7;
+    let mut bytes = miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
+    let (words, _) = bytes.as_chunks_mut::<8>();
+    words.swap(0, words.len() / 2);
+    let mut key = 0u64;
+    for word in words.iter_mut() {
+        let plain = u64::from_le_bytes(*word);
+        let cipher = plain
+            .rotate_left(29)
+            .wrapping_add(CONSTANT)
+            .rotate_left(14)
+            .wrapping_sub(key);
+        key = key.wrapping_add(plain).wrapping_sub(CONSTANT);
+        *word = cipher.to_le_bytes();
+    }
+    bytes
+}
+
+#[test]
 fn a_spawn_says_its_class_and_level() {
     // As TAKP's patch sends them: a merchant (32 for the server's 41) of
     // level 30, a banker (16 for 40) of level 50, a guildmaster (20 for 23),

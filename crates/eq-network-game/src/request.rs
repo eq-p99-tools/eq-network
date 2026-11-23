@@ -862,6 +862,9 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::DragCorpse(corpse) => corpses::eqmac_drag(corpse, sender.name),
         // Quarm's own opcode; the session sends it only to Quarm.
         Request::DropCorpse { corpse } => corpses::quarm_drop(corpse.as_deref(), sender.name),
+        Request::Pet { command, target } if command.on_eqmac() => {
+            Ok(pets::eqmac_command(*command, *target))
+        }
         Request::Random { low, high } => Ok(socials::eqmac_random(*low, *high)),
         Request::Assist(spawn_id) => Ok(socials::eqmac_assist(*spawn_id)),
         Request::SplitCoins(coins) => crate::split::eqmac_split(*coins),

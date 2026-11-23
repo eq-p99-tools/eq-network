@@ -18,6 +18,8 @@ use serde::Serialize;
 
 /// `OP_PetCommands`: a command to the player's pet.
 pub const COMMAND_OPCODE: u16 = 0x10a1;
+/// `OP_PetCommands` on TAKP and Quarm (Mac 0x4245).
+pub const EQMAC_COMMAND_OPCODE: u16 = 0x4542;
 /// `OP_PetBuffWindow`: the pet's buffs.
 pub const BUFFS_OPCODE: u16 = 0x4e31;
 /// Buff slots a pet has.
@@ -146,6 +148,14 @@ impl PetCommand {
         self.in_classic_order_set()
     }
 
+    /// Whether TAKP and Quarm know the command: both servers'
+    /// `Handle_OP_PetCommands` take every number but 13, 18 and 19, which
+    /// fall to its default (`zone/pets.h`, Quarm fc75fcf, TAKP 44afcbf).
+    #[must_use]
+    pub const fn on_eqmac(self) -> bool {
+        !matches!(self, Self::TauntOn | Self::NoCast | Self::Focus)
+    }
+
     /// Whether the command names the player's target: an attack aims at it,
     /// and asking for a leader asks about it.
     #[must_use]
@@ -163,6 +173,18 @@ pub fn command(command: PetCommand, target: Option<u16>) -> EncodedCommand {
     EncodedCommand {
         opcode: COMMAND_OPCODE,
         body,
+    }
+}
+
+/// A command to the player's pet on TAKP or Quarm: the same 8-byte
+/// `PetCommand_Struct` on the `EQMac` opcode. The servers take the numbers
+/// as sent, which are Titanium's for every command they know
+/// ([`PetCommand::on_eqmac`]).
+#[must_use]
+pub fn eqmac_command(order: PetCommand, target: Option<u16>) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_COMMAND_OPCODE,
+        ..command(order, target)
     }
 }
 
@@ -250,6 +272,23 @@ mod tests {
             [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19]
         );
         assert!(PetCommand::Attack.names_target() && !PetCommand::Follow.names_target());
+    }
+
+    #[test]
+    fn eqmac_commands_are_the_same_numbers_on_the_mac_opcode() {
+        assert_eq!(
+            eqmac_command(PetCommand::Attack, Some(42)),
+            EncodedCommand {
+                opcode: 0x4542,
+                body: vec![7, 0, 0, 0, 42, 0, 0, 0],
+            }
+        );
+        let known: Vec<u32> = PetCommand::ALL
+            .into_iter()
+            .filter(|order| order.on_eqmac())
+            .map(PetCommand::wire)
+            .collect();
+        assert_eq!(known, [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 17]);
     }
 
     #[test]

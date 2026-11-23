@@ -67,7 +67,7 @@ each.
 | `KnightAbilities` | Lay on Hands and Harm Touch | Yes | Yes | – | – |
 | `UsingDisciplines` | Disciplines the server lists, for every melee class | Yes | Yes | – | – |
 | `Tracking` | The tracking window | Yes | Yes | – | – |
-| `Pets` | Commanding a pet | Yes | Yes | – | – |
+| `Pets` | Commanding a pet (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Casting` | Casting memorized spells | Yes | Yes | Yes | Yes |
 | `Spellbook` | Memorizing, scribing and forgetting spells | Yes | Yes | Yes | Yes |
 | `MovingSpells` | Moving a spell within the spellbook | Yes | Yes | – | – |

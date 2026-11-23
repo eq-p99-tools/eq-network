@@ -1763,6 +1763,22 @@ impl ServerType for Quarm {
         offer(Box::new(Corpses::eqmac(true)))
     }
 
+    /// Pet commands in the `EQMac` program's packets
+    /// ([`eq_network_game::pets::eqmac_command`]), from Quarm's own
+    /// `Handle_OP_PetCommands` at SecretsOTheP/EQMacEmu fc75fcf: the 8-byte command and target,
+    /// whose numbers are Titanium's for each command it knows; taunt on, no
+    /// cast and focus fall to its default and are refused
+    /// ([`PetOrderSet::EqMac`]). Hold and feign go as asked, and the server
+    /// decides by the player's AAs. A spawn's owner comes from its record
+    /// (`petOwnerId`) and from charm.
+    /// Quarm refuses every command but get lost while the player is
+    /// invisible or hidden, with the pet's own line; the session sends the
+    /// command and lets it answer. No pace (6.595a). Source-derived, not
+    /// live (6.595).
+    fn pets(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::pets(PetOrderSet::EqMac))
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -2167,6 +2183,19 @@ impl ServerType for Takp {
     /// not live (6.591).
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Corpses::eqmac(false)))
+    }
+
+    /// Pet commands in the `EQMac` program's packets
+    /// ([`eq_network_game::pets::eqmac_command`]), from TAKP's own
+    /// `Handle_OP_PetCommands` at EQMacEmu/Server 44afcbf: the 8-byte command and target,
+    /// whose numbers are Titanium's for each command it knows; taunt on, no
+    /// cast and focus fall to its default and are refused
+    /// ([`PetOrderSet::EqMac`]). Hold and feign go as asked, and the server
+    /// decides by the player's AAs. A spawn's owner comes from its record
+    /// (`petOwnerId`) and from charm. No pace (6.595a). Source-derived, not
+    /// live (6.595).
+    fn pets(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::pets(PetOrderSet::EqMac))
     }
 
     /// Corpse looting in the `EQMac` program's packets
@@ -2620,11 +2649,11 @@ mod tests {
         // giving, groups, listing and translocate (6.576); both search the
         // Bazaar from source (6.580), and each answers `/who all` and friends
         // from its own handlers (6.583), and rolls, assists and splits the
-        // same way (6.585), and corpses (6.591). Other features await their
-        // own evidence.
+        // same way (6.585), corpses (6.591) and pets (6.595). Other features
+        // await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 26);
+        assert_eq!(quarm.features(&setup).len(), 27);
         assert_eq!(
             offers(quarm),
             [
@@ -2646,6 +2675,7 @@ mod tests {
                 Capability::Abilities,
                 Capability::Who,
                 Capability::Corpses,
+                Capability::Pets,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -2663,7 +2693,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 28);
+        assert_eq!(takp.features(&setup).len(), 29);
         assert_eq!(
             offers(takp),
             [
@@ -2685,6 +2715,7 @@ mod tests {
                 Capability::Abilities,
                 Capability::Who,
                 Capability::Corpses,
+                Capability::Pets,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,

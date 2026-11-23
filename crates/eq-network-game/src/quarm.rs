@@ -778,7 +778,8 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),
                 name_parts: crate::names::NameParts::default(),
-                pet_owner: None,
+                // The owner's spawn at +18 (`petOwnerId`), 0 for none.
+                pet_owner: Some(short(record, 18)).filter(|owner| *owner != 0),
                 hp_percent: None,
                 posture: None,
                 // The Mac-era record's body type is unread.

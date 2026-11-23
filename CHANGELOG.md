@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Pets` on Quarm and TAKP (6.595), from their own handlers (Quarm
+  fc75fcf, TAKP 44afcbf).
+  - New: `pets::{EQMAC_COMMAND_OPCODE, eqmac_command}` and
+    `PetCommand::on_eqmac`.
+  - The Mac spawn record's `petOwnerId` now fills `SpawnState::pet_owner`.
+  - Taunt on, no cast and focus are refused there.
+  - Source-derived, not live.
+
 - Offer `Corpses` on Quarm and TAKP (6.591), from their own handlers (Quarm
   fc75fcf, TAKP 44afcbf).
   - New functions: `corpses::{eqmac_consent, eqmac_summon, eqmac_drag,
