@@ -17,6 +17,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorldEvent::ChatRefused`, channel commands by `ChatChannelRefused`, with
   the whole seconds to wait and never the line. The chat link's own login
   is not counted. **Breaking:** `WorldEvent::ChatRefused` is a new variant.
+
 - Read RoF2's casting, stuns and illusions as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.522). The new `rof2_casting` module reads
   `OP_BeginCast` (0x318f, 10 bytes, the spell in 32 bits refused past 16),
