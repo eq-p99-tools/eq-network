@@ -103,7 +103,9 @@ fn touches_cursor_or_station(command: &ClientCommand) -> bool {
     match command {
         ClientCommand::MoveInventory(request) => touches(request.from) || touches(request.to),
         ClientCommand::Sell { slot, .. } => touches(InventorySlot(*slot)),
-        ClientCommand::Consume { slot, .. } => touches(*slot),
+        ClientCommand::Consume { slot, .. } | ClientCommand::ApplyPoison { slot, .. } => {
+            touches(*slot)
+        }
         ClientCommand::DestroyItem(_)
         | ClientCommand::DropItem(_)
         | ClientCommand::PickUp { .. }
@@ -156,6 +158,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }
+        // A poison put on is taken from the inventory by the server's record.
+        | ClientCommand::ApplyPoison { .. }
         | ClientCommand::AcceptTrade { .. }
         // A combine takes the container's contents and puts what was made
         // on the cursor.
@@ -294,6 +298,7 @@ pub(super) fn refuse_naming(
             arguments.extend_from_slice(names);
         }
         if let WorldEvent::ConsumeRefused { string_id, .. }
+        | WorldEvent::ApplyPoisonRefused { string_id, .. }
         | WorldEvent::CorpseRefused { string_id, .. }
         | WorldEvent::PetRefused { string_id, .. }
         | WorldEvent::CombineRefused { string_id, .. }
@@ -374,6 +379,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AcceptTrade { session_id, .. }
         | ClientCommand::MoveCoins { session_id, .. }
         | ClientCommand::Consume { session_id, .. }
+        | ClientCommand::ApplyPoison { session_id, .. }
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
@@ -543,6 +549,11 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             string_id: None,
         },
         ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::ApplyPoison { .. } => WorldEvent::ApplyPoisonRefused {
             session_id,
             reason,
             string_id: None,

@@ -561,6 +561,19 @@ still an error, not either completion event.
 but post it only for an admission offering meals. Protocol and server-specific
 allowance policies remain with the existing inventory owner.
 
+## Applying a poison
+
+`Capability::ApplyingPoison` gates `GameCommand::ApplyPoison { slot }`. The
+inventory feature offers it with `Inventory`, on Titanium and `EQMac`
+admissions; RoF2 offers no features. The session refuses, with
+`WorldEvent::ApplyPoisonRefused` and nothing sent, while the inventory is not
+current, while the slot has moves unconfirmed, while an earlier request waits
+for its answer, and when the slot holds no item of type 42. It never removes
+the poison itself: the server's own inventory record does, applied or not.
+`WorldEvent::PoisonAnswered { slot, applied }` is the server's answer and ends
+the request in flight. The Titanium program's own gates and lines are pending
+read R49-1 (recording checklist 6.493).
+
 ## Command diagnostic identity
 
 `GameCommand::name()` returns its exhaustive variant name as a static string,

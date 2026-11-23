@@ -195,7 +195,7 @@ impl fmt::Display for Reason {
 pub(super) enum Step {
     /// The player's own state: what is left of it answers requests
     /// eq-network does not send yet, the player's begging, disarming, pick
-    /// pocketing, poisoning and tracking, and a banker's change.
+    /// pocketing and tracking, and a banker's change.
     PlayerState,
     /// Social, guild, title and GM messages: what is left of them answers
     /// requests eq-network does not send yet, for an inspection, the

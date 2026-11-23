@@ -203,7 +203,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xb440 => sent("OP_SendZonepoints", EQMAC, Read(&[Zone])),
         0xb540 => sent("OP_InspectRequest", EQMAC, Partly(&[Zone], INSPECT_REQUEST)),
         0xb640 => sent("OP_InspectAnswer", EQMAC, unasked(Social)),
-        0xba41 => sent("OP_ApplyPoison", EQMAC, unasked(PlayerState)),
+        0xba41 => sent("OP_ApplyPoison", EQMAC, Read(&[Zone])),
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
         0xc341 => sent("OP_LogServer", EQMAC, Partly(&[World, Zone], LOG_SERVER)),
         0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
