@@ -16,6 +16,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   echoes the start to the caster, are inferred (R49-21a). The song state
   still decides only what `/stopsong` and a Bard's `/stopcast` send; it
   holds nothing and never touches movement.
+- Read RoF2's doors, ground objects and weather as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.539). The new `rof2_world` module
+  reads `OP_SpawnDoor` (0x7291), 100-byte records with the size widened to
+  32 bits, `OP_MoveDoor` (0x08e8), `OP_GroundSpawn` (0x6fca), the encoder's
+  variable record of the name's length plus 101, `OP_ClickObject` (0x4aa1)
+  and `OP_Weather` (0x661e) into Titanium's events, with Titanium's
+  refusals. Titanium's door table, door move and object click are now the
+  named `doors::door_table`, `doors::door_move` and `objects::click`, and
+  `objects::text` is shared. Coverage lists the five; the ground object's
+  zone, instance, tilts and size, and the 12-byte zone-in weather, are
+  planned parts. An admitted RoF2 session hands the host each and still
+  sends and offers nothing.
 - Read RoF2's mana and endurance pools as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.538). The new `rof2_pools` module reads
   `OP_ManaUpdate` (0x3791) and `OP_EnduranceUpdate` (0x5f42), the server's
