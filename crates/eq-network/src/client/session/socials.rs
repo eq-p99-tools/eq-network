@@ -360,6 +360,7 @@ const TITLES_SETTLING: Duration = super::listing::SETTLING;
 pub(super) struct Titles {
     asked: Option<Instant>,
     answered: Option<Instant>,
+    chosen: Option<Instant>,
     listed: Option<Vec<eq_network_game::names::TitleChoice>>,
     unasked: Option<usize>,
 }
@@ -458,6 +459,17 @@ impl Feature for Titles {
                     .listed
                     .as_ref()
                     .is_some_and(|listed| listed.iter().any(has_text));
+                // Each choice the server takes it tells the whole zone.
+                if self
+                    .chosen
+                    .is_some_and(|chosen| chosen.elapsed() < TITLES_SETTLING)
+                {
+                    return actions::refuse(
+                        command,
+                        "Wait a moment before choosing again.",
+                        out.log,
+                    );
+                }
                 if *title_id != 0 && !listed {
                     return actions::refuse(
                         command,
@@ -468,7 +480,9 @@ impl Feature for Titles {
                 out.request(&Request::SetTitle {
                     title_id: *title_id,
                     suffix: *suffix,
-                })
+                })?;
+                self.chosen = Some(Instant::now());
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -508,6 +522,9 @@ mod tests {
         for suffix in [false, true] {
             let cleared = choose(&mut feature, &mut world, 0, suffix);
             assert_eq!(cleared.sent[0].body, set_title(0, suffix));
+            // The next choice, a clear too, waits out the settling.
+            assert!(refused(&choose(&mut feature, &mut world, 0, suffix)));
+            feature.chosen = Instant::now().checked_sub(TITLES_SETTLING);
         }
 
         // A list nobody asked for is withheld, names nothing, and is a gap.
@@ -553,6 +570,7 @@ mod tests {
                 &set_title(7, false)
             )
         );
+        feature.chosen = None;
         // Not listed, or a kind the title has no text for.
         assert!(refused(&choose(&mut feature, &mut world, 9, false)));
         assert!(refused(&choose(&mut feature, &mut world, 7, true)));

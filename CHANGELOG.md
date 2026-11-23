@@ -19,7 +19,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gap log. A list no request asked for is withheld and logged as a gap.
   `GameCommand::SetTitle` sends `OP_SetTitle` (0x1f22, 8 bytes, the kind as
   0 or 1 then the id) only for an id on this admission's latest list with
-  text of that kind, or 0 to clear either kind; anything else is refused,
+  text of that kind, or 0 to clear either kind, and at most one per 500 ms
+  (the server tells each to the whole zone); anything else is refused,
   nothing sent. A new admission forgets the list and the request in flight.
   Coverage lists 0x3e89 as read by the zone decoder. Nothing in a client
   calls `SetTitle` yet: the title window waits for read R49-14.

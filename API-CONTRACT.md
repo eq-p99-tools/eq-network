@@ -1644,7 +1644,9 @@ too. `GameCommand::SetTitle { title_id, suffix }` chooses from the latest
 list of this admission: the id must be on it and have text of the kind
 asked (`suffix` true for the suffix, false for the title), or it is refused
 with `WorldEvent::SocialRefused` and nothing is sent. `title_id` 0 clears
-either kind and needs no list. A new admission forgets the list and any
+either kind and needs no list. Each choice the server takes it tells the
+whole zone, so two choices, clears included, go at least 500 ms apart; one
+sooner is refused and nothing is sent. A new admission forgets the list and any
 request in flight. The server says nothing back to a choice it ignores; the
 name a choice gives the spawn comes from the zone's own
 `WorldEvent::TitleChanged`. Nothing in the client calls `SetTitle` until the

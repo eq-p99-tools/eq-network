@@ -228,6 +228,7 @@ pub(crate) fn title_list(body: &[u8]) -> Result<WorldEvent> {
         Ok(String::from_utf8_lossy(&rest[..end]).into_owned())
     };
     let mut titles = Vec::with_capacity(count);
+    let mut seen = std::collections::HashSet::with_capacity(count);
     for _ in 0..count {
         ensure!(body.len() >= at + 4, "title without its number");
         let id = word(body, at);
@@ -236,7 +237,7 @@ pub(crate) fn title_list(body: &[u8]) -> Result<WorldEvent> {
         let prefix = string(&mut at)?;
         let suffix = string(&mut at)?;
         // A number listed again keeps its first entry.
-        if titles.iter().all(|title: &TitleChoice| title.id != id) {
+        if seen.insert(id) {
             titles.push(TitleChoice { id, prefix, suffix });
         }
     }
