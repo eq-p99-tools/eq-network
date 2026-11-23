@@ -517,8 +517,20 @@ are local, and a successful send does not establish a quest outcome.
 `WorldEvent::PlayerInspection` carries the equipment names, icons and note
 received for the matching nearby player. These fields carry no inventory
 custody. `GameCommand::SetInspectNote` supplies the admission's known note
-for automatic replies. A known empty string can be sent. An absent note
-leaves the automatic reply withheld.
+for automatic replies; it needs `Capability::InspectAnswer`, which both
+Titanium types offer with `PlayerInspection`. A known empty string can be
+sent. An absent note leaves the automatic reply withheld.
+
+## EQMac inspection answers
+
+TAKP and Quarm offer `Capability::InspectAnswer` alone (6.621,
+source-derived, not live). The player's program answers each relayed
+request itself, at most once a second, with the worn places' item names
+and icons and the note from `SetInspectNote`; an absent note answers with an
+empty message, as the program always answers. Each answer emits
+`WorldEvent::InspectedBy` with line 0x57c and the asker's name when the
+asker is a known spawn other than the player. `InspectPlayer` and received
+answers are not offered on `EQMac`.
 
 ## Titanium observer sight
 
@@ -1888,8 +1900,20 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   death each give control back.
 - **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
   types until the `EQMac` program's steering (a position update under the
-  boat's spawn moves it on both servers) and its board, leave and arrival
-  wire are read (open rows 9a and 9b).
+  boat's spawn moves it on both servers) and its arrival are read (open row
+  9b and the arrival placement).
+- **Board and leave (built, not offered; 6.618).** The `EQMac` program's
+  frame routine (TAKP `eqgame.exe` 0x4c131d, read 9a) sends `OP_BoardBoat`
+  (the program's 0x41bb; 0xbb41 in this crate's byte order, as Quarm's
+  table lists it) reliable on the first frame its vehicle pointer is set,
+  with the boat's name, its NUL and three record bytes, and an empty
+  `OP_LeaveBoat` (0x41bc; 0xbc41 here) unreliable once two frames in a row
+  have none.
+  `boats::riders::{eqmac_board, eqmac_leave}` encode them, sending the
+  three bytes as zero (inferred, as on Titanium). The riders feature
+  checks for them on each accepted motion sample on the Mac era, where
+  Titanium uses its 1 s tick. Samples standing in for the program's frames
+  is inferred.
 - **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
   `Message::VehicleName`, last among the profile's messages. Both servers
   keep it across zones and clear it on `OP_LeaveBoat` and in a zone without
@@ -2294,8 +2318,8 @@ changes are at least 500 ms apart; a refusal is
 
 ## Duel challenges
 
-Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
-so far), the session keeps a duel as the Titanium program does (read
+Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`,
+and TAKP and Quarm as below), the session keeps a duel as the Titanium program does (read
 R49-6): the challenge the player sent, the one waiting for them, and
 whether a duel is on. It tells the host what happened in
 `WorldEvent::DuelNews` with a `socials::DuelNews`, one for each line the
@@ -2358,6 +2382,38 @@ on Titanium.
 refusal the program sends is never told to the challenger. The challenger
 stays challenging until they zone or die, as with the original client.
 The first P99 use of 0x3ea0 and of the two-packet accept is attended.
+
+### On TAKP and Quarm
+
+TAKP and Quarm offer the `EQMac` program's duel (TAKP program reads 11g
+and 11h, checklist 6.622), source-derived from each server's handlers
+(TAKP 44afcbf, Quarm fc75fcf), not live; the first public use is attended.
+It keeps the same three facts and tells the same `DuelNews`, with these
+differences:
+
+- `/duel` takes any spawn that isn't a corpse, NPCs included, and tests
+  for no target (`NoPlayerTarget`) before the player themself.
+- Its packets are 16-bit ids: `OP_RequestDuel` 0xcf40 {other, player},
+  and to accept, 0xcf40 then `OP_DuelAccept` 0x5d41 {challenger, player}.
+- Its own refusals are `OP_DuelResponse` 0xd040, 6 bytes {challenger,
+  player, reason}, with the same reasons 1 and 2.
+- TAKP relays the other client's 0xd040 as `DuelUpdate::Refused`; from the
+  one the player challenged it is `TurnedDown`, reason 0 (their `/decline`
+  or ignore list), 1 or 2, as Titanium's refusal is. Quarm sends a line of
+  text instead.
+- `Capability::DecliningDuels` and `GameCommand::DeclineDuel` are its
+  `/decline`: during a duel it tells `DecliningWhileDueling` and sends
+  nothing; with a challenge waiting it sends 0xd040 with reason 0, forgets
+  the challenge, closes the question and tells `Declining`; otherwise it
+  tells `NothingToDecline`. Titanium refuses it.
+- A kill of the opponent during the duel sends 0x5e41 (the program's
+  0x415e), 4 bytes {opponent, player}. Neither server names that opcode, so
+  both drop it.
+- The opponent leaving the zone, and the player's own death, change
+  nothing; zoning and logging out forget the duel.
+
+The `DuelOffer` question works as on Titanium: a yes sends what `/duel`
+sends, and a no stays local.
 
 ## Weapon stances
 

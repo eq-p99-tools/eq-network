@@ -8,8 +8,8 @@ use super::{
     ServerMessage,
     Step::{Bazaar, EqMacExchanges, EqMacWorld, PlayerState, Raids, Social},
     BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_AA, EQMAC_DESCRIPTION, EQMAC_ILLUSION,
-    EQMAC_PROFILE, EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK,
-    LOG_SERVER, OWN_NAME, PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    EQMAC_PROFILE, EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INVITE, KICK, LOG_SERVER, OWN_NAME,
+    PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -201,7 +201,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xb040 => sent("OP_ReturnClientControl", EQMAC, Read(&[Zone])),
         0xb240 => sent("OP_HPUpdate / OP_MobHealth", EQMAC, Read(&[Zone])),
         0xb440 => sent("OP_SendZonepoints", EQMAC, Read(&[Zone])),
-        0xb540 => sent("OP_InspectRequest", EQMAC, Partly(&[Zone], INSPECT_REQUEST)),
+        // Answered by the player's own program (6.621).
+        0xb540 => sent("OP_InspectRequest", EQMAC, Read(&[Zone])),
         0xb640 => sent("OP_InspectAnswer", EQMAC, unasked(Social)),
         0xba41 => sent("OP_ApplyPoison", EQMAC, Read(&[Zone])),
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, Read(&[Zone])),
