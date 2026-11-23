@@ -1,15 +1,18 @@
-//! Tracking on the `EQMac` wire (6.603 G3, source-derived, built and not
-//! offered).
+//! Tracking on the `EQMac` wire (6.603 G3, offered 6.619; source-derived,
+//! not live).
 //!
 //! TAKP and Quarm send no track list: the `EQMac` program builds the window
 //! itself from the spawns it knows, and follows one on its own. Their
 //! `Client::Handle_OP_Track` (TAKP 44afcbf, Quarm fc75fcf) only gives the
-//! Tracking skill a chance to rise, reads no body, and **kicks** any player
-//! not a Ranger, Druid or Bard. So [`press`] refuses every other class.
+//! Tracking skill a chance to rise (a zero skill becomes one), reads no
+//! body, and **kicks** any player not a Ranger, Druid or Bard. So [`press`]
+//! refuses every other class.
 //!
-//! No server type sends it, and nothing may until the `EQMac` program's
-//! window and its sends are read (rows 10c, 10d): when it sends this, and
-//! with what body, is unread.
+//! The program sends it empty, once per press of the Tracking ability,
+//! after building its list; no skill roll sends another (TAKP program read
+//! row 10d: the ability routine 0x4bdf2f, skill 0x35). It is offered as the
+//! `EQMac` Tracking ability ([`crate::abilities::eqmac`]). The list itself
+//! is the host's to build (row 10c).
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 
