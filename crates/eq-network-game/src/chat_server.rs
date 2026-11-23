@@ -59,8 +59,7 @@ const KEY_DIGITS: usize = 8;
 /// What the program puts before the world's name in the mailbox it logs in
 /// with; the server keeps only the part after the last dot [I, R49-12 a].
 const MAILBOX_PREFIX: &str = "SOE.EQ.";
-/// The first byte of the client's login and commands, which the server
-/// skips. [I] The read (R49-12 a) gives the login's bytes as 0x01 then 0;
+/// The first byte of the client's login, which the server skips. [I] The read (R49-12 a) gives the login's bytes as 0x01 then 0;
 /// the 0x01 is taken as the opcode ([`LOGIN_OPCODE`]) counted into the body,
 /// so the body leads with the 0 alone. The chat server's stream carries its
 /// opcode in one byte, so the wire is 0x01, 0, then the mailbox.
@@ -157,19 +156,26 @@ impl Login {
     }
 }
 
-/// A command's bytes (`OP_Mail`): the lead byte, the text and a NUL.
+/// A command's bytes (`OP_Mail`): the text as the program sends it, typed
+/// (`/join x`, `/list`, `;1 hello`; read R49-12 e), then a NUL. It has no
+/// lead byte of its own: the server skips the first byte, the `/` or `;`
+/// (`EQEmu`'s `ucs/clientlist.cpp`, which then reads `join x` or `1 hello`).
 ///
 /// # Errors
-/// Refuses empty text, a NUL inside it, or more than [`MAX_COMMAND`] bytes.
+/// Refuses empty text, text that does not start with `/` or `;`, a NUL
+/// inside it, or more than [`MAX_COMMAND`] bytes.
 pub fn command(text: &str) -> Result<Vec<u8>> {
     ensure!(!text.trim().is_empty(), "an empty chat channel command");
+    ensure!(
+        text.starts_with(['/', ';']),
+        "a chat channel command starts with / or ;"
+    );
     ensure!(!text.contains('\0'), "a chat channel command holds a NUL");
     ensure!(
         text.len() <= MAX_COMMAND,
         "a chat channel command is longer than {MAX_COMMAND} bytes"
     );
-    let mut body = Vec::with_capacity(text.len() + 2);
-    body.push(LEAD);
+    let mut body = Vec::with_capacity(text.len() + 1);
     body.extend_from_slice(text.as_bytes());
     body.push(0);
     Ok(body)
@@ -391,17 +397,21 @@ mod tests {
     }
 
     #[test]
-    fn commands_go_as_text_after_the_lead_byte() {
+    fn commands_go_as_typed_whose_first_byte_the_server_skips() {
         assert_eq!(
-            command("join test1, test2").unwrap(),
-            b"\0join test1, test2\0"
+            command("/join test1, test2").unwrap(),
+            b"/join test1, test2\0"
         );
-        assert_eq!(command("2 hello").unwrap(), b"\x002 hello\0");
+        assert_eq!(command(";2 hello").unwrap(), b";2 hello\0");
+        assert_eq!(command("/leaveall").unwrap(), b"/leaveall\0");
+        // Without the program's / or ;, the server would lose a letter.
+        assert!(command("join test1").is_err());
+        assert!(command("2 hello").is_err());
         assert!(command("").is_err());
         assert!(command("   ").is_err());
         assert!(command("a\0b").is_err());
-        assert!(command(&"x".repeat(MAX_COMMAND)).is_ok());
-        assert!(command(&"x".repeat(MAX_COMMAND + 1)).is_err());
+        assert!(command(&format!("/{}", "x".repeat(MAX_COMMAND - 1))).is_ok());
+        assert!(command(&format!("/{}", "x".repeat(MAX_COMMAND))).is_err());
     }
 
     #[test]
