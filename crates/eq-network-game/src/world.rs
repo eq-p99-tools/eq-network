@@ -1412,6 +1412,32 @@ pub enum WorldEvent {
         /// Current endurance.
         endurance: u32,
     },
+    /// A spawn's mana or endurance with its maximum, as `RoF2`'s pool
+    /// updates give it (6.538).
+    ResourcePool {
+        /// Zone-local entity identifier: the player, or another player the
+        /// player holds on an extended target, whose exact values the
+        /// server sends then.
+        spawn_id: u16,
+        /// Which pool.
+        pool: crate::rof2_pools::Pool,
+        /// The current value, as sent. It can stand above the maximum in
+        /// the instant a maximum drops, and a host must not assume
+        /// otherwise; the reader does not clamp it.
+        current: u32,
+        /// The maximum, as sent.
+        maximum: u32,
+    },
+    /// A spawn's mana or endurance as a percent, as `RoF2`'s group and raid
+    /// updates give it (6.538).
+    ResourcePercent {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// Which pool.
+        pool: crate::rof2_pools::Pool,
+        /// The server's own rounded 0..100 percentage, validated.
+        percent: u8,
+    },
     /// Experience progress within this level, on the Titanium 0..330 scale.
     Experience(u32),
     /// Own-character level change, including experience within the new level.

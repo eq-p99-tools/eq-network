@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's mana and endurance pools as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.538). The new `rof2_pools` module reads
+  `OP_ManaUpdate` (0x3791) and `OP_EnduranceUpdate` (0x5f42), the server's
+  10 bytes with the maximum, into the new `WorldEvent::ResourcePool`, and
+  `OP_MobManaUpdate` (0x2404) and `OP_MobEnduranceUpdate` (0x1c81), 3
+  bytes with a percent up to 100, into the new
+  `WorldEvent::ResourcePercent`, each naming a `rof2_pools::Pool`. Titanium is
+  sent none of the four. Coverage lists them. An admitted RoF2 session
+  hands the host each and still sends and offers nothing.
 - Read RoF2's spell book and gems as stock `EQEmu` sends them, labelled
   inferred for RoF2 (6.532). The new `rof2_spellbook` module reads
   `OP_MemorizeSpell` (0x217c), `OP_SwapSpell` (0x0efa) and `OP_DeleteSpell`

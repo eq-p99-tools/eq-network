@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532), and the chat rows
-//! from the chat parser (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538), and the chat
+//! rows from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -184,6 +184,12 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x217c => sent("OP_MemorizeSpell", ROF2, Read(&[Zone])),
         0x0efa => sent("OP_SwapSpell", ROF2, Read(&[Zone])),
         0x3358 => sent("OP_DeleteSpell", ROF2, Read(&[Zone])),
+        // The mana and endurance pools (6.538), unencoded and sent to SoD
+        // and later only.
+        0x3791 => sent("OP_ManaUpdate", ROF2, Read(&[Zone])),
+        0x5f42 => sent("OP_EnduranceUpdate", ROF2, Read(&[Zone])),
+        0x2404 => sent("OP_MobManaUpdate", ROF2, Read(&[Zone])),
+        0x1c81 => sent("OP_MobEnduranceUpdate", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the
