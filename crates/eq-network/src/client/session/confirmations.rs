@@ -1,6 +1,7 @@
 //! The server's questions the player answers: a sacrifice, which takes the
-//! player's life for the caster's gain, and a translocate, which moves them.
-//! Resurrection and translocate carry admission-scoped identities. The
+//! player's life for the caster's gain, a translocate, which moves them,
+//! and another player's challenge to a duel. Resurrection, translocate and
+//! duel carry admission-scoped identities. The
 //! server still owns the outcome, and transfers follow its movement messages.
 use super::{
     actions,
@@ -14,6 +15,7 @@ use eq_network_game::{
     },
     message::Message,
     request::Request,
+    socials::{DuelQuestion, DuelUpdate},
     world::WorldEvent,
 };
 
@@ -334,6 +336,153 @@ impl Feature for Translocate {
                 accept: false,
             })?;
             closed(out, id, ConsentClosure::Expired)?;
+        }
+        Ok(())
+    }
+}
+
+/// Answers another player's challenge to a duel, once, on the player's
+/// word. The question has no local deadline
+/// ([`DuelQuestion`](eq_network_game::socials::DuelQuestion)).
+///
+/// The client sends no challenge of its own yet, so every challenge the
+/// server passes on is one to the player; a challenge sender must first
+/// remember its target here, since every server passes an acceptance on in
+/// the same record.
+pub(super) struct Duel {
+    sequence: u64,
+    current: Option<DuelQuestion>,
+    /// Whether a yes first sends the generation's own challenge back
+    /// ([`Request::DuelRequest`]): the `EQMac` client's, by TAKP's note
+    /// (order inferred, 6.492). No server type lists that yet.
+    echoes_challenge: bool,
+}
+
+impl Duel {
+    /// A duel answered on a server type's wire; `echoes_challenge` as the
+    /// field says.
+    pub(super) const fn new(echoes_challenge: bool) -> Self {
+        Self {
+            sequence: 0,
+            current: None,
+            echoes_challenge,
+        }
+    }
+
+    /// Closes the question waiting, if any matches, as interrupted.
+    fn interrupt(
+        &mut self,
+        out: &mut Out<'_, '_>,
+        matches: impl FnOnce(&DuelQuestion) -> bool,
+    ) -> Result<()> {
+        if let Some(current) = self.current.take_if(|current| matches(current)) {
+            closed(out, current.id, ConsentClosure::Interrupted)?;
+        }
+        Ok(())
+    }
+}
+
+impl Feature for Duel {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::Dueling]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::AnswerDuel { .. })
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::AnswerDuel {
+            offer_id, accept, ..
+        } = *command
+        else {
+            return Ok(());
+        };
+        self.tick(Instant::now(), world, out)?;
+        let answerable = offer_id.session_id == world.session_id
+            && world.ready()
+            && !world.lifecycle.blocks_motion();
+        let Some(question) = self
+            .current
+            .take_if(|current| answerable && current.id == offer_id)
+        else {
+            return actions::refuse(
+                command,
+                "That challenge to a duel is no longer current.",
+                out.log,
+            );
+        };
+        let challenger = question.challenger;
+        if accept && self.echoes_challenge {
+            out.request(&Request::DuelRequest { other: challenger })?;
+        }
+        out.request(&Request::AnswerDuel { challenger, accept })?;
+        closed(out, offer_id, ConsentClosure::AnswerSent { accept })
+    }
+
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if interrupted(message, world) {
+            self.interrupt(out, |_| true)?;
+        }
+        let Message::Event(WorldEvent::Duel(update)) = message else {
+            return Ok(());
+        };
+        match *update {
+            DuelUpdate::Challenge { from } if !world.is_player(from) => {
+                // The same challenger's record again keeps its question.
+                if !world.ready()
+                    || world.lifecycle.blocks_motion()
+                    || self
+                        .current
+                        .is_some_and(|current| current.challenger == from)
+                {
+                    return Ok(());
+                }
+                let Some(sequence) = self.sequence.checked_add(1) else {
+                    return Ok(());
+                };
+                self.sequence = sequence;
+                // A newer challenge replaces one waiting, as the server
+                // keeps only the latest.
+                self.interrupt(out, |_| true)?;
+                let question = DuelQuestion {
+                    id: ConsentId {
+                        session_id: world.session_id,
+                        kind: ConsentKind::Duel,
+                        sequence,
+                    },
+                    challenger: from,
+                };
+                self.current = Some(question);
+                out.log
+                    .send(ClientEvent::World(WorldEvent::DuelOffer(question)))?;
+            }
+            // The duel began, or the challenger's client called it off:
+            // the challenge waiting from them is no longer a question.
+            DuelUpdate::Accepted {
+                challenger: from, ..
+            }
+            | DuelUpdate::Refused { from, .. } => {
+                self.interrupt(out, |current| current.challenger == from)?;
+            }
+            DuelUpdate::Challenge { .. } => (),
+        }
+        Ok(())
+    }
+
+    fn tick(&mut self, _now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if world.lifecycle.blocks_motion() {
+            self.interrupt(out, |_| true)?;
         }
         Ok(())
     }
@@ -679,5 +828,175 @@ mod tests {
                 [] as [eq_network_game::command::EncodedCommand; 0]
             );
         }
+    }
+
+    fn duel_world() -> World {
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        world.own_spawn = Some(7);
+        world
+    }
+
+    fn duel(update: DuelUpdate) -> Message {
+        Message::Event(WorldEvent::Duel(update))
+    }
+
+    fn duel_answer(offer_id: ConsentId, accept: bool) -> ClientCommand {
+        ClientCommand::AnswerDuel {
+            session_id: 5,
+            offer_id,
+            accept,
+        }
+    }
+
+    /// The question one record opens, if it opens one.
+    fn asked(feature: &mut Duel, world: &mut World, update: DuelUpdate) -> Option<DuelQuestion> {
+        let outcome = testing::run(|out| feature.observe(&duel(update), world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        outcome.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::DuelOffer(question)) => Some(*question),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_challenge_is_asked_once_and_answered_once_on_the_players_word() {
+        use eq_network_game::socials::{titanium_duel_accept, titanium_duel_decline};
+        let mut feature = Duel::new(false);
+        let mut world = duel_world();
+        let question = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 })
+            .expect("a challenge is a question");
+        assert_eq!(question.challenger, 12);
+        assert_eq!(question.id.kind, ConsentKind::Duel);
+        // The same record again keeps the question and its identity.
+        assert_eq!(
+            asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }),
+            None
+        );
+        // An answer for another admission sends nothing.
+        let stale = ConsentId {
+            session_id: 4,
+            ..question.id
+        };
+        let outcome =
+            testing::run(|out| feature.handle(&duel_answer(stale, true), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::DuelRefused { offer_id, .. }) if *offer_id == stale
+        )));
+        let outcome =
+            testing::run(|out| feature.handle(&duel_answer(question.id, false), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [titanium_duel_decline(12, 7)]);
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::ConsentClosed {
+                id,
+                closure: ConsentClosure::AnswerSent { accept: false }
+            }) if *id == question.id
+        )));
+        // The question is spent.
+        let outcome =
+            testing::run(|out| feature.handle(&duel_answer(question.id, true), &mut world, out));
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        // A new challenge is a new question, and a yes accepts it.
+        let next = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
+        assert_ne!(next.id, question.id);
+        let outcome =
+            testing::run(|out| feature.handle(&duel_answer(next.id, true), &mut world, out));
+        assert_eq!(outcome.sent, [titanium_duel_accept(12, 7)]);
+    }
+
+    #[test]
+    fn a_challenge_waits_without_a_deadline_until_something_ends_it() {
+        let mut feature = Duel::new(false);
+        let mut world = duel_world();
+        // The player's own record, as a server passes an acceptance back,
+        // asks nothing.
+        assert_eq!(
+            asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 7 }),
+            None
+        );
+        let question = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
+        // Long after, nothing declines on the player's behalf.
+        let outcome = testing::run(|out| {
+            feature.tick(Instant::now() + Duration::from_hours(24), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(outcome.events.is_empty(), "events {:?}", outcome.events);
+        // Another player's duel starting leaves it; the challenger's ends it.
+        let close = |feature: &mut Duel, world: &mut World, update| {
+            let outcome = testing::run(|out| feature.observe(&duel(update), world, out));
+            outcome.result.unwrap();
+            outcome.events
+        };
+        let other = DuelUpdate::Accepted {
+            challenger: 30,
+            accepter: 31,
+        };
+        assert!(close(&mut feature, &mut world, other).is_empty());
+        let events = close(
+            &mut feature,
+            &mut world,
+            DuelUpdate::Refused {
+                from: 12,
+                reason: eq_network_game::socials::DuelRefusal::Considering,
+            },
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [ClientEvent::World(WorldEvent::ConsentClosed {
+                id,
+                closure: ConsentClosure::Interrupted
+            })] if *id == question.id
+        ));
+        // A zone change ends one too.
+        let question = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
+        let outcome = testing::run(|out| feature.observe(&Message::LoggedOut, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [ClientEvent::World(WorldEvent::ConsentClosed {
+                id,
+                closure: ConsentClosure::Interrupted
+            })] if *id == question.id
+        ));
+        // A newer challenger replaces the one waiting.
+        let first = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
+        let outcome = testing::run(|out| {
+            feature.observe(&duel(DuelUpdate::Challenge { from: 13 }), &mut world, out)
+        });
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::Interrupted }),
+                ClientEvent::World(WorldEvent::DuelOffer(DuelQuestion { challenger: 13, .. })),
+            ] if *id == first.id
+        ));
+    }
+
+    #[test]
+    fn the_eqmac_yes_sends_its_challenge_back_first() {
+        use eq_network_game::socials::{eqmac_duel_accept, eqmac_duel_decline, eqmac_duel_request};
+        let mut feature = Duel::new(true);
+        let mut world = duel_world();
+        let question = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            feature.handle(&duel_answer(question.id, true), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eqmac_duel_request(12, 7), eqmac_duel_accept(12, 7)]
+        );
+        let question = asked(&mut feature, &mut world, DuelUpdate::Challenge { from: 12 }).unwrap();
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            feature.handle(&duel_answer(question.id, false), &mut world, out)
+        });
+        assert_eq!(outcome.sent, [eqmac_duel_decline(12, 7)]);
     }
 }
