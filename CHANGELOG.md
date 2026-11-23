@@ -10,8 +10,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BoatRiding` off until the Mac-era arrival is read.
   - New: `boats::riders::{EQMAC_BOARD_OPCODE, EQMAC_LEAVE_OPCODE,
     eqmac_board, eqmac_leave}`. The Mac request encoder now carries
-    `Request::BoardBoat` (0x41bb: the name, its NUL and three zero bytes)
-    and `Request::LeaveBoat` (0x41bc, empty).
+    `Request::BoardBoat` (0xbb41 in this crate's byte order, the
+    program's 0x41bb: the name, its NUL and three zero bytes) and
+    `Request::LeaveBoat` (0xbc41, the program's 0x41bc, empty).
   - On the Mac era, the riders feature boards, reliable, on the first
     accepted sample that stands on a boat, and leaves, unreliable, after two
     unlinked samples in a row. Titanium keeps its 1 s tick. Samples stand in

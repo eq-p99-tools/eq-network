@@ -20,11 +20,11 @@
 //! links counts (R36 E), and the wire is the Titanium program's.
 //!
 //! The Mac-era program names the boat in its frame routine instead (TAKP
-//! 0x4c131d, read 9a; 6.618): `OP_BoardBoat` (0x41bb) reliable on the
-//! first frame aboard, and an empty `OP_LeaveBoat` (0x41bc) unreliable
-//! after two frames off. That cadence is built for
-//! [`Riders::for_generation`], and no Mac-era server type offers riding
-//! until its arrival is read.
+//! 0x4c131d, read 9a; 6.618): `OP_BoardBoat` (the program's 0x41bb, 0xbb41
+//! in this crate's order) reliable on the first frame aboard, and an empty
+//! `OP_LeaveBoat` (0x41bc, 0xbc41 here) unreliable after two frames off.
+//! That cadence is built for [`Riders::for_generation`], and no Mac-era
+//! server type offers riding until its arrival is read.
 use super::{
     feature::{Feature, Out, World},
     transfers::Transfers,

@@ -184,7 +184,7 @@ fn a_mac_era_link_that_flickers_once_stays_aboard() {
 
 #[test]
 fn no_mac_era_server_type_offers_riding_yet() {
-    // B1 (6.618): Quarm and TAKP send no 0x41bb or 0x41bc until the
+    // B1 (6.618): Quarm and TAKP send no board or leave until the
     // Mac-era arrival is read, because neither runs the riding wire.
     let setup = crate::client::session::servers::Setup::new(
         "Tester",

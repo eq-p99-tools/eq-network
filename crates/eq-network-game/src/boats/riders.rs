@@ -95,10 +95,15 @@ pub fn titanium_leave() -> EncodedCommand {
     }
 }
 
-/// The Mac-era `OP_BoardBoat` (TAKP eqgame.exe 0x4c131d, read 9a; 6.618).
-pub const EQMAC_BOARD_OPCODE: u16 = 0x41bb;
-/// The Mac-era `OP_LeaveBoat` (0x4c131d, read 9a; 6.618).
-pub const EQMAC_LEAVE_OPCODE: u16 = 0x41bc;
+/// The Mac-era `OP_BoardBoat`, in this crate's byte order: the program's
+/// 0x41bb swapped (TAKP eqgame.exe 0x4c131d, read 9a; 6.618). Quarm fc75fcf
+/// lists it as 0xbb41 and TAKP 44afcbf as 0x41bb
+/// (`utils/patches/patch_Mac.conf`).
+pub const EQMAC_BOARD_OPCODE: u16 = 0xbb41;
+/// The Mac-era `OP_LeaveBoat`, in this crate's byte order: the program's
+/// 0x41bc swapped (0x4c131d, read 9a; 6.618). Quarm fc75fcf lists it as
+/// 0xbc41 and TAKP 44afcbf as 0x41bc (`utils/patches/patch_Mac.conf`).
+pub const EQMAC_LEAVE_OPCODE: u16 = 0xbc41;
 
 /// The Mac-era `OP_BoardBoat`: the boat spawn's name, its NUL and three
 /// more bytes, `strlen` + 4 from the spawn record (0x4c131d, read 9a), the
@@ -265,19 +270,39 @@ mod tests {
 
     #[test]
     fn the_mac_era_board_and_leave_carry_the_name_at_its_read_length() {
-        // 0x41bb: the name, its NUL and 3 more bytes, sent as zero; 0x41bc
-        // empty (TAKP 0x4c131d, read 9a; 6.618).
+        // Board (the program's 0x41bb): the name, its NUL and 3 more bytes,
+        // sent as zero; leave (0x41bc) empty (TAKP 0x4c131d, read 9a; 6.618).
         let board = eqmac_board("Sabrina00").unwrap();
         assert_eq!(board.opcode, EQMAC_BOARD_OPCODE);
-        assert_eq!(board.opcode, 0x41bb);
         assert_eq!(board.body, b"Sabrina00\0\0\0\0");
         assert_eq!(board.body.len(), "Sabrina00".len() + 4);
         let leave = eqmac_leave();
-        assert_eq!(leave.opcode, 0x41bc);
+        assert_eq!(leave.opcode, EQMAC_LEAVE_OPCODE);
         assert_eq!(leave.body, Vec::<u8>::new());
         assert!(eqmac_board("").is_err());
         assert!(eqmac_board(&"x".repeat(64)).is_err());
         assert!(eqmac_board("a\0b").is_err());
+    }
+
+    #[test]
+    fn the_mac_era_boat_opcodes_match_both_servers_tables() {
+        // Each server's own `utils/patches/patch_Mac.conf` at the named
+        // commit, in the order that file writes them. Quarm writes this
+        // crate's order; TAKP writes the program's, which is the same
+        // number with its bytes swapped (read 9a names 0x41bb and 0x41bc).
+        const QUARM_FC75FCF_BOARD: u16 = 0xbb41;
+        const QUARM_FC75FCF_LEAVE: u16 = 0xbc41;
+        const TAKP_44AFCBF_BOARD: u16 = 0x41bb;
+        const TAKP_44AFCBF_LEAVE: u16 = 0x41bc;
+        assert_eq!(EQMAC_BOARD_OPCODE, QUARM_FC75FCF_BOARD);
+        assert_eq!(EQMAC_LEAVE_OPCODE, QUARM_FC75FCF_LEAVE);
+        assert_eq!(EQMAC_BOARD_OPCODE, TAKP_44AFCBF_BOARD.swap_bytes());
+        assert_eq!(EQMAC_LEAVE_OPCODE, TAKP_44AFCBF_LEAVE.swap_bytes());
+        // The same table puts the update this crate already sends as
+        // 0xf340 at 0xf340 (Quarm) and 0x40f3 (TAKP), so the two orders
+        // above are read the same way as a known-good opcode.
+        assert_eq!(crate::quarm::ZONE_CLIENT_UPDATE, 0xf340);
+        assert_eq!(crate::quarm::ZONE_CLIENT_UPDATE, 0x40f3_u16.swap_bytes());
     }
 
     #[test]
