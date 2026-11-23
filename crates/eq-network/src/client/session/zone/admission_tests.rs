@@ -832,6 +832,7 @@ impl Script {
             .into_iter()
             .chain(rof2_chat())
             .chain(rof2_casting())
+            .chain(rof2_buffs())
         {
             script.packet(opcode, body);
         }
@@ -1015,6 +1016,43 @@ fn rof2_casting() -> Vec<(u16, Vec<u8>)> {
         (0x36a4, [word(2000), [0, 163, 67, 0]].concat()),
         (0x312a, illusion),
         (0x1af3, face),
+    ]
+}
+
+/// The player's buff list, a duration and a fade with the fade's own icon
+/// message, the other player's buffs as a target, and a pet's window
+/// (6.527), as `RoF2` messages.
+fn rof2_buffs() -> Vec<(u16, Vec<u8>)> {
+    let word = |value: u32| value.to_le_bytes();
+    let update = |fade: u32| {
+        let mut body = vec![0; 100];
+        body[..4].copy_from_slice(&word(4321));
+        body[4] = 2;
+        body[5] = 51;
+        body[8..12].copy_from_slice(&1.0f32.to_bits().to_le_bytes());
+        body[12..16].copy_from_slice(&word(1234));
+        body[16..20].copy_from_slice(&word(120));
+        body[92..96].copy_from_slice(&word(3));
+        body[96..].copy_from_slice(&word(fade));
+        body
+    };
+    let icons = |spawn: u32, all: u8, spell: u32, window: u8| {
+        let mut body = [word(spawn), word(0)].concat();
+        body.push(all);
+        body.extend_from_slice(&1u16.to_le_bytes());
+        for value in [3, spell, 120, 0] {
+            body.extend_from_slice(&word(value));
+        }
+        body.extend_from_slice(&[0, window]);
+        body
+    };
+    vec![
+        (0x3377, icons(4321, 1, 1234, 0)),
+        (0x659c, update(2)),
+        (0x659c, update(1)),
+        (0x3377, icons(4321, 0, u32::MAX, 0)),
+        (0x4f4b, icons(77, 1, 2345, 5)),
+        (0x5882, icons(312, 1, 3456, 0)),
     ]
 }
 
@@ -1372,6 +1410,38 @@ fn an_admitted_rof2_session_hands_the_host_its_casting_stun_and_illusions() {
         ["began", "effect", "interrupted", "stun", "illusion", "face"]
     );
     for opcode in ["0x318f", "0x744c", "0x048c", "0x36a4", "0x312a", "0x1af3"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_buffs() {
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let buffs: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::BuffIcons(icons) if icons.spawn_id == 4321 && icons.all => Some("list"),
+            WorldEvent::Buff(update) if update.buff.is_some() => Some("duration"),
+            WorldEvent::Buff(update) if update.buff.is_none() => Some("fade"),
+            WorldEvent::BuffIcons(icons)
+                if icons.spawn_id == 4321 && icons.icons[0].spell_id.is_none() =>
+            {
+                Some("emptied")
+            }
+            WorldEvent::BuffIcons(icons) if icons.spawn_id == 77 => Some("target"),
+            WorldEvent::PetBuffs(pet) if pet.pet == 312 => Some("pet"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        buffs,
+        ["list", "duration", "fade", "emptied", "target", "pet"]
+    );
+    for opcode in ["0x659c", "0x3377", "0x4f4b", "0x5882"] {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"
