@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's quest rewards and their sound, renames, the new titles
+  notice and the banker's change as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`
+  (0x1a30, both the reward and the ding record), `OP_MobRename` (0x2c57),
+  `OP_NewTitlesAvailable` (0x0d32) and `OP_BankerChange` (0x791e), which
+  have no encoder for either generation, through Titanium's readers into
+  Titanium's events, with Titanium's refusals. The rename's names reach the
+  host in the event only. Coverage rows for all four; `OP_Sound` and
+  `OP_MobRename` share Titanium's parts. Validate still refuses RoF2.
 - Read the task journal stock `EQEmu` sends a Titanium player (gap list
   section 5, checklist 6.546), from source and not yet checked live. The
   new `tasks` module reads `OP_TaskDescription` (0x5ef7), `OP_TaskActivity`

@@ -838,6 +838,7 @@ impl Script {
             .chain(rof2_world())
             .chain(rof2_socials())
             .chain(rof2_answers())
+            .chain(rof2_notices())
         {
             script.packet(opcode, body);
         }
@@ -1183,6 +1184,26 @@ fn rof2_answers() -> Vec<(u16, Vec<u8>)> {
         (0x6703, words(&[0, 0, 0, 3, 7])),
         (0x39e8, pick),
         (0x0386, words(&[77, 1])),
+    ]
+}
+
+/// A quest reward, a rename, the new titles notice and the banker's change,
+/// as stock `EQEmu` sends them to `RoF2` (6.549).
+fn rof2_notices() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let mut reward = vec![77, 4321, 1500, 0, 0, 8, 7, 6, 5, 1001];
+    reward.extend([u32::MAX; 7]);
+    let mut rename = vec![0; 200];
+    rename[..7].copy_from_slice(b"Testmob");
+    rename[64..71].copy_from_slice(b"Testmob");
+    rename[128..142].copy_from_slice(b"Testmob_corpse");
+    rename[196..200].copy_from_slice(&1u32.to_le_bytes());
+    vec![
+        (0x1a30, words(&reward)),
+        (0x2c57, rename),
+        (0x0d32, Vec::new()),
+        (0x791e, words(&[1, 2, 3, 4, 10, 20, 30, 40])),
     ]
 }
 
@@ -1854,6 +1875,46 @@ fn an_admitted_rof2_session_hands_the_host_its_targets_rewards_and_answers() {
     }
     // The item's name reaches the host in the event only.
     assert!(!diagnostics.iter().any(|line| line.contains("Test Dagger")));
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_rewards_renames_titles_and_change() {
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Reward(reward)
+                if reward.giver_id == Some(77)
+                    && reward.experience == 1500
+                    && reward.coins.platinum == 5
+                    && reward.items == [1001] =>
+            {
+                Some("reward")
+            }
+            WorldEvent::Renamed {
+                spawn_id: None,
+                old_name,
+                new_name,
+            } if old_name == "Testmob" && new_name == "Testmob_corpse" => Some("rename"),
+            WorldEvent::NewTitles => Some("titles"),
+            WorldEvent::CoinsChanged(change)
+                if change.purse.platinum == 1 && change.bank.copper == 40 =>
+            {
+                Some("change")
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(read, ["reward", "rename", "titles", "change"]);
+    for opcode in ["0x1a30", "0x2c57", "0x0d32", "0x791e"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The spawn names reach the host in the event only.
+    assert!(!diagnostics.iter().any(|line| line.contains("Testmob")));
 }
 
 #[test]
