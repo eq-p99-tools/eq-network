@@ -15,7 +15,7 @@ use crate::{
     hazards::{self, Hazard},
     inventory::{self, InventorySlot, MoveQuantity},
     listing::{self, Anonymity},
-    money::CoinTransfer,
+    money::{CoinDestroy, CoinTransfer},
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
@@ -37,6 +37,14 @@ pub struct Sender<'a> {
     pub name: &'a str,
     /// The player's spawn, once the zone has spawned them.
     pub spawn_id: Option<u16>,
+}
+
+/// The player's own spawn for a duel's record, which names both players.
+fn duelist(sender: Sender<'_>) -> Result<u16> {
+    sender
+        .spawn_id
+        .filter(|&id| id != 0)
+        .ok_or_else(|| anyhow::anyhow!("no spawn to answer a duel from"))
 }
 
 impl Sender<'_> {
@@ -126,6 +134,20 @@ pub enum Request {
         /// True accepts.
         accept: bool,
     },
+    /// Accept or decline a challenge to a duel.
+    AnswerDuel {
+        /// Who challenged.
+        challenger: u16,
+        /// True accepts.
+        accept: bool,
+    },
+    /// `OP_RequestDuel` naming the other player: a challenge, and on
+    /// `EQMac`, by TAKP's note, also what its client sends before it
+    /// accepts.
+    DuelRequest {
+        /// The other player.
+        other: u16,
+    },
     /// Invite a player into the player's group, by name.
     InviteToGroup {
         /// Who.
@@ -150,6 +172,8 @@ pub enum Request {
     SetAnonymity(Anonymity),
     /// Whether the player's helm shows to others.
     ShowHelm(bool),
+    /// Say the player looks for a group (true), or no longer.
+    SetLooking(bool),
     /// Say the player is seen again, as a Titanium client answers the
     /// server's end of its hiding: its own appearance, invisibility 0
     /// ([`abilities::titanium_unhide`]).
@@ -164,6 +188,54 @@ pub enum Request {
         low: u32,
         /// The highest.
         high: u32,
+    },
+    /// Ask for this last name: `/surname` ([`crate::names::surname_request`]).
+    Surname(String),
+    /// Ask which titles the player may choose.
+    RequestTitles,
+    /// Choose a title before the name, or a suffix after it; 0 clears it.
+    SetTitle {
+        /// The title's number, from the server's list; 0 to clear.
+        title_id: u32,
+        /// Whether it is the suffix.
+        suffix: bool,
+    },
+    /// Train, activate or set the split of the player's AAs
+    /// ([`crate::alternate_advancement::titanium_action`]).
+    AlternateAdvancement(crate::alternate_advancement::Action),
+    /// Search the Bazaar ([`crate::bazaar::search`]).
+    BazaarSearch(crate::bazaar::BazaarCriteria),
+    /// Ask how many traders and items the Bazaar has
+    /// ([`crate::bazaar::welcome`]).
+    BazaarWelcome,
+    /// Click on a trader to browse their wares ([`crate::bazaar::browse`]).
+    BrowseTrader(u16),
+    /// End the browse of a trader ([`crate::bazaar::end_browse`]).
+    EndBrowse(u16),
+    /// Save what is worn as a bandolier set ([`crate::bandolier::save`]).
+    SaveBandolier {
+        /// The set, 0 to 3.
+        set: u8,
+        /// Its name.
+        name: String,
+    },
+    /// Clear a bandolier set ([`crate::bandolier::clear`]).
+    ClearBandolier(u8),
+    /// Swap to a bandolier set ([`crate::bandolier::swap_to`]).
+    SwapBandolier(u8),
+    /// Put an item in a potion belt slot ([`crate::bandolier::set_belt`]).
+    SetPotionBelt {
+        /// The belt slot, 0 to 3.
+        slot: u8,
+        /// The item's number.
+        item_id: u32,
+    },
+    /// Empty a potion belt slot ([`crate::bandolier::clear_belt`]).
+    ClearPotionBelt {
+        /// The belt slot, 0 to 3.
+        slot: u8,
+        /// The item it held.
+        item_id: u32,
     },
     /// Emote, in the player's own words.
     Emote(String),
@@ -395,6 +467,16 @@ pub enum Request {
         /// The spawn it is cast on.
         target_id: u16,
     },
+    /// Cast the click effect of an item used from the potion belt, already
+    /// checked as an item click is (Titanium only).
+    CastBeltItem {
+        /// The effect's spell.
+        spell_id: u32,
+        /// Where the item is.
+        slot: InventorySlot,
+        /// The spawn it is cast on.
+        target_id: u16,
+    },
     /// Move an item between slots.
     MoveItem {
         /// Where it is.
@@ -410,6 +492,26 @@ pub enum Request {
     DropCursor,
     /// Move coins between places, or change them into another coin.
     MoveCoins(CoinTransfer),
+    /// Destroy coins from the cursor.
+    DestroyCoins(CoinDestroy),
+    /// A Warrior's `/shield` of this player ([`crate::shielding`]).
+    Shield(u16),
+    /// Take an offered task ([`crate::tasks::offers`]).
+    AcceptTask {
+        /// The kind the offer was sent as.
+        kind: crate::tasks::TaskKind,
+        /// The task.
+        task_id: u32,
+        /// The offering NPC's spawn.
+        giver: u16,
+    },
+    /// Cancel a journal entry ([`crate::tasks::offers`]).
+    CancelTask(crate::tasks::TaskSlot),
+    /// Ask for the done steps of the finished task at this index of the
+    /// last finished list ([`crate::tasks::offers`]).
+    TaskHistory(u32),
+    /// `/tasktimers` ([`crate::tasks::offers`]).
+    TaskTimers,
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -517,6 +619,15 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerTranslocate { offer, accept } => {
             confirmations::titanium_translocate_answer(offer, *accept)
         }
+        Request::AnswerDuel { challenger, accept } => {
+            let own = duelist(sender)?;
+            if *accept {
+                socials::titanium_duel_accept(*challenger, own)
+            } else {
+                socials::titanium_duel_decline(*challenger, own)
+            }
+        }
+        Request::DuelRequest { other } => socials::titanium_duel_request(*other, duelist(sender)?),
         Request::InviteToGroup { name, .. } => group::invite(name, sender.name)?,
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
@@ -527,12 +638,67 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             listing::titanium_anonymity(sender.spawn(), *anonymity)?
         }
         Request::ShowHelm(show) => listing::titanium_show_helm(sender.spawn(), *show)?,
+        Request::SetLooking(on) => listing::titanium_looking(*on),
         Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
         Request::YellForHelp => socials::titanium_yell(),
         Request::EmoteAnimation(animation) => {
             socials::titanium_emote_animation(sender.spawn(), *animation)?
         }
         Request::Random { low, high } => socials::random(*low, *high),
+        Request::Surname(surname) => EncodedCommand {
+            opcode: crate::names::SURNAME_OPCODE,
+            body: crate::names::surname_request(sender.name, surname)?,
+        },
+        // `EQEmu`'s handler reads no body; the program's is not read yet
+        // (inferred empty, program read R49-14b).
+        Request::RequestTitles => EncodedCommand {
+            opcode: crate::names::REQUEST_TITLES_OPCODE,
+            body: Vec::new(),
+        },
+        Request::BazaarSearch(criteria) => EncodedCommand {
+            opcode: crate::bazaar::SEARCH_OPCODE,
+            body: crate::bazaar::search(criteria)?,
+        },
+        Request::BazaarWelcome => EncodedCommand {
+            opcode: crate::bazaar::SEARCH_OPCODE,
+            body: crate::bazaar::welcome(),
+        },
+        Request::BrowseTrader(trader) => EncodedCommand {
+            opcode: crate::bazaar::BROWSE_OPCODE,
+            body: crate::bazaar::browse(*trader).to_vec(),
+        },
+        Request::EndBrowse(trader) => EncodedCommand {
+            opcode: crate::bazaar::TRADER_OPCODE,
+            body: crate::bazaar::end_browse(*trader).to_vec(),
+        },
+        Request::SaveBandolier { set, name } => EncodedCommand {
+            opcode: crate::bandolier::OPCODE,
+            body: crate::bandolier::save(*set, name)?.to_vec(),
+        },
+        Request::ClearBandolier(set) => EncodedCommand {
+            opcode: crate::bandolier::OPCODE,
+            body: crate::bandolier::clear(*set)?.to_vec(),
+        },
+        Request::SwapBandolier(set) => EncodedCommand {
+            opcode: crate::bandolier::OPCODE,
+            body: crate::bandolier::swap_to(*set)?.to_vec(),
+        },
+        Request::SetPotionBelt { slot, item_id } => EncodedCommand {
+            opcode: crate::bandolier::BELT_OPCODE,
+            body: crate::bandolier::set_belt(*slot, *item_id)?.to_vec(),
+        },
+        Request::ClearPotionBelt { slot, item_id } => EncodedCommand {
+            opcode: crate::bandolier::BELT_OPCODE,
+            body: crate::bandolier::clear_belt(*slot, *item_id)?.to_vec(),
+        },
+        Request::SetTitle { title_id, suffix } => EncodedCommand {
+            opcode: crate::names::SET_TITLE_OPCODE,
+            body: crate::names::set_title(*title_id, *suffix),
+        },
+        Request::AlternateAdvancement(action) => EncodedCommand {
+            opcode: crate::alternate_advancement::ACTION_OPCODE,
+            body: crate::alternate_advancement::titanium_action(*action)?.to_vec(),
+        },
         Request::Emote(text) => socials::emote(text)?,
         Request::SocialEmote(text) => socials::social_emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
@@ -632,12 +798,27 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             slot,
             target_id,
         } => inventory::titanium_item_cast(*spell_id, *slot, *target_id)?,
+        Request::CastBeltItem {
+            spell_id,
+            slot,
+            target_id,
+        } => inventory::titanium_belt_cast(*spell_id, *slot, *target_id)?,
         Request::MoveItem { from, to, quantity } => {
             inventory::titanium_move(*from, *to, *quantity)?
         }
         Request::DestroyCursor => inventory::titanium_destroy(),
         Request::DropCursor => inventory::titanium_ground_drop(),
         Request::MoveCoins(transfer) => transfer.encode()?,
+        Request::DestroyCoins(destroy) => destroy.encode()?,
+        Request::Shield(target) => crate::shielding::titanium_shield(*target)?,
+        Request::AcceptTask {
+            kind,
+            task_id,
+            giver,
+        } => crate::tasks::offers::titanium_accept(*kind, *task_id, *giver)?,
+        Request::CancelTask(at) => crate::tasks::offers::titanium_cancel(*at)?,
+        Request::TaskHistory(index) => crate::tasks::offers::titanium_history(*index)?,
+        Request::TaskTimers => crate::tasks::offers::titanium_timers(),
         Request::Consume {
             slot,
             meal,
@@ -662,6 +843,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
+#[allow(clippy::too_many_lines, reason = "one arm per request")]
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
         Request::ReadBook(book) => books::eqmac_request(book),
@@ -669,8 +851,25 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             abilities::eqmac::encode(*ability, *target, sender.spawn())
         }
         Request::FeignDeathPosture => abilities::eqmac::feign_posture(sender.spawn()),
+        Request::Shield(target) => crate::shielding::eqmac_shield(*target),
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Jump => Ok(crate::quarm::jump()),
+        Request::Consent { name, given: true } => corpses::eqmac_consent(name),
+        // Neither Mac server has a deny: a consent given again takes it back.
+        Request::Consent { given: false, .. } => {
+            anyhow::bail!("TAKP and Quarm take a consent back only by giving it again")
+        }
+        Request::SummonCorpse(corpse) => corpses::eqmac_summon(corpse, sender.name),
+        Request::DragCorpse(corpse) => corpses::eqmac_drag(corpse, sender.name),
+        // Quarm's own opcode; the session sends it only to Quarm.
+        Request::DropCorpse { corpse } => corpses::quarm_drop(corpse.as_deref(), sender.name),
+        Request::Pet { command, target } if command.on_eqmac() => {
+            Ok(pets::eqmac_command(*command, *target))
+        }
+        Request::Random { low, high } => Ok(socials::eqmac_random(*low, *high)),
+        Request::Assist(spawn_id) => Ok(socials::eqmac_assist(*spawn_id)),
+        Request::SplitCoins(coins) => crate::split::eqmac_split(*coins),
+        Request::AutoSplit(on) => crate::split::eqmac_auto_split(sender.spawn(), *on),
         Request::SetAnonymity(anonymity) => {
             crate::listing::eqmac_anonymity(sender.spawn(), *anonymity)
         }
@@ -715,7 +914,23 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::MoveItem { from, to, quantity } => {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }
-        Request::PickUp(drop_id) => Ok(objects::eqmac::pickup(*drop_id, sender.spawn())),
+        // A click opens a world container as it picks an item up (6.598).
+        Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {
+            Ok(objects::eqmac::pickup(*drop_id, sender.spawn()))
+        }
+        Request::CloseContainer {
+            drop_id,
+            object_type,
+            icon,
+            ..
+        } => Ok(objects::eqmac::close(
+            sender.spawn(),
+            *drop_id,
+            *object_type,
+            *icon,
+        )),
+        Request::Combine(container) => tradeskills::eqmac_combine(*container),
+        Request::ControlBoat { spawn_id, intent } => crate::boats::eqmac(*spawn_id, *intent),
         Request::ClickDoor(door_id) => doors::eqmac::click(*door_id, sender.spawn()),
         Request::Consume {
             slot,
@@ -734,13 +949,36 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Scribe { slot, spell_id } => spells::eqmac_scribe(*slot, *spell_id),
         Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
+        Request::DestroyCoins(destroy) => destroy.encode_eqmac(),
         Request::BledOut { level } => crate::quarm::bled_out(sender.spawn(), *level),
         Request::AnswerSacrifice { offer, accept } => {
             Ok(confirmations::eqmac_sacrifice_answer(offer, *accept))
         }
+        Request::AnswerResurrection { offer, accept } => {
+            Ok(resurrection::eqmac_answer(offer, *accept))
+        }
+        Request::OpenTraining(trainer) => Ok(training::eqmac_open(*trainer, sender.spawn())),
+        Request::Train { trainer, skill } => training::eqmac_practice(
+            *trainer,
+            sender.spawn(),
+            training::TrainingSubject::Skill(*skill),
+        ),
+        Request::Practice { trainer, subject } => {
+            training::eqmac_practice(*trainer, sender.spawn(), *subject)
+        }
+        Request::EndTraining(trainer) => Ok(training::eqmac_end(*trainer, sender.spawn())),
         Request::AnswerTranslocate { offer, accept } => {
             Ok(confirmations::eqmac_translocate_answer(offer, *accept))
         }
+        Request::AnswerDuel { challenger, accept } => {
+            let own = duelist(sender)?;
+            Ok(if *accept {
+                socials::eqmac_duel_accept(*challenger, own)
+            } else {
+                socials::eqmac_duel_decline(*challenger, own)
+            })
+        }
+        Request::DuelRequest { other } => Ok(socials::eqmac_duel_request(*other, duelist(sender)?)),
         Request::Trade(with) => exchange::eqmac::request(sender.spawn(), *with),
         Request::AnswerTrade { asker, busy: false } => {
             exchange::eqmac::acknowledge(sender.spawn(), *asker)
@@ -748,6 +986,24 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerTrade { asker, busy: true } => exchange::eqmac::busy(sender.spawn(), *asker),
         Request::AcceptTrade { with } => exchange::eqmac::accept(*with),
         Request::CancelTrade { with } => exchange::eqmac::cancel(sender.spawn(), *with),
+        Request::AlternateAdvancement(action) => Ok(EncodedCommand {
+            opcode: crate::alternate_advancement::EQMAC_ACTION_OPCODE,
+            body: crate::alternate_advancement::eqmac_action(*action)?.to_vec(),
+        }),
+        Request::Surname(surname) => Ok(EncodedCommand {
+            opcode: crate::names::EQMAC_SURNAME_OPCODE,
+            body: crate::names::surname_request(sender.name, surname)?,
+        }),
+        Request::Who(filter) => who::eqmac::request(filter),
+        Request::WhoFriends(names) => crate::friends::eqmac_request(names),
+        Request::BazaarSearch(criteria) => Ok(EncodedCommand {
+            opcode: crate::bazaar::eqmac::SEARCH_OPCODE,
+            body: crate::bazaar::eqmac::search(criteria)?,
+        }),
+        Request::BazaarWelcome => Ok(EncodedCommand {
+            opcode: crate::bazaar::eqmac::SEARCH_OPCODE,
+            body: crate::bazaar::eqmac::welcome(),
+        }),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -761,6 +1017,17 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn lfg_goes_only_on_titanium() {
+        assert_eq!(
+            titanium(&Request::SetLooking(true), PLAYER).unwrap(),
+            crate::listing::titanium_looking(true)
+        );
+        // TAKP's `OP_LFGCommand` is a world-stage message of its own, not
+        // read (checklist 6.515).
+        assert!(eqmac(&Request::SetLooking(true), PLAYER).is_err());
+    }
 
     #[test]
     fn eqmac_trades_in_its_own_bodies_naming_the_partner() {
@@ -887,6 +1154,198 @@ mod tests {
     }
 
     #[test]
+    fn only_titanium_sends_the_task_requests() {
+        use crate::tasks::{TaskKind, TaskSlot};
+        let requests = [
+            Request::AcceptTask {
+                kind: TaskKind::Quest,
+                task_id: 9,
+                giver: 77,
+            },
+            Request::CancelTask(TaskSlot {
+                kind: TaskKind::Quest,
+                slot: 3,
+            }),
+            Request::TaskHistory(2),
+            Request::TaskTimers,
+        ];
+        let opcodes: Vec<_> = requests
+            .iter()
+            .map(|request| titanium(request, PLAYER).unwrap().opcode)
+            .collect();
+        assert_eq!(opcodes, [0x207f, 0x3ba8, 0x5df4, 0x6a1d]);
+        for request in &requests {
+            assert!(eqmac(request, PLAYER).is_err(), "{request:?}");
+        }
+    }
+
+    #[test]
+    fn each_generation_sends_a_shield_in_its_own_width() {
+        let packet = titanium(&Request::Shield(42), PLAYER).unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x3fe6, vec![42, 0, 0, 0]));
+        assert!(titanium(&Request::Shield(0), PLAYER).is_err());
+        // TAKP's and Quarm's 2-byte `Shielding_Struct` (6.603 G2).
+        let packet = eqmac(&Request::Shield(0x0142), PLAYER).unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x4b42, vec![0x42, 0x01]));
+        assert!(eqmac(&Request::Shield(0), PLAYER).is_err());
+    }
+
+    #[test]
+    fn each_generation_asks_for_a_surname_in_the_same_record_under_its_own_opcode() {
+        let body = crate::names::surname_request(PLAYER.name, "Exemplum").unwrap();
+        for (packet, opcode) in [
+            (
+                titanium(&Request::Surname("Exemplum".into()), PLAYER),
+                0x4668,
+            ),
+            (eqmac(&Request::Surname("Exemplum".into()), PLAYER), 0xc441),
+        ] {
+            let packet = packet.unwrap();
+            assert_eq!((packet.opcode, &packet.body), (opcode, &body));
+        }
+        assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
+        assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
+    }
+
+    #[test]
+    fn each_generation_sends_its_own_aa_action() {
+        use crate::alternate_advancement::Action;
+        let train = Request::AlternateAdvancement(Action::Train { rank_id: 9 });
+        let sent = titanium(&train, PLAYER).unwrap();
+        assert_eq!(
+            (sent.opcode, sent.body),
+            (0x0681, vec![3, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        );
+        assert!(titanium(
+            &Request::AlternateAdvancement(Action::Split { percentage: 101 }),
+            PLAYER
+        )
+        .is_err());
+        // TAKP's is 256 bytes of text on its own opcode (N4).
+        let text = eqmac(&train, PLAYER).unwrap();
+        assert_eq!((text.opcode, text.body.len()), (0x1442, 256));
+        assert_eq!(&text.body[..6], b"buy 9\0");
+    }
+
+    #[test]
+    fn titanium_and_eqmac_search_the_bazaar_and_only_titanium_browses() {
+        let criteria = crate::bazaar::BazaarCriteria::default();
+        let searched = titanium(&Request::BazaarSearch(criteria.clone()), PLAYER).unwrap();
+        assert_eq!(
+            (searched.opcode, searched.body.len()),
+            (0x1ee9, crate::bazaar::SEARCH_LENGTH)
+        );
+        let welcomed = titanium(&Request::BazaarWelcome, PLAYER).unwrap();
+        assert_eq!(
+            (welcomed.opcode, welcomed.body),
+            (0x1ee9, crate::bazaar::welcome())
+        );
+        let long = crate::bazaar::BazaarCriteria {
+            name: "a".repeat(64),
+            ..criteria.clone()
+        };
+        assert!(titanium(&Request::BazaarSearch(long), PLAYER).is_err());
+        let mac = eqmac(&Request::BazaarSearch(criteria.clone()), PLAYER).unwrap();
+        assert_eq!(
+            (mac.opcode, mac.body),
+            (0x1142, crate::bazaar::eqmac::search(&criteria).unwrap())
+        );
+        let mac_welcome = eqmac(&Request::BazaarWelcome, PLAYER).unwrap();
+        assert_eq!(
+            (mac_welcome.opcode, mac_welcome.body),
+            (0x1142, crate::bazaar::eqmac::welcome())
+        );
+        let bounded = crate::bazaar::BazaarCriteria {
+            min_level: Some(10),
+            ..criteria
+        };
+        assert!(eqmac(&Request::BazaarSearch(bounded), PLAYER).is_err());
+        let clicked = titanium(&Request::BrowseTrader(312), PLAYER).unwrap();
+        assert_eq!(
+            (clicked.opcode, clicked.body),
+            (0x35e8, crate::bazaar::browse(312).to_vec())
+        );
+        let ended = titanium(&Request::EndBrowse(312), PLAYER).unwrap();
+        assert_eq!(
+            (ended.opcode, ended.body),
+            (0x524e, crate::bazaar::end_browse(312).to_vec())
+        );
+        assert!(eqmac(&Request::BrowseTrader(312), PLAYER).is_err());
+        assert!(eqmac(&Request::EndBrowse(312), PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_saves_sets_and_sets_the_belt() {
+        let saved = titanium(
+            &Request::SaveBandolier {
+                set: 1,
+                name: "Melee".into(),
+            },
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!(
+            (saved.opcode, saved.body),
+            (0x6f0c, crate::bandolier::save(1, "Melee").unwrap().to_vec())
+        );
+        let cleared = titanium(&Request::ClearBandolier(1), PLAYER).unwrap();
+        assert_eq!(cleared.body, crate::bandolier::clear(1).unwrap().to_vec());
+        let belt = titanium(
+            &Request::SetPotionBelt {
+                slot: 2,
+                item_id: 13_005,
+            },
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!((belt.opcode, belt.body.len()), (0x0719, 12));
+        let swapped = titanium(&Request::SwapBandolier(3), PLAYER).unwrap();
+        assert_eq!(
+            (swapped.opcode, swapped.body),
+            (0x6f0c, crate::bandolier::swap_to(3).unwrap().to_vec())
+        );
+        assert!(titanium(&Request::SwapBandolier(4), PLAYER).is_err());
+        assert!(eqmac(&Request::SwapBandolier(0), PLAYER).is_err());
+        assert!(titanium(&Request::ClearBandolier(4), PLAYER).is_err());
+        assert!(eqmac(&Request::ClearBandolier(1), PLAYER).is_err());
+        assert!(eqmac(
+            &Request::ClearPotionBelt {
+                slot: 0,
+                item_id: 1
+            },
+            PLAYER
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn only_titanium_asks_for_and_chooses_titles() {
+        let asked = titanium(&Request::RequestTitles, PLAYER).unwrap();
+        assert_eq!((asked.opcode, asked.body.len()), (0x5eba, 0));
+        let chosen = titanium(
+            &Request::SetTitle {
+                title_id: 7,
+                suffix: true,
+            },
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!(
+            (chosen.opcode, chosen.body),
+            (0x1f22, vec![1, 0, 0, 0, 7, 0, 0, 0])
+        );
+        assert!(eqmac(&Request::RequestTitles, PLAYER).is_err());
+        assert!(eqmac(
+            &Request::SetTitle {
+                title_id: 7,
+                suffix: false
+            },
+            PLAYER
+        )
+        .is_err());
+    }
+
+    #[test]
     fn titanium_requests_are_the_packets_the_codecs_build() {
         assert_eq!(
             titanium(&Request::Camp, PLAYER).unwrap(),
@@ -950,14 +1409,6 @@ mod tests {
             .unwrap(),
             training::titanium_practice(42, training::TrainingSubject::Language(5)).unwrap()
         );
-        assert!(eqmac(
-            &Request::Practice {
-                trainer: 42,
-                subject: training::TrainingSubject::Language(5)
-            },
-            PLAYER
-        )
-        .is_err());
         assert_eq!(
             titanium(&Request::EndTraining(42), PLAYER).unwrap(),
             training::titanium_end(42, 7)
@@ -992,6 +1443,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mac_training_requests_name_the_player() {
+        // TAKP and Quarm (6.597): the Mac program's own bytes, the player's
+        // spawn in every one; the session holds languages, not the codec.
+        assert_eq!(
+            eqmac(&Request::OpenTraining(42), PLAYER).unwrap(),
+            training::eqmac_open(42, 7)
+        );
+        assert_eq!(
+            eqmac(
+                &Request::Train {
+                    trainer: 42,
+                    skill: 30
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::eqmac_practice(42, 7, training::TrainingSubject::Skill(30)).unwrap()
+        );
+        assert_eq!(
+            eqmac(
+                &Request::Practice {
+                    trainer: 42,
+                    subject: training::TrainingSubject::Language(5)
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::eqmac_practice(42, 7, training::TrainingSubject::Language(5)).unwrap()
+        );
+        assert_eq!(
+            eqmac(&Request::EndTraining(42), PLAYER).unwrap(),
+            training::eqmac_end(42, 7)
+        );
+    }
     #[test]
     fn each_generation_reports_the_worlds_damage_in_its_own_packet() {
         let fall = Request::EnvironmentalDamage {

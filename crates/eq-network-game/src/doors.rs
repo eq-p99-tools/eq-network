@@ -18,6 +18,9 @@ const STATIC_ID: u8 = 255;
 /// The most doors `EQEmu` lists in one table.
 const MOST_DOORS: usize = 500;
 
+/// The length of a Titanium door record, with its size in the 16 bits at 52.
+const TITANIUM_RECORD: usize = 80;
+
 /// A server-defined door or interactive zone object; open types are not all hinged doors.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Door {
@@ -111,6 +114,11 @@ impl Doors {
     /// ([`crate::reach`]); not a claim about server lock/key rules.
     pub const USE_DISTANCE: f32 = 20.0;
 
+    /// How far from a door's origin where it stands now a clicked point may
+    /// lie, before the player's size: ours, not the program's, a guard
+    /// against a host's fault (6.530).
+    pub const MOST_POINT_FROM_DOOR: f32 = 200.0;
+
     /// Encodes ordinary use after checking the current door table and player position.
     ///
     /// # Errors
@@ -145,11 +153,10 @@ impl Doors {
 
     /// [`Self::check_click`] for a door standing `raised` above its placed
     /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
-    /// the reach runs to the door's origin where it stands now. The program
-    /// measures from the clicked point on the door as drawn to the player,
-    /// within the player's size and 20 (0x4906c5, 0x435b55, 0x644368; read
-    /// R16b, R16e); this check, without the clicked point or the size, is
-    /// short of that rule (recording checklist 6.436).
+    /// the reach runs to the door's origin where it stands now. It is for a
+    /// click with no clicked point (a key, a script): the program measures
+    /// from the clicked point ([`Self::check_click_at`]), so this is
+    /// stricter than the program (recording checklist 6.436).
     ///
     /// # Errors
     /// As [`Self::check_click`].
@@ -172,6 +179,67 @@ impl Doors {
             ..door.position
         };
         ensure!(reach.admits(position, now), OutOfReach);
+        Ok(())
+    }
+
+    /// Checks a Titanium click on a door at `point`, where the click ray hit
+    /// the door's model as drawn: the program measures in 3-D from that
+    /// point to the player and refuses only past the player's size and 20
+    /// (0x49812e, 0x4906c5, 0x48f790, 0x435b55, 0x644368; read R16b, R16e).
+    /// There is no door-radius term. `raised` is the lift offset, as
+    /// [`Self::check_click_raised`], for the guard below.
+    ///
+    /// The comparison is the program's "more than" exactly, and nothing but
+    /// the size and 20 enters the limit (recording checklist 6.530).
+    ///
+    /// The point is the host's; the session has no door geometry to check
+    /// it lies on the door. As a guard against a host's fault, ours and not
+    /// the program's, a point more than [`Self::MOST_POINT_FROM_DOOR`] and
+    /// the player's size from the door's origin where it stands now is
+    /// refused as malformed.
+    ///
+    /// # Errors
+    /// As [`Self::check_click`]; also a point, size or lift offset that is
+    /// not finite, a negative size, or a point that far from the door. Only
+    /// a player too far from the point is [`OutOfReach`].
+    pub fn check_click_at(
+        &self,
+        id: u8,
+        player_id: u16,
+        position: Position,
+        click: Clicked,
+    ) -> Result<()> {
+        ensure!(id != STATIC_ID, "a static object cannot be used");
+        let door = self
+            .doors
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
+        ensure!(player_id != 0, "player position is unavailable");
+        let Clicked {
+            point,
+            size,
+            raised,
+        } = click;
+        ensure!(
+            [point.x, point.y, point.z, size, raised]
+                .iter()
+                .all(|value| value.is_finite())
+                && size >= 0.0,
+            "The point you clicked is not a place."
+        );
+        let now = Position {
+            z: door.position.z + raised,
+            ..door.position
+        };
+        ensure!(
+            distance(point, now) <= Self::MOST_POINT_FROM_DOOR + size,
+            "The point you clicked is not on that door."
+        );
+        let distance = distance(point, position);
+        ensure!(
+            distance.is_finite() && distance <= size + Self::USE_DISTANCE,
+            OutOfReach
+        );
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static
@@ -220,6 +288,24 @@ impl Doors {
     }
 }
 
+/// A click on a door at a point: where the click ray hit its model, the
+/// player's size as the program counts it (spawn +0x23c), and how far a lift
+/// stands above its placed height now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clicked {
+    /// Where the click ray hit the door's model as drawn.
+    pub point: Position,
+    /// The player's size, in world units.
+    pub size: f32,
+    /// The door's height above its placed height now.
+    pub raised: f32,
+}
+
+/// The 3-D distance between two places.
+fn distance(from: Position, to: Position) -> f32 {
+    (to.x - from.x).hypot(to.y - from.y).hypot(to.z - from.z)
+}
+
 /// Titanium's `OP_ClickDoor` for the player using a door, already checked.
 #[must_use]
 pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
@@ -248,61 +334,88 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
             ensure!(body.is_empty(), "invalid door removal length");
             Ok(Some(DoorUpdate::RemoveAll))
         }
-        0x700d => {
-            ensure!(body.len() == 2, "invalid door movement length");
-            Ok(Some(DoorUpdate::Move {
-                id: body[0],
-                action: body[1],
-            }))
-        }
-        0x4c24 => {
-            ensure!(
-                body.len().is_multiple_of(80) && body.len() <= MOST_DOORS * 80,
-                "invalid door table length"
-            );
-            let mut ids = std::collections::BTreeSet::new();
-            let mut doors = Vec::with_capacity(body.len() / 80);
-            for record in body.as_chunks::<80>().0 {
-                let word = |offset| {
-                    u32::from_le_bytes([
-                        record[offset],
-                        record[offset + 1],
-                        record[offset + 2],
-                        record[offset + 3],
-                    ])
-                };
-                let position = Position {
-                    x: f32::from_bits(word(36)),
-                    y: f32::from_bits(word(32)),
-                    z: f32::from_bits(word(40)),
-                    heading: f32::from_bits(word(44)),
-                };
-                ensure!(
-                    [position.x, position.y, position.z, position.heading]
-                        .iter()
-                        .all(|v| v.is_finite()),
-                    "non-finite door placement"
-                );
-                let id = record[60];
-                ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
-                let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
-                doors.push(Door {
-                    id,
-                    model: String::from_utf8_lossy(&record[..end]).into_owned(),
-                    position,
-                    incline: word(48),
-                    size: u16::from_le_bytes([record[52], record[53]]),
-                    open_type: record[61],
-                    state_at_spawn: record[62],
-                    invert_state: record[63],
-                    parameter: word(64),
-                    action: None,
-                });
-            }
-            Ok(Some(DoorUpdate::Spawn(doors)))
-        }
+        0x700d => door_move(body).map(Some),
+        0x4c24 => door_table(body, TITANIUM_RECORD, |record| {
+            Ok(u16::from_le_bytes([record[52], record[53]]))
+        })
+        .map(Some),
         _ => Ok(None),
     }
+}
+
+/// Decodes a door's move: the server's 2-byte `MoveDoor_Struct`, the door
+/// and the action, which stock `EQEmu` sends Titanium and `RoF2` alike with
+/// no encoder (`Doors::Open`, `ForceOpen`, `ForceClose`, `ToggleState` in
+/// `zone/doors.cpp`).
+///
+/// # Errors
+/// Rejects any length but 2.
+pub(crate) fn door_move(body: &[u8]) -> Result<DoorUpdate> {
+    ensure!(body.len() == 2, "invalid door movement length");
+    Ok(DoorUpdate::Move {
+        id: body[0],
+        action: body[1],
+    })
+}
+
+/// Decodes a door table of `record_length`-byte records, whose fields up to
+/// the parameter at 64 sit where Titanium's do, with the size as `size`
+/// reads it from a record; a malformed table is refused whole.
+///
+/// # Errors
+/// Rejects partial records, tables of more than 500 doors, a repeated ID other
+/// than a static object's, non-finite placement coordinates, and a size
+/// `size` refuses.
+pub(crate) fn door_table(
+    body: &[u8],
+    record_length: usize,
+    size: impl Fn(&[u8]) -> Result<u16>,
+) -> Result<DoorUpdate> {
+    ensure!(
+        body.len().is_multiple_of(record_length) && body.len() <= MOST_DOORS * record_length,
+        "invalid door table length"
+    );
+    let mut ids = std::collections::BTreeSet::new();
+    let mut doors = Vec::with_capacity(body.len() / record_length);
+    for record in body.chunks_exact(record_length) {
+        let word = |offset| {
+            u32::from_le_bytes([
+                record[offset],
+                record[offset + 1],
+                record[offset + 2],
+                record[offset + 3],
+            ])
+        };
+        let position = Position {
+            x: f32::from_bits(word(36)),
+            y: f32::from_bits(word(32)),
+            z: f32::from_bits(word(40)),
+            heading: f32::from_bits(word(44)),
+        };
+        ensure!(
+            [position.x, position.y, position.z, position.heading]
+                .iter()
+                .all(|v| v.is_finite()),
+            "non-finite door placement"
+        );
+        let id = record[60];
+        ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
+        let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
+        let size = size(record)?;
+        doors.push(Door {
+            id,
+            model: String::from_utf8_lossy(&record[..end]).into_owned(),
+            position,
+            incline: word(48),
+            size,
+            open_type: record[61],
+            state_at_spawn: record[62],
+            invert_state: record[63],
+            parameter: word(64),
+            action: None,
+        });
+    }
+    Ok(DoorUpdate::Spawn(doors))
 }
 
 #[cfg(test)]

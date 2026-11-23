@@ -2,12 +2,16 @@ mod abilities;
 mod actions;
 pub(super) mod admission;
 mod alternate_advancement;
+mod bandolier;
+mod bazaar;
 mod bleeding;
 mod boats;
 mod buffs;
 mod camp;
 mod casting;
 mod character;
+pub(super) mod chat_link;
+mod chat_pace;
 mod clock;
 mod combat;
 mod confirmations;
@@ -26,6 +30,7 @@ mod guilds;
 pub(super) mod hazards;
 mod hiding;
 mod inventory;
+mod journal;
 mod lifecycle;
 pub(super) mod list_poll;
 mod listing;
@@ -39,9 +44,12 @@ mod pets;
 mod posture;
 mod raids;
 mod reading;
+mod reports;
 mod resurrection;
 mod riders;
+pub(super) mod server_filters;
 mod servers;
+mod shielding;
 mod sight;
 mod socials;
 pub(super) mod spell_tables;
@@ -60,9 +68,10 @@ pub(super) mod zone;
 
 use super::{
     CancellationToken, ClientCommand, ClientConfig, ClientEvent, ClientIdentity, ConnectionStage,
-    ConnectionState, DecodeError, Events, RecordEvent, RunOptions, ServerProtocol,
+    ConnectionState, DecodeError, Events, GapKind, GapStage, RecordEvent, RunOptions,
+    ServerProtocol,
 };
-use crate::{assets::Assets, chat, transport::Application};
+use crate::{assets::Assets, transport::Application};
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::zoning;
 use servers::Shield;
@@ -105,7 +114,9 @@ pub(super) fn run(
 ) -> Result<()> {
     ensure!(!stop.is_cancelled(), "shutdown requested");
     let server = servers::server_type(config.protocol);
-    let (credentials, ip) = server.wire().login(config, stop, commands, log)?;
+    let (credentials, ip) = staged(log, GapStage::Login, |log| {
+        server.wire().login(config, stop, commands, log)
+    })?;
     let mut context = CharacterSession::new(
         config,
         identity,
@@ -114,31 +125,38 @@ pub(super) fn run(
         options.zone_duration,
         commands,
     );
-    let mut destination =
+    let mut destination = staged(log, GapStage::World, |log| {
         server
             .wire()
-            .world(&context, assets, &ip, (options.world_only, false), log)?;
+            .world(&context, assets, &ip, (options.world_only, false), log)
+    })?;
     while let Some(mut next_zone) = destination {
         context.config.character.clone_from(&next_zone.character);
-        let exit = server.zone(
-            &context,
-            &mut next_zone.shield,
-            (&next_zone.host, next_zone.port),
-            next_zone.checksums,
-            log,
-        )?;
+        let exit = staged(log, GapStage::Zone, |log| {
+            server.zone(
+                &context,
+                &mut next_zone.shield,
+                (&next_zone.host, next_zone.port),
+                next_zone.checksums,
+                log,
+            )
+        })?;
         context.on_zone_exit(&exit);
         match exit {
             ZoneExit::Stopped => return Ok(()),
             ZoneExit::World => {
-                destination = server
-                    .wire()
-                    .world(&context, assets, &ip, (false, true), log)?;
+                destination = staged(log, GapStage::World, |log| {
+                    server
+                        .wire()
+                        .world(&context, assets, &ip, (false, true), log)
+                })?;
             }
             ZoneExit::CharacterSelect => {
-                destination = server
-                    .wire()
-                    .world(&context, assets, &ip, (false, false), log)?;
+                destination = staged(log, GapStage::World, |log| {
+                    server
+                        .wire()
+                        .world(&context, assets, &ip, (false, false), log)
+                })?;
             }
             ZoneExit::Direct(packet) => {
                 let (host, port, checksums) =
@@ -158,6 +176,22 @@ pub(super) fn run(
     Ok(())
 }
 
+/// Runs one stage of the session, then tells what it still had to tell of
+/// what it left unread, whether it ended well or not; the stage's own error
+/// wins over the host's.
+fn staged<T>(
+    log: &mut Events<'_>,
+    stage: GapStage,
+    run: impl FnOnce(&mut Events<'_>) -> Result<T>,
+) -> Result<T> {
+    log.begin_stage(stage)?;
+    let ran = run(log);
+    let ended = log.end_stage();
+    let ran = ran?;
+    ended?;
+    Ok(ran)
+}
+
 /// What a character's stay in the world and its zones works with.
 pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) config: ClientConfig,
@@ -174,9 +208,17 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
     /// Current character's opt-in; zone crossings retain it.
     pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
+    /// Current character's server filters; zone crossings retain them.
+    pub(in crate::client) server_filters:
+        std::cell::RefCell<eq_network_game::filters::ServerFilters>,
     /// What the riding wire keeps across zones, as the program's globals
     /// do (reads R36 §4, R36c).
     pub(in crate::client) riding: std::sync::Arc<riders::Riding>,
+    /// The character's chat server link, opened from the world's offer
+    /// where the server type opens one, kept across zones.
+    pub(in crate::client) chat: std::sync::Arc<chat_link::ChatLink>,
+    /// The character's one pace for all chat, kept across zones (6.523).
+    pub(in crate::client) chat_pace: chat_pace::SharedPace,
 }
 
 impl<'a> CharacterSession<'a> {
@@ -197,7 +239,10 @@ impl<'a> CharacterSession<'a> {
             commands,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
+            server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
+            chat: std::sync::Arc::default(),
+            chat_pace: chat_pace::SharedPace::default(),
         }
     }
 
@@ -206,7 +251,11 @@ impl<'a> CharacterSession<'a> {
             // Show the list and forget the departing character's runtime choice.
             self.config.character.clear();
             self.answer_list_polls.set(self.config.answer_list_polls);
+            self.server_filters
+                .replace(self.config.server_filters.clone());
             self.riding = std::sync::Arc::default();
+            // A camp or the character list ends the character's chat link.
+            self.chat.close();
         }
     }
 }
@@ -230,7 +279,8 @@ pub(in crate::client) enum ZoneExit {
 }
 
 /// Records the communication a packet carries, as the server's client
-/// generation reads it; an unreadable one is recorded as such.
+/// generation reads it; an unreadable one is recorded as such, and counted
+/// as a gap. Says whether the packet was a communication, read or not.
 ///
 /// # Errors
 /// Returns an error when the host's record handler fails.
@@ -239,23 +289,35 @@ pub(in crate::client) fn record_chat(
     zone: &str,
     packet: &Application,
     log: &mut Events<'_>,
-) -> Result<()> {
+) -> Result<bool> {
     match servers::server_type(config.protocol).wire().chat(
         packet.opcode,
         &packet.body,
         config.include_raw,
     ) {
-        Ok(Some(event)) => log.record(zone, RecordEvent::Chat(event)),
-        Ok(None) => Ok(()),
-        Err(error) => log.record(
-            zone,
-            RecordEvent::DecodeError(DecodeError {
-                kind: "decode_error",
-                opcode: packet.opcode,
-                payload_hex: hex::encode(&packet.body),
-                error: error.to_string(),
-            }),
-        ),
+        Ok(Some(event)) => log.record(zone, RecordEvent::Chat(event)).map(|()| true),
+        Ok(None) => Ok(false),
+        Err(error) => {
+            log.gap(packet.opcode, None, &packet.body, chat_unreadable(&error))?;
+            log.record(
+                zone,
+                RecordEvent::DecodeError(DecodeError {
+                    kind: "decode_error",
+                    opcode: packet.opcode,
+                    payload_hex: hex::encode(&packet.body),
+                    error: error.to_string(),
+                }),
+            )?;
+            Ok(true)
+        }
+    }
+}
+
+/// The gap a communication the generation's reader could not read leaves.
+pub(in crate::client) fn chat_unreadable(error: &anyhow::Error) -> GapKind {
+    GapKind::Unreadable {
+        part: "communication".to_owned(),
+        error: error.to_string(),
     }
 }
 

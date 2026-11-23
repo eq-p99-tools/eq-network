@@ -218,20 +218,20 @@ mod tests {
             "|".repeat(10),
             "|".repeat(9)
         );
-        let augmented = wire(&fields, &children);
-        assert!(crate::inventory::decode(0x5394, augmented.as_bytes()).is_err());
-
-        // A nonempty common record still cannot produce an empty-augment
-        // hash even when its static capacity allows this child to be parsed.
-        fields[97] = "1";
-        let nonempty = wire(&fields, &children);
-        let update = crate::inventory::decode(0x5394, nonempty.as_bytes())
-            .unwrap()
-            .unwrap();
-        inventory.apply(update);
-        assert!(inventory.items()[&InventorySlot(23)]
-            .titanium_link()
-            .is_err());
+        // A common record's child is its augment (6.570); an augmented
+        // record cannot produce an empty-augment hash, with or without
+        // static capacity.
+        for capacity in ["0", "1"] {
+            fields[97] = capacity;
+            let augmented = wire(&fields, &children);
+            let update = crate::inventory::decode(0x5394, augmented.as_bytes())
+                .unwrap()
+                .unwrap();
+            inventory.apply(update);
+            let item = &inventory.items()[&InventorySlot(23)];
+            assert_eq!(item.augments[0], Some(292));
+            assert!(item.titanium_link().is_err());
+        }
     }
 
     #[test]

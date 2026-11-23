@@ -166,6 +166,12 @@ fn the_profile_lists_the_players_group_without_its_leader() {
     assert_eq!(profile_group(&hex::decode(PROFILE).unwrap()).unwrap(), None);
     assert!(profile_group(&[0; 4]).is_err());
 }
+
+#[test]
+fn the_synthetic_profile_shares_no_looted_coins() {
+    assert!(!profile_auto_split(&hex::decode(PROFILE).unwrap()).unwrap());
+    assert!(profile_auto_split(&[0; 4]).is_err());
+}
 const PROFILE: &str = "ae05f5a6083907c71a8fa0b9df18601d2fadb4d6b80a3099d83162b5c95015d3bd8bd662ad969f16538260e8249c5a9d1c78803e51a3f8d3d48f5ca3fb28b2bff7a48403366d5c880b3422059ae86574971744def74907496b270882";
 const SPAWNS: &str = "28e67b5d096069468c09009a236b6b8bace06fcd5ad543cb0f2173178769ee91ddec0b81713d9ef952c724020b109b20e8bbf4f4b5b2e79e";
 
@@ -215,6 +221,61 @@ fn synthetic_spawn_batch_preserves_units_identity_and_visibility() {
         }
     );
 }
+#[test]
+fn a_spawn_says_whose_pet_it_is() {
+    // A pet of spawn 7 at +18 (petOwnerId), and a spawn with no owner, in
+    // both packets that carry spawn records: the zone's list and a new spawn.
+    let mut data = vec![0; SPAWN_SIZE * 2];
+    for (record, (id, owner)) in data
+        .as_chunks_mut::<SPAWN_SIZE>()
+        .0
+        .iter_mut()
+        .zip([(20u16, 0x0107u16), (21, 0)])
+    {
+        record[76..78].copy_from_slice(&id.to_le_bytes());
+        record[86] = 1;
+        record[18..20].copy_from_slice(&owner.to_le_bytes());
+    }
+    for opcode in [0x5f41, 0x6b42] {
+        let [WorldEvent::Spawns(spawns)] = &updates(opcode, &packed_spawns(&data)).unwrap()[..]
+        else {
+            panic!("no spawns from {opcode:#06x}");
+        };
+        assert_eq!(spawns[0].pet_owner, Some(0x0107), "{opcode:#06x}");
+        assert_eq!(spawns[1].pet_owner, None, "{opcode:#06x}");
+        assert_eq!(crate::pets::owned_pet(0x0107, spawns.iter()), Some(20));
+    }
+    // One new spawn alone.
+    let [WorldEvent::Spawns(one)] =
+        &updates(0x6b42, &packed_spawns(&data[..SPAWN_SIZE])).unwrap()[..]
+    else {
+        panic!("no spawn");
+    };
+    assert_eq!(one[0].pet_owner, Some(0x0107));
+}
+
+/// Packs spawn records as the Mac servers send them: compressed, the first
+/// and middle words swapped, then each whole word enciphered (the inverse
+/// of `unpack` for spawns).
+fn packed_spawns(data: &[u8]) -> Vec<u8> {
+    const CONSTANT: u64 = 0x6593_65e7;
+    let mut bytes = miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
+    let (words, _) = bytes.as_chunks_mut::<8>();
+    words.swap(0, words.len() / 2);
+    let mut key = 0u64;
+    for word in words.iter_mut() {
+        let plain = u64::from_le_bytes(*word);
+        let cipher = plain
+            .rotate_left(29)
+            .wrapping_add(CONSTANT)
+            .rotate_left(14)
+            .wrapping_sub(key);
+        key = key.wrapping_add(plain).wrapping_sub(CONSTANT);
+        *word = cipher.to_le_bytes();
+    }
+    bytes
+}
+
 #[test]
 fn a_spawn_says_its_class_and_level() {
     // As TAKP's patch sends them: a merchant (32 for the server's 41) of
@@ -654,8 +715,16 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
             Message::Event(WorldEvent::Coins(carried)),
             Message::Event(WorldEvent::CoinsElsewhere { cursor, bank, .. }),
             Message::Event(WorldEvent::Nourishment(_)),
-            Message::Bind(_),
-        ] if buffs.iter().all(Option::is_none)
+            Message::Event(WorldEvent::AutoSplit(false)),
+            Message::Bind(bind),
+            Message::Event(WorldEvent::BoundIn { zone_id }),
+            Message::AlternateAdvancement(crate::alternate_advancement::Update::MacSelections(
+                Some(_)
+            )),
+            Message::AlternateAdvancement(crate::alternate_advancement::Update::MacPoints(Some(_))),
+            Message::VehicleName(None),
+        ] if *zone_id == bind.zone_id
+            && buffs.iter().all(Option::is_none)
             && book.slots().iter().all(Option::is_none)
             && carried.is_empty()
             && cursor.is_empty()
@@ -665,6 +734,17 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
         profile(&wire, "Example").unwrap().spell_refresh_ms,
         Some([0; 8])
     );
+    // An unpacked profile naming the boat the player rode (`boat`, +3256).
+    let mut aboard = vec![0; PROFILE_SIZE];
+    assert_eq!(crate::boats::riders::eqmac_profile_name(&aboard), None);
+    aboard[3256..3256 + 14].copy_from_slice(b"Maidens_Voyage");
+    aboard[3256 + 14..3256 + 32].fill(b'x');
+    aboard[3256 + 14] = 0;
+    assert_eq!(
+        crate::boats::riders::eqmac_profile_name(&aboard).as_deref(),
+        Some("Maidens_Voyage")
+    );
+    assert_eq!(profile_vehicle(&[0; 7]), None);
 }
 
 #[test]
@@ -906,15 +986,6 @@ fn quarms_move_to_bind_names_the_zone_and_place_without_a_heading() {
     body[144..148].copy_from_slice(&3.75f32.to_le_bytes());
     body[132..136].copy_from_slice(&70_000u32.to_le_bytes());
     assert!(to_bind(&body).is_err());
-}
-
-#[test]
-fn mac_filters_enable_every_chat_and_combat_category() {
-    let filters = server_filters();
-    for index in 0..17 {
-        let value = u32::from_le_bytes(filters[index * 4..index * 4 + 4].try_into().unwrap());
-        assert_eq!(value, u32::from((5..=14).contains(&index)));
-    }
 }
 
 #[test]

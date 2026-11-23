@@ -434,16 +434,6 @@ pub fn client_update(sample: &crate::movement::PositionPacket) -> Result<Encoded
     })
 }
 
-/// The client's filters: every chat and combat category on.
-#[must_use]
-pub fn server_filters() -> [u8; 68] {
-    let mut filters = [0; 68];
-    for index in 5..=14 {
-        filters[index * 4] = 1;
-    }
-    filters
-}
-
 /// Decrypt the full 64-bit words, preserve the tail, then inflate with a strict limit.
 fn unpack(body: &[u8], profile: bool) -> Result<Zeroizing<Vec<u8>>> {
     ensure!(
@@ -508,6 +498,14 @@ fn decoded_profile_zone(data: &[u8]) -> Result<Option<u16>> {
     Ok(u16::try_from(word(data, 3444))
         .ok()
         .filter(|zone| *zone != 0))
+}
+
+/// The AA array and points of the zone's packed profile (checklist 6.548).
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_aa(body: &[u8]) -> Result<[crate::alternate_advancement::Update; 2]> {
+    crate::alternate_advancement::eqmac_profile(&unpack(body, true)?)
 }
 
 /// The player's group as the profile lists it each time a zone admits them
@@ -589,7 +587,8 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
                 .map(|value| u32::from(u16::from_le_bytes(*value)))
                 .collect(),
         ),
-        practice_points: None,
+        // `points` (i16 at 156); a negative count is none left.
+        practice_points: Some(u32::try_from(signed_attribute(data, 156)).unwrap_or(0)),
         languages: Some(data[PROFILE_LANGUAGES].to_vec()),
         disciplines: None,
         // What is left of each gem's reuse timer, in milliseconds
@@ -662,6 +661,22 @@ fn decoded_coins(data: &[u8]) -> Result<Vec<WorldEvent>> {
 /// Rejects malformed compression, profile layouts or truncated fields.
 pub fn profile_nourishment(body: &[u8]) -> Result<crate::food::Nourishment> {
     crate::food::eqmac_profile(&unpack(body, true)?)
+}
+
+/// Whether the validated `EQMac` profile shares looted coins (`/autosplit`).
+///
+/// # Errors
+/// Rejects malformed compression or a truncated profile.
+pub fn profile_auto_split(body: &[u8]) -> Result<bool> {
+    crate::split::eqmac_profile(&unpack(body, true)?)
+}
+
+/// The boat the packed profile names (`boat`, +3256), which TAKP and Quarm
+/// keep across zones (6.602); None when it names none or cannot be read,
+/// which the profile's other readers report.
+#[must_use]
+pub fn profile_vehicle(body: &[u8]) -> Option<String> {
+    crate::boats::riders::eqmac_profile_name(&unpack(body, true).ok()?)
 }
 
 /// The separate, uncompressed own-character zone-entry projection.
@@ -772,7 +787,8 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),
                 name_parts: crate::names::NameParts::default(),
-                pet_owner: None,
+                // The owner's spawn at +18 (`petOwnerId`), 0 for none.
+                pet_owner: Some(short(record, 18)).filter(|owner| *owner != 0),
                 hp_percent: None,
                 posture: None,
                 // The Mac-era record's body type is unread.
@@ -863,6 +879,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
         ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
+        crate::who::eqmac::RESPONSE_OPCODE => {
+            vec![WorldEvent::WhoList(crate::who::eqmac::decode(body)?)]
+        }
         ZONE_WEATHER => vec![WorldEvent::Weather(crate::clock::weather(body)?)],
         // Quarm's zones send their part of the rules at every zone-in.
         crate::rules::EQMAC_LOG_SERVER_OPCODE => {
@@ -1041,6 +1060,8 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         }
         crate::names::EQMAC_TITLE_OPCODE => vec![crate::names::eqmac_title(body)?],
         crate::names::EQMAC_GM_RENAME_OPCODE => vec![crate::names::eqmac_gm_rename(body)?],
+        crate::names::EQMAC_LAST_NAME_OPCODE => vec![crate::names::eqmac_last_name(body)?],
+        crate::names::EQMAC_SURNAME_OPCODE => vec![crate::names::surname_answer(body)?],
         crate::gm::EQMAC_KICK_OPCODE
         | crate::gm::EQMAC_KILL_OPCODE
         | crate::gm::EQMAC_BECOME_NPC_OPCODE

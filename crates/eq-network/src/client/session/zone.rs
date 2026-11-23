@@ -27,6 +27,10 @@ struct Features {
     /// says.
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
+    /// The server type's client generation.
+    dialect: eq_network_game::GameDialect,
+    /// Whether the server type takes a server filter change mid-zone.
+    server_filters_at_once: bool,
     /// Whether the server type offers the explicit gameplay departures
     /// (movement and memorization options). Every server type offers them
     /// while the owner tests them; public parity needs them withheld on
@@ -67,6 +71,8 @@ impl Features {
             choices,
             spell_landing_flag: server.spell_landing_flag(),
             answers_list_polls: server.answers_list_polls(),
+            dialect: server.wire().dialect(),
+            server_filters_at_once: server.server_filters_at_once(),
             gameplay_departures: server.offers_gameplay_departures(),
         }
     }
@@ -85,6 +91,19 @@ impl Features {
         }
         if self.gameplay_departures {
             capabilities.push(crate::world::Capability::GameplayDepartures);
+        }
+        // Every server type whose generation has a filter packet keeps the
+        // filters for its zone-ins.
+        match self.dialect {
+            eq_network_game::GameDialect::Titanium | eq_network_game::GameDialect::EqMac => {
+                capabilities.push(crate::world::Capability::ServerFilters);
+            }
+            // RoF2's filter packet is not built, and its entry sends none
+            // (6.502).
+            eq_network_game::GameDialect::Rof2 => (),
+        }
+        if self.server_filters_at_once {
+            capabilities.push(crate::world::Capability::ServerFiltersAtOnce);
         }
         capabilities.sort_unstable();
         capabilities.dedup();
@@ -105,9 +124,13 @@ impl Features {
 
     /// Lets every feature explain a message its own action caused.
     fn explain(&mut self, message: &mut Message, world: &World) {
+        own_skill(message, world);
         for feature in &mut self.provided {
             feature.explain(message, world);
         }
+        // Where no feature keeps the inventory, a merchant's item is still
+        // the merchant's.
+        super::inventory::merchant_view(message);
     }
 
     /// Lets every feature record a message from before the zone admitted the
@@ -292,6 +315,7 @@ fn run_connected(
     let stop = context.stop;
     let duration = context.duration;
     log.liquid_inputs = super::hazards::Observations::default();
+    let filters = context.server_filters.borrow().clone();
     let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
@@ -301,6 +325,7 @@ fn run_connected(
             key: &credentials.key,
             checksums: &mut checksums,
             log: &mut *log,
+            filters: &filters,
         },
     )?;
     let connected = Instant::now();
@@ -314,6 +339,10 @@ fn run_connected(
     let mut list_replies = super::list_poll::Replies::default();
     let mut setup = servers::Setup::new(&config.character, config.auto_eat);
     setup.local_only = world.local_eqemu();
+    // Channels are offered only where the world offered a chat server and
+    // a link was opened from it (the server's own signal).
+    setup.chat = Some(std::sync::Arc::clone(&context.chat)).filter(|link| link.opened());
+    setup.chat_pace = std::sync::Arc::clone(&context.chat_pace);
     world.riding = std::sync::Arc::clone(&context.riding);
     let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();
@@ -383,6 +412,13 @@ fn run_connected(
                         session_id,
                         &context.answer_list_polls,
                         log,
+                    )? && !super::server_filters::set(
+                        server,
+                        &command,
+                        session_id,
+                        &context.server_filters,
+                        session,
+                        log,
                     )? {
                         commands.push(command);
                     }
@@ -427,6 +463,8 @@ fn run_connected(
                 };
             }
         };
+        // Repeats of what the zone leaves unread are told when due.
+        log.tick_gaps()?;
         let Some(mut packet) = received else {
             continue;
         };
@@ -469,7 +507,7 @@ fn run_connected(
             ))?;
         }
         // What the zone leaves unread still leaves a trace, once a session.
-        unheard.tell(server.wire(), packet.opcode, packet.body.len(), log)?;
+        unheard.tell(server.wire(), packet.opcode, &packet.body, log)?;
         if let Some(HandshakeComplete { player, zone }) = admission.read(
             &mut packet,
             &mut world,
@@ -479,6 +517,7 @@ fn run_connected(
                 key: &credentials.key,
                 checksums: &mut checksums,
                 log: &mut *log,
+                filters: &filters,
             },
         )? {
             let player = match player {
@@ -519,17 +558,22 @@ fn run_connected(
         // Everything else is read once, in the server's client generation, the
         // same way before and after admission, and heard by every feature;
         // a kind no server is known to send leaves a trace, once a session.
-        let messages = unheard.sift(
-            server.wire(),
-            packet.opcode,
-            read_messages(
+        // What the handshake keeps to itself is not read again.
+        let messages = if admission.kept() {
+            Vec::new()
+        } else {
+            unheard.sift(
                 server.wire(),
-                packet.opcode,
-                &packet.body,
-                server.item_rules(),
-            ),
-            log,
-        )?;
+                (packet.opcode, &packet.body),
+                read_messages(
+                    server.wire(),
+                    packet.opcode,
+                    &packet.body,
+                    server.item_rules(),
+                ),
+                log,
+            )?
+        };
         if context.commands.is_none() && !world.ready() && !entry_position_superseded {
             // A later handshake packet cannot restore a superseded fallback.
             entry_position_superseded = messages
@@ -584,17 +628,51 @@ fn run_connected(
         {
             Ok(Some(event)) => log.record(&zone, RecordEvent::Chat(event))?,
             Ok(None) => (),
-            Err(error) => log.record(
-                &zone,
-                RecordEvent::DecodeError(DecodeError {
-                    kind: "decode_error",
-                    opcode: packet.opcode,
-                    payload_hex: hex::encode(&packet.body),
-                    error: error.to_string(),
-                }),
-            )?,
+            Err(error) => {
+                log.gap(
+                    packet.opcode,
+                    None,
+                    &packet.body,
+                    super::chat_unreadable(&error),
+                )?;
+                log.record(
+                    &zone,
+                    RecordEvent::DecodeError(DecodeError {
+                        kind: "decode_error",
+                        opcode: packet.opcode,
+                        payload_hex: hex::encode(&packet.body),
+                        error: error.to_string(),
+                    }),
+                )?;
+            }
         }
     }
+}
+
+/// `EQMac`'s silent skill update is the player's own skill news when it
+/// names their spawn. TAKP and Quarm send it only to the player it names
+/// (`Client::SetSkill`), so any other is rejected.
+fn own_skill(message: &mut Message, world: &World) {
+    let Message::SpawnSkill(update) = message else {
+        return;
+    };
+    *message = if world
+        .own_spawn
+        .is_some_and(|own| own != 0 && own == update.spawn_id)
+    {
+        Message::Event(WorldEvent::Skill {
+            skill_id: update.skill_id,
+            value: update.value,
+        })
+    } else {
+        Message::Unreadable {
+            part: Part::World,
+            error: format!(
+                "a silent skill update for spawn {}, not the player's",
+                update.spawn_id
+            ),
+        }
+    };
 }
 
 /// A listener can repeat the entry position only until the zone supersedes it.
@@ -896,10 +974,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 113;
+    const KINDS: usize = 146;
 
     /// The kinds the login and world servers take, before any zone session.
-    const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
+    const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -909,6 +987,8 @@ mod tests {
         match command {
             // The world server's, before any zone session.
             ClientCommand::SelectCharacter { .. } => 0,
+            ClientCommand::ChooseServerFilters { .. } => 113,
+            ClientCommand::SetServerFilters { .. } => 114,
             ClientCommand::DeleteCharacter(_) => 75,
             ClientCommand::CreateCharacter { .. } | ClientCommand::GenerateName { .. } => 1,
             ClientCommand::SwapSpell { .. } => 2,
@@ -931,6 +1011,8 @@ mod tests {
             ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::SocialEmote { .. } => 111,
             ClientCommand::ApplyPoison { .. } => 112,
+            ClientCommand::ChatChannel { .. } => 121,
+            ClientCommand::LookForGroup { .. } => 123,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -959,6 +1041,29 @@ mod tests {
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
+            ClientCommand::DestroyCoins { .. } => 122,
+            ClientCommand::Shield { .. } => 124,
+            ClientCommand::RequestTitles { .. } => 125,
+            ClientCommand::SetTitle { .. } => 126,
+            ClientCommand::BazaarSearch { .. } => 127,
+            ClientCommand::BazaarWelcome { .. } => 128,
+            ClientCommand::AcceptTask { .. } => 129,
+            ClientCommand::DeclineTasks { .. } => 130,
+            ClientCommand::CancelTask { .. } => 131,
+            ClientCommand::AskTaskHistory { .. } => 132,
+            ClientCommand::ListTaskTimers { .. } => 133,
+            ClientCommand::TrainAlternateAdvancement { .. } => 134,
+            ClientCommand::ActivateAlternateAdvancement { .. } => 135,
+            ClientCommand::SetAlternateAdvancementSplit { .. } => 136,
+            ClientCommand::BrowseTrader { .. } => 137,
+            ClientCommand::EndBrowse { .. } => 138,
+            ClientCommand::SaveBandolier { .. } => 139,
+            ClientCommand::ClearBandolier { .. } => 140,
+            ClientCommand::SetPotionBelt { .. } => 141,
+            ClientCommand::ClearPotionBelt { .. } => 142,
+            ClientCommand::SwapBandolier { .. } => 143,
+            ClientCommand::UseBeltItem(_) => 144,
+            ClientCommand::AskDisciplineReuse { .. } => 145,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1000,6 +1105,11 @@ mod tests {
             ClientCommand::BledOut { .. } => 67,
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
+            ClientCommand::AnswerDuel { .. } => 115,
+            ClientCommand::SendPetition { .. } => 117,
+            ClientCommand::ReportBug { .. } => 118,
+            ClientCommand::SendFeedback { .. } => 119,
+            ClientCommand::ChallengeDuel { .. } => 120,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1022,6 +1132,7 @@ mod tests {
             ClientCommand::GuildMakeLeader { .. } => 101,
             ClientCommand::GuildDemote { .. } => 102,
             ClientCommand::SetInspectNote { .. } => 91,
+            ClientCommand::Surname { .. } => 116,
         }
     }
 
@@ -1058,6 +1169,26 @@ mod tests {
                 session_id,
                 created,
             },
+            ClientCommand::SendPetition {
+                session_id,
+                text: "A synthetic petition.".into(),
+                created,
+            },
+            ClientCommand::ReportBug {
+                session_id,
+                report: eq_network_game::reports::BugReport {
+                    category: eq_network_game::reports::BugCategory::Other,
+                    text: "A synthetic report.".into(),
+                    place: None,
+                    target: None,
+                },
+                created,
+            },
+            ClientCommand::SendFeedback {
+                session_id,
+                text: "Synthetic feedback.".into(),
+                created,
+            },
             ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
                 session_id,
                 target: eq_network_game::targets::TargetState::default(),
@@ -1084,6 +1215,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseItem(ItemUse {
+                installed_class_spell: None,
                 request_id: 1,
                 session_id,
                 revision: 1,
@@ -1104,6 +1236,7 @@ mod tests {
             ClientCommand::ClickDoor {
                 session_id,
                 door_id: 1,
+                point: None,
                 created,
             },
             ClientCommand::PickUp {
@@ -1350,6 +1483,46 @@ mod tests {
                 },
                 created,
             },
+            ClientCommand::DestroyCoins {
+                session_id,
+                destroy: eq_network_game::money::CoinDestroy {
+                    coin: eq_network_game::money::Coin::Gold,
+                    amount: 2,
+                },
+                created,
+            },
+            ClientCommand::Shield {
+                session_id,
+                spawn_id: 9,
+                created,
+            },
+            ClientCommand::AskDisciplineReuse {
+                session_id,
+                created,
+            },
+            ClientCommand::AcceptTask {
+                session_id,
+                task_id: 9,
+                created,
+            },
+            ClientCommand::DeclineTasks { session_id },
+            ClientCommand::CancelTask {
+                session_id,
+                at: eq_network_game::tasks::TaskSlot {
+                    kind: eq_network_game::tasks::TaskKind::Quest,
+                    slot: 0,
+                },
+                created,
+            },
+            ClientCommand::AskTaskHistory {
+                session_id,
+                index: 0,
+                created,
+            },
+            ClientCommand::ListTaskTimers {
+                session_id,
+                created,
+            },
             ClientCommand::UseAbility {
                 in_liquid: false,
                 target: None,
@@ -1367,9 +1540,18 @@ mod tests {
                 slot: InventorySlot(23),
                 created,
             },
+            ClientCommand::ChatChannel {
+                session_id,
+                text: "list".into(),
+                created,
+            },
             ClientCommand::AnswerListPolls {
                 session_id,
                 enabled: false,
+            },
+            ClientCommand::SetServerFilters {
+                session_id,
+                filters: eq_network_game::filters::ServerFilters::default(),
             },
             ClientCommand::SetMovementOptions {
                 session_id,
@@ -1444,6 +1626,20 @@ mod tests {
                 },
                 accept: true,
             },
+            ClientCommand::AnswerDuel {
+                session_id,
+                offer_id: eq_network_game::confirmations::ConsentId {
+                    session_id,
+                    kind: eq_network_game::confirmations::ConsentKind::Duel,
+                    sequence: 1,
+                },
+                accept: true,
+            },
+            ClientCommand::ChallengeDuel {
+                session_id,
+                target: 2,
+                created: Instant::now(),
+            },
             ClientCommand::DropInvisibility {
                 session_id,
                 steps: vec![eq_network_game::buffs::InvisibilityStep::State(0)],
@@ -1464,6 +1660,10 @@ mod tests {
             },
             ClientCommand::Disband { session_id },
             ClientCommand::ToggleAway { session_id },
+            ClientCommand::LookForGroup {
+                session_id,
+                on: None,
+            },
             ClientCommand::ToggleAnonymous { session_id },
             ClientCommand::ToggleRoleplay { session_id },
             ClientCommand::ShowHelm {
@@ -1478,6 +1678,63 @@ mod tests {
                 session_id,
                 low: 1,
                 high: 6,
+            },
+            ClientCommand::Surname {
+                session_id,
+                surname: "Exemplum".into(),
+            },
+            ClientCommand::RequestTitles { session_id },
+            ClientCommand::SetTitle {
+                session_id,
+                title_id: 7,
+                suffix: false,
+            },
+            ClientCommand::TrainAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+            },
+            ClientCommand::ActivateAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+                target: Some(300),
+            },
+            ClientCommand::SetAlternateAdvancementSplit {
+                session_id,
+                percentage: 50,
+            },
+            ClientCommand::BazaarSearch {
+                session_id,
+                criteria: eq_network_game::bazaar::BazaarCriteria::default(),
+            },
+            ClientCommand::BazaarWelcome { session_id },
+            ClientCommand::BrowseTrader {
+                session_id,
+                trader: 40,
+            },
+            ClientCommand::EndBrowse { session_id },
+            ClientCommand::SaveBandolier {
+                session_id,
+                set: 0,
+                name: "Tank".into(),
+            },
+            ClientCommand::ClearBandolier { session_id, set: 0 },
+            ClientCommand::SwapBandolier { session_id, set: 0 },
+            ClientCommand::UseBeltItem(eq_network_game::bandolier::BeltUse {
+                request_id: 1,
+                session_id,
+                belt_slot: 0,
+                target_id: 7,
+                created,
+                installed_class_spell: None,
+            }),
+            ClientCommand::SetPotionBelt {
+                session_id,
+                slot: 0,
+                item_id: 1,
+            },
+            ClientCommand::ClearPotionBelt {
+                session_id,
+                slot: 0,
             },
             ClientCommand::Emote {
                 session_id,
@@ -1899,7 +2156,8 @@ mod tests {
     #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
         // Every server type, so that each command has an owner somewhere:
-        // EQEmu has every feature but the bleed-out report, which TAKP has.
+        // EQEmu has every feature but the bleed-out report, which TAKP has,
+        // and chat channels, which it has while the world opened a link.
         let servers: Vec<_> = [
             crate::client::ServerProtocol::EqEmu,
             crate::client::ServerProtocol::Project1999,
@@ -1911,6 +2169,8 @@ mod tests {
             let mut setup =
                 servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
             setup.local_only = protocol == crate::client::ServerProtocol::EqEmu;
+            // A zone offers chat channels only while the world opened a link.
+            setup.chat = setup.local_only.then(std::sync::Arc::default);
             Features::from_setup(servers::server_type(protocol), &setup)
         })
         .collect();
@@ -1918,6 +2178,36 @@ mod tests {
             if matches!(command, ClientCommand::AnswerListPolls { .. }) {
                 // Session control is owned before the gameplay feature gates.
                 assert!(servers.iter().any(|features| features.answers_list_polls));
+                continue;
+            }
+            if matches!(command, ClientCommand::SetServerFilters { .. }) {
+                // The session keeps the filters itself, before the feature
+                // gates, on every server type.
+                assert!(servers.iter().all(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::ServerFilters)));
+                continue;
+            }
+            // Built and tested, and listed by no server type until each
+            // one's own live check: feedback (6.511f), browsing a trader
+            // (6.558a), and the bandolier's sets and belt (6.564), its swap
+            // (6.566) and belt use (6.568). AAs are listed on local EQEmu
+            // (6.581), so they take the owner check below, as does the
+            // Mac-era Bazaar search, offered on TAKP and Quarm (6.580).
+            if let Some(unlisted) = command.capability().filter(|capability| {
+                [
+                    crate::world::Capability::SendingFeedback,
+                    crate::world::Capability::BazaarBrowsing,
+                    crate::world::Capability::Bandoliers,
+                    crate::world::Capability::PotionBelt,
+                    crate::world::Capability::BandolierSwap,
+                    crate::world::Capability::UsingPotionBelt,
+                ]
+                .contains(capability)
+            }) {
+                assert!(!servers
+                    .iter()
+                    .any(|features| features.capabilities().contains(&unlisted)));
                 continue;
             }
             if Features::is_departure(&command) {
@@ -2264,6 +2554,8 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let (world, outcome) = bleed_out(features);
@@ -2320,6 +2612,8 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(5);
@@ -2402,6 +2696,8 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(5);
@@ -2528,6 +2824,8 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(5);
@@ -2605,7 +2903,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_quarm_inventory_capabilities_keep_one_owner_and_exchanges_disabled() {
+    fn combined_quarm_inventory_capabilities_keep_one_owner_with_giving() {
         use crate::client::ServerProtocol;
         use eq_network_game::{food::AutoEat, inventory::InventorySlot, world::Capability};
         let server = servers::server_type(ServerProtocol::Quarm);
@@ -2616,10 +2914,11 @@ mod tests {
             Capability::Meals,
             Capability::Trading,
             Capability::Reading,
+            // Quarm's own trade handlers (6.576).
+            Capability::Giving,
         ] {
             assert!(capabilities.contains(&capability), "{capability:?}");
         }
-        assert!(!capabilities.contains(&Capability::Giving));
         for command in [
             ClientCommand::AutoEat {
                 session_id: 5,
@@ -2672,6 +2971,7 @@ mod tests {
             let click = ClientCommand::ClickDoor {
                 session_id: 5,
                 door_id: 3,
+                point: None,
                 created: Instant::now(),
             };
             assert_eq!(
@@ -2694,11 +2994,14 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
+            point: None,
             created: Instant::now(),
         };
         let mut world = World::new(5);
@@ -2813,7 +3116,7 @@ mod tests {
     }
 
     #[test]
-    fn emote_animations_and_disciplines_are_titanium_offers_only() {
+    fn emote_animations_are_titanium_offers_only_and_each_generation_has_its_disciplines() {
         use crate::{client::ServerProtocol, world::Capability};
         let offered = |protocol| {
             Features::new(
@@ -2830,11 +3133,18 @@ mod tests {
                 titanium.contains(&Capability::UsingDisciplines),
                 "{protocol:?}"
             );
+            assert!(
+                !titanium.contains(&Capability::DisciplineReuse),
+                "{protocol:?}"
+            );
         }
+        // TAKP's and Quarm's `/disc` by number, and the bare `/disc`
+        // (6.603 G1).
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let mac = offered(protocol);
             assert!(!mac.contains(&Capability::Emoting), "{protocol:?}");
-            assert!(!mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
+            assert!(mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
+            assert!(mac.contains(&Capability::DisciplineReuse), "{protocol:?}");
         }
     }
 
@@ -2943,6 +3253,30 @@ mod tests {
     }
 
     #[test]
+    fn every_zone_keeps_the_filters_and_only_eqemu_takes_a_change_at_once() {
+        use crate::world::Capability;
+        for (protocol, at_once) in [
+            (crate::client::ServerProtocol::EqEmu, true),
+            (crate::client::ServerProtocol::Project1999, false),
+            (crate::client::ServerProtocol::Quarm, false),
+            (crate::client::ServerProtocol::Takp, false),
+        ] {
+            let offered = Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+            .capabilities();
+            assert!(offered.contains(&Capability::ServerFilters), "{protocol:?}");
+            assert_eq!(
+                offered.contains(&Capability::ServerFiltersAtOnce),
+                at_once,
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_eqmac_zone_reports_everything_its_features_offer() {
         use crate::world::Capability;
         let features = |protocol| {
@@ -2954,8 +3288,9 @@ mod tests {
             .capabilities()
         };
         // Both EQMac policies move, jump, fall, zone, camp, cast spells and
-        // move inventory, read, shop and eat. TAKP also offers the social
-        // actions checked there.
+        // move inventory, read, shop, eat, give, group, list and answer a
+        // translocate (Quarm from its own handlers, 6.576). TAKP also offers
+        // the bleed-out report checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
@@ -2963,6 +3298,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -2974,46 +3310,42 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Who,
+                Capability::Corpses,
+                Capability::Pets,
+                Capability::Training,
+                Capability::Resurrection,
                 Capability::Reading,
-                Capability::EnvironmentalDamage,
-                Capability::Jumping,
-                Capability::Posture,
-                Capability::Meals,
-                Capability::GameplayDepartures,
-                Capability::ApplyingPoison,
-            ]
-        );
-        assert_eq!(
-            features(crate::client::ServerProtocol::Takp),
-            [
-                Capability::Casting,
-                Capability::Spellbook,
-                Capability::Inventory,
-                Capability::Trading,
-                Capability::Giving,
-                Capability::Moving,
-                Capability::Falling,
-                Capability::Targeting,
-                Capability::Combat,
-                Capability::Talking,
-                Capability::Camping,
-                Capability::Doors,
-                Capability::GroundItems,
-                Capability::Zoning,
-                Capability::Abilities,
-                Capability::Reading,
+                Capability::Tradeskills,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
-                Capability::BleedingOut,
+                Capability::Sacrifice,
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
                 Capability::GameplayDepartures,
+                Capability::UsingDisciplines,
+                Capability::FriendsWho,
+                Capability::Splitting,
                 Capability::ApplyingPoison,
+                Capability::ServerFilters,
+                Capability::Shielding,
+                Capability::BazaarSearching,
+                Capability::DisciplineReuse
             ]
         );
+        let mut expected = features(crate::client::ServerProtocol::Quarm);
+        let at = expected
+            .iter()
+            .position(|offered| *offered == Capability::EnvironmentalDamage)
+            .unwrap();
+        expected.insert(at + 1, Capability::BleedingOut);
+        assert_eq!(features(crate::client::ServerProtocol::Takp), expected);
     }
 
     #[test]
@@ -3266,6 +3598,41 @@ mod tests {
         malformed.result.unwrap();
         assert_eq!(malformed.sent, []);
     }
+
+    #[test]
+    fn a_mac_silent_skill_update_is_the_player_s_only_for_their_spawn() {
+        use eq_network_game::training::{SpawnSkill, EQMAC_SKILL_OPCODE};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut own = eq_network_game::message::eqmac(
+            EQMAC_SKILL_OPCODE,
+            &[7, 0, 0, 0, 30, 0, 0, 0, 51, 0, 0, 0],
+        )
+        .remove(0);
+        assert!(matches!(
+            own,
+            Message::SpawnSkill(SpawnSkill {
+                spawn_id: 7,
+                skill_id: 30,
+                value: 51
+            })
+        ));
+        own_skill(&mut own, &world);
+        assert!(matches!(
+            own,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 30,
+                value: 51
+            })
+        ));
+        let mut other = Message::SpawnSkill(SpawnSkill {
+            spawn_id: 8,
+            skill_id: 30,
+            value: 51,
+        });
+        own_skill(&mut other, &world);
+        assert!(matches!(other, Message::Unreadable { .. }));
+    }
 }
 
 #[cfg(test)]
@@ -3282,6 +3649,9 @@ mod ability_tests;
 
 #[cfg(test)]
 mod quarm_inventory_tests;
+
+#[cfg(test)]
+mod belongings_motion_tests;
 
 #[cfg(test)]
 mod item_move_tests;
@@ -3314,6 +3684,12 @@ mod pet_tests;
 mod manual_combine_tests;
 
 #[cfg(test)]
+mod eqmac_tradeskill_tests;
+
+#[cfg(test)]
+mod eqmac_discipline_tests;
+
+#[cfg(test)]
 mod terminal_tests;
 
 #[cfg(test)]
@@ -3322,6 +3698,8 @@ mod admission_tests;
 #[cfg(test)]
 mod command_batch_tests;
 
+#[cfg(test)]
+mod belt_use_tests;
 #[cfg(test)]
 mod cast_result_tests;
 

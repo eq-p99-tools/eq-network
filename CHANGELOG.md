@@ -16,6 +16,889 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the liquid amounts and timing are the host's calculation, not the
   program's formula (R49-3), and that P99's server takes them as it takes
   the official client's (6.491). TAKP and Quarm are unchanged.
+- Offer `/disc` and `/shield` on Quarm and TAKP (6.603 G1, G2), from each
+  server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is
+  source-derived and not yet checked live.
+  - New: `disciplines::eqmac::{OPCODE, REUSE_QUESTION, number, encode}`,
+    `shielding::{EQMAC_SHIELDING_OPCODE, eqmac_shield}`,
+    `GameCommand::AskDisciplineReuse` and `Capability::DisciplineReuse`.
+  - **/disc.** `UseDiscipline` sends the servers' number for the spell and
+    class (4 bytes: the number, then zeros).
+    - Only a spell with no number for the class is refused locally.
+    - The level, the reuse timer and any active discipline are the
+      server's to judge.
+    - A bare `/disc` sends 0.
+  - **/shield.** `/shield` sends the 2-byte target spawn ID, with the same
+    500 ms pace as Titanium.
+- Build TAKP's and Quarm's empty `OP_Track` without offering it (6.603 G3).
+  - New: `tracking::eqmac::{OPCODE, TRACKERS, press}`.
+  - Both servers kick any class but a Ranger, Druid or Bard, so `press`
+    refuses the rest.
+  - Nothing sends it until the `EQMac` program's window and its sends are
+    read (rows 10c, 10d).
+
+- Fix TAKP's cast interruptions (6.603 D0). Since 0802525, TAKP sends
+  `OP_InterruptCast` (0x3542) as a 6-byte `TokenText_Struct`, and the Mac
+  reader took only Quarm's 4 bytes, so every TAKP interruption was refused.
+  - Both lengths now read the same on both wires.
+  - A `fromWorld` other than 0 is refused and logged as not understood.
+  - New: `spells::{eqmac_token, DISCIPLINE_READY}`.
+  - The discipline-ready message (string 393) now reaches the host as a
+    chat line with the server's string number and color. Before, it was
+    dropped.
+
+- A jump never stands a seated player or ends a feign held standing (6.599,
+  Adam 11-23).
+  - **Seated jump:** a sitting or looting player's `Jump` is refused with a
+    diagnostic, and nothing is sent or stood, as Titanium's jump waits on
+    the can-move flag (read R19 c, 0x4a1d74). The Mac-era client is inferred
+    the same, and a read is requested. New: `feign::{JumpGate, TITANIUM_JUMP,
+    EQMAC_JUMP}` and `GameDialect::jump_gate()`.
+  - **Feign held standing:** with Move While Feigned (6.454), the press or a
+    feign spell's landing reports the new `WorldEvent::FeignHeld(true)`. Any
+    posture sent or reported, or death, reports `FeignHeld(false)`, before
+    that posture's own report. A camp's owed stand reports none. Hosts drop
+    the jump's crouch posture reports while a feign is held. The jump
+    request alone clears no feign on EQEmu (1d9cb5c), Quarm (fc75fcf) or
+    TAKP (44afcbf).
+  - `FeignHeld(true)` means pressed or landed and held, not that the roll
+    succeeded: after a failed feign it stays true until the next posture,
+    and a standing-still jump in that window skips its crouch reports too
+    (row 6.599a).
+  - **Breaking:** `WorldEvent` gains `FeignHeld(bool)`.
+
+- Read TAKP's and Quarm's boat control (6.602), from their own
+  `Handle_OP_ControlBoat` (Quarm fc75fcf, TAKP 44afcbf). Neither server type
+  offers `BoatControl` or `BoatRiding` yet: both wait for the `EQMac`
+  program's steering and riding reads (rows 9a, 9b).
+  - New: `boats::{EQMAC_OPCODE, eqmac}`, `ControlBoat::eqmac`,
+    `boats::riders::{EQMAC_PROFILE_NAME, eqmac_profile_name}` and
+    `quarm::profile_vehicle`.
+  - The 4-byte control (16-bit boat, take or release, a byte only echoed)
+    and its echo are read; a refusal is the `IN_USE` line and no echo.
+  - The Mac profile's boat name (+3256) now arrives as `Message::VehicleName`
+    after the profile's other messages.
+
+- Offer `Tradeskills` and `WorldContainers` on Quarm and TAKP (6.598), from
+  their own handlers (Quarm fc75fcf, TAKP 44afcbf).
+  - New: `tradeskills::{EQMAC_COMBINE_OPCODE, eqmac_combine, eqmac_decode}`,
+    `objects::eqmac::{ACTION_OPCODE, close}` and `Message::ContainerReleased`.
+    The Mac inventory reader now takes `OP_ObjectItemPacket` (places 0 to 9
+    as 4000 to 4009) and `OP_ClearObject`.
+  - The 32-byte combine names only the container's slot, the one field both
+    servers read; the rest is zero (open row 6.598a).
+  - A Mac close leaves the container's items in it: the server's empty
+    answer ends the use and takes the places out of view.
+  - Mac moves into a world container go whole from the cursor, and out only
+    onto the empty cursor, a rule Quarm and TAKP both accept. A pickup the
+    server refuses for lore stays in the container on every server.
+  - A Mac combine refused without a reset frees the player after 10 s
+    (open row 6.598c). The session closes the container when the player dies
+    (open row 6.598d).
+  - Source-derived, not live.
+
+- Offer `Training` on Quarm and TAKP (6.597), from their own handlers (Quarm
+  fc75fcf, TAKP 44afcbf).
+  - New: `training::{EQMAC_OFFER_OPCODE, EQMAC_TRAIN_OPCODE, EQMAC_END_OPCODE,
+    EQMAC_SKILL_OPCODE, eqmac_open, eqmac_reply, eqmac_practice, eqmac_end,
+    eqmac_skill, eqmac_practice_cost, PriceScale, SpawnSkill}` and
+    `Message::SpawnSkill`.
+  - Breaking: `TrainingOffer` gains `price_scale`, None on Titanium.
+  - The Mac profile's practice points (+156) and `OP_SkillUpdate2` are now
+    read; the silent update is the player's skill only for their own spawn.
+  - A paid practice leaves the purse as the server's copper-first take, or
+    uncertain; an unanswered one leaves the points unknown and a paid one the
+    purse uncertain. Languages are held until the `EQMac` program's rule is
+    read.
+  - Source-derived, not live.
+
+- Offer `Resurrection` and `Sacrifice` on Quarm and TAKP (6.596), from their
+  own handlers (Quarm fc75fcf, TAKP 44afcbf).
+  - New: `resurrection::{EQMAC_OFFER_OPCODE, EQMAC_ANSWER_OPCODE,
+    EQMAC_COMPLETE_OPCODE, eqmac_offer, eqmac_answer, eqmac_completion}`,
+    `ResurrectionOffer::eqmac_move` and `Message::ResurrectionCompleted`.
+  - The Mac answer is the 228-byte offer byte for byte, with only the choice
+    set. A Mac question stays open an hour before the session declines it.
+  - TAKP's completion moves the player only for the offer this admission
+    accepted, at the same zone and place; any other is recorded as a gap.
+  - Source-derived, not live.
+
+- Offer `Pets` on Quarm and TAKP (6.595), from their own handlers (Quarm
+  fc75fcf, TAKP 44afcbf).
+  - New: `pets::{EQMAC_COMMAND_OPCODE, eqmac_command}` and
+    `PetCommand::on_eqmac`.
+  - The Mac spawn record's `petOwnerId` now fills `SpawnState::pet_owner`.
+  - Taunt on, no cast and focus are refused there.
+  - Source-derived, not live.
+
+- Offer `Corpses` on Quarm and TAKP (6.591), from their own handlers (Quarm
+  fc75fcf, TAKP 44afcbf).
+  - New functions: `corpses::{eqmac_consent, eqmac_summon, eqmac_drag,
+    quarm_drop}`. The consent answer is read into `WorldEvent::Consent`.
+  - `/deny` is refused, because a consent toggles there.
+  - `/corpsedrop` works on Quarm only, on Quarm's own opcode.
+  - `/corpse` names only a player's corpse in the zone, at most every 250 ms.
+  - Source-derived, not live.
+
+- Offer `Rolling`, `Assisting` and `Splitting` on Quarm and TAKP (6.585), each
+  from its own handlers (Quarm fc75fcf, TAKP 44afcbf).
+  - New functions: `socials::{eqmac_random, eqmac_assist}`,
+    `split::{eqmac_split, eqmac_auto_split, eqmac_take, eqmac_refused}` and
+    `quarm::profile_auto_split`.
+  - Rolls and assists are read into the existing `WorldEvent::Roll` and
+    `WorldEvent::Assisted`; an assist answer names the player's own spawn when
+    the server does.
+  - Rolls take ends of 0 to 32000, in order. One assist is in flight at a
+    time.
+  - After a split, the purse is known only when the server's give-back or its
+    take plus the share proves it.
+  - Emotes and yells stay unoffered there.
+  - Source-derived, not live.
+
+  **Breaking** (for exhaustive matches): `message::Message` gains
+  `SplitRefused`.
+
+- Offer `/who all` and friends on Quarm and TAKP (6.583), each from its own
+  handlers (Quarm fc75fcf, TAKP 44afcbf): `who::eqmac::{request, decode,
+  unmatched}` for the 140-byte request and the 16-bit answer, and
+  `friends::eqmac_request`. The answer is the same `WorldEvent::WhoList`;
+  the Mac LFG mark comes as the player's `tag` (12314) and AFK as the
+  `rank` (12311), so `WhoPlayer` keeps its fields. One query at a time, at
+  least a second apart; one asked sooner is refused. Source-derived, not
+  live. `WhoPlayer`'s `Debug` now leaves out the account's name.
+
+  **Breaking** (for exhaustive matches): `message::Message` gains
+  `WhoUnmatched`, the `EQMac` zone's string 5029 in place of an answer.
+
+- Search the Bazaar on TAKP and Quarm (6.580), from EQMacEmu's source,
+  which both servers share: `OP_BazaarSearch` (0x1142) with the Mac-era
+  88-byte search and 20-byte welcome request, and the server's 76-byte
+  result rows, each in a packet of its own, and its end. Offered on TAKP
+  and Quarm as source-derived, not live (row 6.580a open; first use
+  attended). Sent only in the Bazaar (zone 151; ours, stricter, since the
+  servers flag a search from elsewhere but answer it), with Titanium's pacing.
+  A search with a level bound is refused: the Mac record has none. An item
+  id past 32767 arrives wrapped and can't be trusted as an id.
+
+  **Breaking:** `BazaarListing::trader`, `serial` and `stat` become
+  `Option`, since a Mac row carries no serial or stat and names no trader
+  out of the zone, and `BazaarListing` gains `listings`. New:
+  `bazaar::eqmac::{search, welcome, answer, Answer, SEARCH_OPCODE,
+  SEARCH_LENGTH, WELCOME_LENGTH, ROW_LENGTH, DONE_LENGTH}`.
+
+- Offer `Looting` on TAKP (6.577), from TAKP's own corpse handlers at
+  EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
+  the echo before the server's checks, and an empty cursor before an item
+  request, as TAKP's `CheckCursorEmptyWhenLooting` defaults. Source-derived,
+  not yet checked live. On TAKP and Quarm, item requests on one corpse are
+  now at least 10 ms apart, the servers' `loot_cooldown_timer`; one asked
+  sooner is refused.
+
+- List the AA requests on local sessions only (6.581): a local stock
+  `EQEmu` session and a local TAKP session now offer
+  `Capability::AlternateAdvancement`, under the same local-only gate as
+  the AA facts, so the live rows 6.556 and 6.562 can run. Public `EQEmu`,
+  P99, Quarm and RoF2 still list it nowhere, local or not. On TAKP only
+  the split goes; Train and Activate stay refused until read R49-41b.
+
+- Lift the hosts' script holds (6.578): a host may now send a report, a
+  bandolier swap, a task's acceptance or a task's cancel from a script, a
+  social or a hotbutton as well as from the player's own typing or click,
+  since a script may do whatever the player can. Documentation only: the
+  session never knew where a command came from, and its checks and paces
+  hold whatever sends it.
+
+- Offer Quarm giving and trading, groups, anonymous and roleplaying, and
+  translocate answers (6.576), each from Quarm's own handlers at
+  SecretsOTheP/EQMacEmu fc75fcf. Source-derived, not live. The encoders
+  are TAKP's; tests pin each body to the size Quarm's handler checks
+  (requests 4, refusal 6, group 193/128/129/128, appearance 8, translocate
+  92). Quarm moves an accepted translocate with its own zone change.
+
+- Read the guild bank as stock `EQEmu` tells a Titanium client of it
+  (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
+  emptied), the deposit answer, the bare acknowledgement and the clear, by
+  action and exact length, and the profile's `guildbanker` word. Read only:
+  nothing is sent and nothing acts on an answer. Stock `EQEmu` sends
+  Titanium no list of the bank, so a host's view is the slots seen since it
+  entered the guild hall and never complete. A deposit's donor and a single
+  member's name stay out of `Debug` output.
+
+  **Breaking** (for exhaustive matches in the client): `WorldEvent` gains
+  `GuildBank`. New: `guild_bank::{GuildBankUpdate, GuildBankEntry,
+  GuildBankArea, GuildBankPermission, OPCODE, titanium, titanium_profile}`.
+
+- Read augments from Titanium item records (6.570). A common item's
+  children are its augment sockets, which `EQEmu` serializes on worn,
+  carried and bagged items; before, any augmented item made the whole
+  inventory unreadable. **Breaking:** the new field
+  `InventoryItem::augments` (an id per socket, `AUGMENT_SOCKETS` 5) and
+  the new `WeightUnavailable::Augments`. What augments add is not summed
+  yet, so carried weight reads unknown while a counted item is augmented,
+  and `Inventory::equipment_stats_uncertain()` is true while a worn one
+  is. A bandolier swap naming an id socketed in a held item is refused.
+- Use a potion belt slot on Titanium (6.568, slice 4), from stock `EQEmu`'s
+  source and not yet checked live. New `GameCommand::UseBeltItem` (with
+  `bandolier::BeltUse`) under the new `Capability::UsingPotionBelt`, offered
+  by no server type until its live rows pass (P99 never). The session casts
+  the item the belt names from the first worn slot or pack holding it, on
+  `OP_CastSpell` casting slot 11, through the whole item-use path; never
+  from a bag, a bank or the cursor. New `inventory::titanium_belt_cast`,
+  `spells::BELT_CAST_SLOT` and `request::Request::CastBeltItem`.
+  **Breaking:** the new `GameCommand`, `Request` and `Capability` variants
+  (`Capability::ALL` is 88 long).
+- Swap to a bandolier set on Titanium (6.566, slice 3), from stock
+  `EQEmu`'s source and not yet checked live. New
+  `GameCommand::SwapBandolier` under the new `Capability::BandolierSwap`,
+  offered by no server type until its live rows and read R49-45 d. The
+  server makes the swap's moves without telling the client, so the new
+  `bandolier::swap` works them out as `EQEmu` does and the session sends
+  the swap only when every move is known, as an inventory prediction;
+  otherwise it refuses and sends nothing. New `bandolier::swap_to` and
+  `request::Request::SwapBandolier`. **Breaking:** the new `GameCommand`,
+  `Request` and `Capability` variants (`Capability::ALL` is 87 long).
+- Save and clear bandolier sets and set and clear potion belt slots on
+  Titanium (6.564, slice 2), from stock `EQEmu`'s source and not yet
+  checked live. New `GameCommand::SaveBandolier`, `ClearBandolier`,
+  `SetPotionBelt` and `ClearPotionBelt` under the new
+  `Capability::Bandoliers` and `Capability::PotionBelt`, which no server
+  type offers until their live rows pass (P99 never). The server answers
+  none, so after each send the session tells its own mirror as the whole
+  `WorldEvent::Bandoliers` or `PotionBelt`. Sets, slots and names are
+  bounded before sending, since the server bounds neither the set nor the
+  name; a belt item must be worn or carried and be a potion or made for
+  the belt. New `bandolier::{save, clear, set_belt, clear_belt}`, and
+  `request::Request` variants for each.
+- Tell the profile's bandolier sets and potion belt to the host at the
+  admission (6.559's events were read but never told, as they come before
+  the admission and no feature staged them). A bad field now tells the
+  new `WorldEvent::BandoliersUnknown`.
+- **Breaking:** the new `GameCommand`, `Request`, `WorldEvent`
+  (`BandoliersUnknown`, `BandolierRefused`) and `Capability` variants
+  (`Capability::ALL` is 86 long), and `inventory::ItemPlacement` gains
+  `potion_belt`, read from Titanium's item record.
+
+- Browse a trader's wares in the Bazaar on stock `EQEmu`, read only
+  (6.558, slice 3), from source and not yet checked live. New
+  `GameCommand::BrowseTrader` and `EndBrowse` under the new
+  `Capability::BazaarBrowsing`, which no server type offers until its live
+  row passes. New `BazaarEvent` variants: `Admitted`, `TraderSign`,
+  `ShopEnded`, `Listed(TraderListing)`, `Delisted` and `BrowseEnded`. The
+  session clicks only a player whose trader sign it saw go on or a search
+  named, within reach, one click at a time, and ends every browse it closes
+  and every late approval, since `EQEmu` records the player as the trader's
+  one customer until then. Titanium's merchant item packets now come to
+  the session as the new `Message::MerchantView` with their serial; the
+  merchant window is unchanged. **Breaking:** the new `GameCommand`,
+  `Request`, `Message`, `BazaarEvent` and `Capability` variants, and
+  `BazaarEvent` is no longer `Eq`.
+- Encode the AA requests for `EQMac` too, listed by no server type until
+  a local TAKP live row (6.562): TAKP's 256-byte text on `OP_AAAction`
+  (0x1442), `buy N`, `activate N`, `on N` and `off`, from fixed words and
+  numbers only (`alternate_advancement::eqmac_action`). On `EQMac` the
+  session sends only the split, on at level 51 or more (inferred); a train
+  and an activation are refused as `Refusal::Unknown` until the Mac
+  client's AA data (read R49-41b), since TAKP's buy checks neither level
+  nor class, and an activation's target is refused. RoF2 refuses all three.
+  New: `alternate_advancement::{eqmac_action, EQMAC_ACTION_OPCODE,
+  EQMAC_ACTION_LENGTH}`; no new variants.
+
+
+- Send Titanium's AA requests, built and tested but listed by no server
+  type until their local `EQEmu` live row (6.556): training a rank,
+  activating an owned rank's ability and the experience split, each as the
+  16-byte `OP_AAAction` (0x0681) `EQEmu` reads. The session checks each
+  against a bounded view of this admission's AA facts (at most 4096
+  definitions; withdrawals followed), with only checks `EQEmu` makes too,
+  and refuses what it can't tell. One train at a time until the server's
+  answer or 5 s; activations and split changes at most one a second (ours,
+  inferred). Which ids the program sends is read R49-39, inferred until then.
+
+  **Breaking** (for exhaustive matches in the client): `GameCommand` gains
+  `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` and
+  `SetAlternateAdvancementSplit`; `WorldEvent` gains
+  `AlternateAdvancementRefused`; `Capability` gains `AlternateAdvancement`
+  (`Capability::ALL` is now 83 long); `request::Request` gains
+  `AlternateAdvancement`. New: `alternate_advancement::{Action, Refusal,
+  ACTION_OPCODE, titanium_action}`.
+
+- Read the player's bandolier sets and potion belt from the Titanium
+  profile (6.559, slice 1). The new `bandolier` module reads the four sets
+  (a name and four items) and four belt slots into the new
+  `WorldEvent::Bandoliers` and `WorldEvent::PotionBelt`, on every Titanium
+  server. A bad field withdraws only these two events. Nothing is sent.
+  **Breaking:** new `WorldEvent` variants.
+- Read an NPC's task offer and a finished task's steps, and send the
+  player's task requests (checklist 6.555), from stock `EQEmu`'s source
+  and not yet checked live. The new `tasks::offers` module reads
+  `OP_TaskSelectWindow` (0x5e7c) and `OP_TaskHistoryReply` (0x397d), and
+  encodes `OP_AcceptNewTask` (0x207f, 12 bytes), `OP_CancelTask` (0x3ba8),
+  `OP_TaskHistoryRequest` (0x5df4) and `/tasktimers` (0x6a1d, empty body,
+  inferred). New events for the client's ignore arms: `WorldEvent::TasksOffered`,
+  `TaskHistory` and `TaskRefused`. New commands `GameCommand::AcceptTask`,
+  `DeclineTasks`, `CancelTask`, `AskTaskHistory` and `ListTaskTimers` under
+  the new `Capability::Tasks`, which only a local stock `EQEmu` session
+  offers until the live row passes. The session accepts only a task in the
+  current offer while its giver is an NPC it holds, and sends one cancel
+  per held slot until the removal, against two faults in `EQEmu`'s
+  handlers; declining sends nothing (inferred). Both new coverage rows keep
+  no sample. **Breaking:** the new `News`, `Request`, `GameCommand`,
+  `WorldEvent` and `Capability` variants.
+- Read RoF2's corpse money and loot close, the surname answer, the title
+  list and title changes as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.552). The new `rof2_loot_titles` module reads `OP_MoneyOnCorpse`
+  (0x5f44), `OP_LootComplete` (0x55c4), `OP_Surname` (0x0423),
+  `OP_SendTitleList` (0x2d08) and `OP_SetTitleReply` (0x4c21), which have no
+  encoder for either generation, through Titanium's readers into Titanium's
+  events, with Titanium's refusals. The corpse money record that ends a SoD
+  and later listing (response 6, Loot All) gives no event: its coverage row
+  is `Partly` with a part naming it, so the gap log tells each arrival, and
+  lifting validate waits on the loot listing batch that decides its event.
+  The last name and the titles reach the host in the event only.
+- Search the Bazaar on stock `EQEmu`, read only (6.550, slice 1). The new
+  `bazaar` module builds `OP_BazaarSearch` (0x1ee9) searches and welcome
+  requests and reads the results, the search's end and the welcome.
+  `GameCommand::BazaarSearch` and `BazaarWelcome` go only in the Bazaar,
+  one at a time and 2 s apart (ours, inferred), and are refused with the
+  new `WorldEvent::BazaarRefused`; answers come as `WorldEvent::Bazaar`.
+  `Capability::BazaarSearching` is offered by no server type until the
+  local live row passes. Gaps of the bazaar's and traders' messages keep no
+  sample. **Breaking:** new `GameCommand`, `WorldEvent` and `Capability`
+  variants.
+- Read `EQMac`'s alternate advancement on local TAKP, read only (6.548):
+  `OP_RespondAA` (0x1542) by Mac AA id, the profile's AA array and points,
+  `OP_AAExpUpdate` (0x2342) and the server's reuse timers on `OP_AAAction`
+  (0x1442), from TAKP's layouts. The first byte of the ranks is labelled
+  the points spent and id 211's constant 3 is passed through, both
+  inferred from TAKP's use. Quarm shares the decoding, assumed as TAKP, and
+  isn't offered it until an attended Quarm row; remote TAKP waits for the
+  local row. `EQMac` servers send no definitions, so nothing new enters the
+  environmental sums.
+
+  **Breaking** (for the client repin): `alternate_advancement::Update` gains
+  `MacRanks(Option<MacRanks>)`, `MacSelections(Option<Vec<MacRank>>)`,
+  `MacPoints(Option<MacPoints>)`, `MacProgress(Option<MacProgress>)` and
+  `MacTimer(MacTimer)`, with those structs.
+
+- Read RoF2's quest rewards and their sound, renames, the new titles
+  notice and the banker's change as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`
+  (0x1a30, both the reward and the ding record), `OP_MobRename` (0x2c57),
+  `OP_NewTitlesAvailable` (0x0d32) and `OP_BankerChange` (0x791e), which
+  have no encoder for either generation, through Titanium's readers into
+  Titanium's events, with Titanium's refusals. The rename's names reach the
+  host in the event only. Coverage rows for all four; `OP_Sound` and
+  `OP_MobRename` share Titanium's parts. Validate still refuses RoF2.
+- Read the task journal stock `EQEmu` sends a Titanium player (gap list
+  section 5, checklist 6.546), from source and not yet checked live. The
+  new `tasks` module reads `OP_TaskDescription` (0x5ef7), `OP_TaskActivity`
+  (0x682d), `OP_TaskActivityComplete` (0x54eb), `OP_CompletedTasks`
+  (0x76a2) and the server's `OP_CancelTask` (0x3ba8), refusing a record
+  whole rather than cutting it. A session journal, offered by stock
+  `EQEmu` only, keeps the task and 19 quests per admission and tells the
+  host five new events for its ignore arms: `WorldEvent::TaskDescribed`,
+  `TaskStepUpdated`, `TaskConcluded`, `TaskRemoved` and `CompletedTasks`.
+  A step for no entry of its task is told as a gap. The five coverage rows
+  are read, the description's crystal parts and three step words partly;
+  their gaps keep no sample, since the bodies carry the server's task
+  text (new `sent_private` coverage rows). P99, TAKP, Quarm and RoF2 keep
+  no journal; RoF2's coverage is unchanged. Nothing is sent yet.
+  **Breaking:** `Message::Journal` and the five `WorldEvent` variants.
+- Read the rest of Titanium's alternate advancement, read only (6.547):
+  every `OP_SendAATable` header field (`Rank` gains `hotkey_sid`,
+  `hotkey_sid2`, `title_sid`, `desc_sid`, `cost`, `prereq_skill`,
+  `prereq_minpoints`, `kind` for the wire's `type`, `spellid`, `spell_type`,
+  `spell_refresh`, `max_level`, `last_id`, `next_id` and `cost2`, each raw
+  under its wire name), the profile's points spent, unspent and `expAA`,
+  `OP_AAExpUpdate` (0x5f58) and the server's reuse timers on `OP_AAAction`
+  (0x0681). The session publishes them as received and keeps no timers.
+  The feature is still offered on local `EQEmu` only; it opens to every
+  stock `EQEmu` session in a one-line follow-up once its local live row
+  passes, and stays off P99, TAKP, Quarm and RoF2.
+
+  **Breaking** (for the client repin):
+  - `alternate_advancement::Rank` gains the fifteen fields above.
+  - `alternate_advancement::Update` gains `Points(Option<Points>)`,
+    `Progress(Option<Progress>)` and `Timer(Timer)`, with the new structs
+    `Points`, `Progress` and `Timer`.
+  - `alternate_advancement::titanium_profile` returns `[Update; 2]`
+    (selections, then points), and `invalidated` returns `Option<Update>`
+    (`None` for an unreadable timer).
+
+- Take an item's song as the class's when the host's installed spell data
+  says so (gap 3.5, checklist 6.542, part 2). The new
+  `ItemUse::installed_class_spell: Option<bool>` is the host's word; with
+  `Some(true)` a Bard's `/stopsong` sends the stop for an item's song of a
+  class spell not memorized, as the program does (0x40db0b, read R16), and
+  with `Some(false)` it ends here only. `None` keeps the memorized test.
+  The word only chooses for a song the session already keeps; it never
+  starts one or sends a stop alone. **Breaking:** `ItemUse` gains the field.
+- Read RoF2's targets, charms, cash rewards, linked reuse timers and the
+  answers to begging, pick pocketing and bandaging as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.544). The new `rof2_answers` module
+  reads `OP_TargetCommand` (0x58e2), `OP_TargetHoTT` (0x0272), `OP_Charm`
+  (0x5d92), `OP_CashReward` (0x5f7a), `OP_LinkedReuse` (0x1619),
+  `OP_Begging` (0x6703), `OP_PickPocket` (0x39e8) and `OP_Bind_Wound`
+  (0x0386), which have no encoder for either generation, through
+  Titanium's readers into Titanium's events. Titanium's begging and pick
+  pocket reader is now the named `abilities::ask_answer`, taking the
+  ability, and its bandage reader `bind_wound::answer`. Coverage lists the
+  eight. An admitted RoF2 session hands the host each and still sends and
+  offers nothing.
+- Keep a Bard's gem cast as the song only over 100 ms once the player's
+  own `OP_BeginCast` says its time (gap 3.5, checklist 6.442 / 6.542).
+  The 100 ms rule is the program's (0x411f3d, read R16); the time is the
+  one the server sends (stock `EQEmu` sends the base cast time to the
+  caster too). Until the start comes a gem cast is taken as a song, and with
+  none it stays one, as before. Another spawn's start, another spell's, or
+  an item's song (decided by its record's cast time) changes nothing.
+  Whether 0x411f3d reads the base or the focused time, and whether P99
+  echoes the start to the caster, are inferred (R49-21a). The song state
+  still decides only what `/stopsong` and a Bard's `/stopcast` send; it
+  holds nothing and never touches movement.
+
+- Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
+  sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`
+  module reads `OP_RandomReply` (0x106b), `OP_Assist` (0x4478),
+  `OP_YellForHelp` (0x4e56), `OP_LevelAppearance` (0x3bc9),
+  `OP_CameraEffect` (0x127f), `OP_PlayMP3` (0x5770) and `OP_SpellEffect`
+  (0x5936), which have no encoder for either generation, through
+  Titanium's readers into Titanium's events. Titanium's roll and assist
+  readers are now the named `socials::roll` and `socials::assist_answer`,
+  and its four effect readers are shared. Coverage lists the seven, the
+  spell effect with Titanium's part. An admitted RoF2 session hands the
+  host each and still sends and offers nothing.
+- Bound a walking strafe by the walking strafe rate (checklist 6.540).
+  `MovementMode::Strafe` carries the new `movement::Pace` (`Run`, the
+  default, or `Walk`), as a diagonal already says Walk or Run. The session
+  bounds a `Strafe(Pace::Walk)` by `StrafeCalibration::walk_units_per_second`
+  where the grant has one, and by the one strafe rate where it has none
+  (`EQMac`), so the guard only gets stricter; a running strafe and every
+  other mode keep their bounds. Each grant's span in a sample takes the
+  pace too. The wire is unchanged: the same move walking or running
+  encodes the same packet.
+  **Breaking:** `MovementMode::Strafe` is now `MovementMode::Strafe(Pace)`.
+
+- Read RoF2's doors, ground objects and weather as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.539). The new `rof2_world` module
+  reads `OP_SpawnDoor` (0x7291), 100-byte records with the size widened to
+  32 bits, `OP_MoveDoor` (0x08e8), `OP_GroundSpawn` (0x6fca), the encoder's
+  variable record of the name's length plus 101, `OP_ClickObject` (0x4aa1)
+  and `OP_Weather` (0x661e) into Titanium's events, with Titanium's
+  refusals. Titanium's door table, door move and object click are now the
+  named `doors::door_table`, `doors::door_move` and `objects::click`, and
+  `objects::text` is shared. Coverage lists the five; the ground object's
+  zone, instance, tilts and size, and the 12-byte zone-in weather, are
+  planned parts. An admitted RoF2 session hands the host each and still
+  sends and offers nothing.
+- Read RoF2's mana and endurance pools as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.538). The new `rof2_pools` module reads
+  `OP_ManaUpdate` (0x3791) and `OP_EnduranceUpdate` (0x5f42), the server's
+  10 bytes with the maximum, into the new `WorldEvent::ResourcePool`, and
+  `OP_MobManaUpdate` (0x2404) and `OP_MobEnduranceUpdate` (0x1c81), 3
+  bytes with a percent up to 100, into the new
+  `WorldEvent::ResourcePercent`, each naming a `rof2_pools::Pool`. Titanium is
+  sent none of the four. Coverage lists them. An admitted RoF2 session
+  hands the host each and still sends and offers nothing.
+- Cap the reconnect loop and drop what was queued before it (gap 3.11,
+  checklist 6.534). With `RunOptions::reconnect` on (the default),
+  `RunOptions::reconnect_attempts` (default 5, our bound, 6.534) limits the
+  fresh logins in a row; the count starts again only after a run has stayed
+  in its zone for the reconnect delay. Just before each fresh login, every
+  command still queued is dropped unread and told as the new
+  `ClientEvent::CommandDropped` (its kind and our reason only), so a chat
+  line, a character choice or creation, or any other command from the ended
+  session cannot act in the next. Commands sent after the fresh login says
+  `Connecting` are read by it. The eq-client viewer turns reconnect off; the
+  loop runs for hosts that keep the default and in this crate's tests.
+  **Breaking:** `ClientEvent::Reconnecting` gains `attempt` and `attempts`,
+  and `ClientEvent` gains `CommandDropped`.
+- Read RoF2's spell book and gems as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.532). The new `rof2_spellbook` module reads
+  `OP_MemorizeSpell` (0x217c), `OP_SwapSpell` (0x0efa) and `OP_DeleteSpell`
+  (0x3358), which have no RoF2 encoder, through Titanium's readers, now the
+  named `spells::memorized`, `book_swap` and `book_deletion`, with RoF2's
+  720-slot book where Titanium's is 400. A bar refresh carries the server's
+  casting slot and reduction. Coverage lists the three. An admitted RoF2
+  session hands the host each and still sends and offers nothing.
+
+- Measure a Titanium door click from the point clicked on the door
+  (checklist 6.530, read R16b and R16e). `GameCommand::ClickDoor` gains
+  `point: Option<Position>`, where the host's click ray hit the door's
+  model as drawn. With a point, the session admits the click when the
+  point is no more than the player's size and 20 from the player in 3-D
+  (`doors::Doors::check_click_at`, `doors::Clicked`), so a lift resting
+  above can be called from its deck by the part clicked. The size is the
+  own spawn's as the server told it; where that is 0 or unheard, `EQEmu`'s
+  race size (inferred); 0 for an unlisted race. A point that is not finite
+  or lies more than 200 and the size from the door is refused in our own
+  words (our guard). With no point the origin rule is unchanged, and
+  `EQMac` ignores the point. Melee reach takes the player's size from the
+  same helper, with the same numbers.
+  **Breaking:** a new field on `GameCommand::ClickDoor`.
+
+- A boat take asked again while one is pending goes again (6.533). The
+  program sets nothing before a take's echo, so its held-boat test
+  (`[0x905cf8]` in 0x4a7356) fails while the take waits and a second
+  interaction sends a second take; gate 0x494c09 passes on a race-141 carrier
+  before its busy checks. That is inferred from read R35's pieces in
+  combination, not read as one path. The session now sends the same 8-byte
+  `OP_ControlBoat` take for the same incarnation, leaving the pending entry,
+  its 5 s deadline and the fence as the first take set them, so repeated
+  clicks never extend the wait; stock `EQEmu` echoes each take, one echo
+  grants and later ones change nothing. A take for another vessel while one
+  is pending stays refused.
+- Read RoF2's buffs as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.527). The new `rof2_buffs` module reads `OP_Buff` (0x659c, 100
+  bytes) into Titanium's `BuffUpdate`: fade word 1 is `FadeBySpell` and 2
+  `BySpell` (inferred as Titanium's readings of the server's 1 and 0), the
+  float bard modifier reads back as the server's byte, and the counters
+  read 0, since the encoder sends none. `OP_BuffCreate` (0x3377) and
+  `OP_TargetBuffs` (0x4f4b) give the new `WorldEvent::BuffIcons` (the
+  spawn, the window, whole list or one slot, the tick timer and each
+  slot's spell, ticks, hits and caster), and `OP_PetBuffWindow` (0x5882)
+  gives Titanium's `PetBuffs`, refusing a body whose count and entries
+  differ. Coverage lists the four. An admitted RoF2 session hands the host
+  each and still sends and offers nothing.
+- Pace all chat a host asks for (6.523). Every `SendChat`,
+  `SendChatInAdmission` and `ChatChannel` goes through one pace that spans
+  zones: at most 10 lines in any 5 s, and at most 12 shout, auction,
+  out-of-character, tell and channel messages and chat server commands in
+  any 60 s, below stock `EQEmu`'s disconnect at more than 20 a minute. Only
+  `join`, `leave`, `leaveall`, `list`, `listall` and `announce`, which reach
+  no one else, are left out of that count; an unknown word is counted. Both bounds are inferred
+  (R49-17) and only ever make the client slower. A paced line is refused,
+  not queued and not counted; zone chat is told by the new
+  `WorldEvent::ChatRefused`, channel commands by `ChatChannelRefused`, with
+  the whole seconds to wait and never the line. The chat link's own login
+  is not counted. **Breaking:** `WorldEvent::ChatRefused` is a new variant.
+
+- Read RoF2's casting, stuns and illusions as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.522). The new `rof2_casting` module reads
+  `OP_BeginCast` (0x318f, 10 bytes, the spell in 32 bits refused past 16),
+  `OP_Action` (0x744c, the 56-byte `ActionAlt_Struct`), `OP_InterruptCast`
+  (0x048c, unencoded, through Titanium's reader, now the named
+  `spells::interrupted`), `OP_Stun` (0x36a4, 8 bytes, the last four the
+  encoder's constants), `OP_Illusion` (0x312a, 336 bytes, a 16-bit race)
+  and `OP_SetFace` (0x1af3, the server's 24-byte face change with both eye
+  colors), each giving Titanium's event for the same server values. The
+  action's float instrument modifier reads back as the server's integer,
+  `round(value * 10)` within a tolerance that grows with the value, up to
+  100,000; the server's 0 to 9, which the encoder's unsigned arithmetic
+  wraps alike, read 0. Coverage lists the six, with the Drakkin words as
+  the illusion's and face change's part. An admitted RoF2 session hands
+  the host each and still sends and offers nothing.
+- Keep a late scribe answer's hold until its cursor removal (6.526). A
+  scribe that timed out and then got its late book confirmation, after the
+  player moved the scroll, lost its receipt to any other inventory update,
+  so the cursor removal that followed applied as a plain removal. The
+  receipt now passes updates that leave the cursor alone, so that removal
+  still marks the inventory stale. Anything else naming the cursor, a
+  snapshot, an invalidation or 5 s since the confirmation ends it; a
+  cursor removal 5 s or more after the confirmation is now a plain removal.
+- Tell the player's bind zone (checklist 6.524). `world::titanium_bind_zone`
+  reads the primary bind's zone from Titanium's profile (`binds[5]` at byte
+  24, 20-byte records, as `EQEmu`'s `titanium_structs.h` lays them out), and
+  the `EQMac` profile's first bind, already read for the move home after
+  death, gives the same. Each says it as the new
+  `WorldEvent::BoundIn { zone_id }`, told once after the admission, after
+  the buffs and experience. A zone past 16 bits is unreadable and gives
+  none; the zone-in goes on. It needs no capability and sends nothing.
+  Stock `EQEmu` sends a Titanium client nothing when a bind lands
+  mid-session, so the zone is believed current only until the next zone-in
+  (inferred, pending R49-6m). `EQMac`'s move home is unchanged.
+  **Breaking:** a new variant on the exhaustive `WorldEvent`.
+
+- Read RoF2's chat and the server's own lines as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.521). `chat::parse_for` with
+  `GameDialect::Rof2` now reads `OP_ChannelMessage` (0x2b2d) in its own
+  layout (two NUL-ended names, the language, channel and skill, the text
+  and a 15-byte zero tail, exact length), and `OP_MOTD`, `OP_Emote`,
+  `OP_SpecialMesg`, `OP_FormattedMessage`, `OP_SimpleMessage`,
+  `OP_GuildMOTD`, its reply and `OP_ColoredText` in Titanium's shape under
+  RoF2's numbers. Item links are 56 characters with the item at digits 1
+  to 5. The RoF2 wire's `chat` reads them, and coverage lists the nine
+  (`chat::ROF2_READS`). Outbound chat still refuses RoF2. An admitted RoF2
+  session records the chat and still sends and offers nothing.
+- Read RoF2's own-player news and combat records as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.519). The new `rof2_news` module reads
+  `OP_Death` (0x6517), `OP_LevelUpdate` (0x1eec), `OP_ExpUpdate` (0x20ed),
+  `OP_Stamina` (0x2a79), `OP_MoneyUpdate` (0x640c) and `OP_TimeOfDay`
+  (0x5070), which go out unencoded with the bytes Titanium gets, through
+  Titanium's readers; the level, experience and money arms of
+  `world::titanium_update` are now named functions both call. It reads
+  `OP_ManaChange` (0x5467) at the server's 20 bytes, giving Titanium's two
+  events and leaving the slot; `OP_Damage` (0x6f15, 30 bytes, a spell past
+  16 bits refused, the push at 13) through the new shared
+  `combat::damage_from`; `OP_Consider` (0x742b, 20 bytes, no hit points);
+  and `OP_SkillUpdate` (0x004c, 12 bytes). `zoning::death`'s doc now says
+  that stock `EQEmu` sends the bind zone and attack skill the other way
+  round from both programs' structs. Coverage lists the ten; the mana and
+  endurance updates and the mob percents stay unlisted. An admitted RoF2
+  session still sends and offers nothing, its own death included.
+- Ask for and choose a title (gap 3.6, checklist 6.516). Stock `EQEmu`
+  offers the new `Capability::Titling`; P99, TAKP and Quarm do not, and
+  `EQMac` and RoF2 build neither request (RoF2's numbers are owed, inferred
+  for RoF2, 6.489). `GameCommand::RequestTitles` sends `OP_RequestTitles`
+  (0x5eba) with an empty body (inferred, pending read R49-14b), one at a
+  time with a 10 s lapse and the session's 500 ms settling after an answer.
+  The answer, `OP_SendTitleList` (0x3e89), is read into
+  `WorldEvent::TitleList` of `names::TitleChoice` (id, prefix, suffix): the
+  count is bounded by the body before anything is allocated, each text is
+  capped at 63 bytes, a repeated id keeps its first entry, and a zero id, a
+  missing NUL, a short body or trailing bytes refuse the whole list to the
+  gap log. A list no request asked for is withheld and logged as a gap.
+  `GameCommand::SetTitle` sends `OP_SetTitle` (0x1f22, 8 bytes, the kind as
+  0 or 1 then the id) only for an id on this admission's latest list with
+  text of that kind, or 0 to clear either kind, and at most one per 500 ms
+  (the server tells each to the whole zone); anything else is refused,
+  nothing sent. A new admission forgets the list and the request in flight.
+  Coverage lists 0x3e89 as read by the zone decoder. Nothing in a client
+  calls `SetTitle` yet: the title window waits for read R49-14.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request`,
+  `WorldEvent` and `Capability` (`Capability::ALL` holds 80; command kinds
+  125 and 126).
+- Read how RoF2's spawns look and how hurt they are, as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.518). The new `rof2_looks` module
+  reads `OP_SpawnAppearance` (0x0971) through the reader every generation
+  shares, now with RoF2's dialect: invisibility reads as Titanium's values,
+  inferred, since the server sends both generations the same ones. It also
+  reads `OP_ChangeSize` (0x4707, the encoder's rewrite of a size
+  appearance), `OP_HPUpdate` (0x2828, the spawn id first), `OP_MobHealth`
+  (0x37b1), `OP_WearChange` (0x7994, its 32-bit material kept whole),
+  `OP_Animation` (0x7177, the action before the speed) and
+  `OP_PlayerStateAdd`/`Remove` (0x559a/0x2d25), each into the event
+  Titanium's reader gives, with the same refusals. One player-state reader
+  now takes the generation's opcode pair. The wear change's elite material,
+  hero's forge model and two unknown words are not read. Coverage lists the
+  eight as read by the zone decoder, and the rest stay unlisted. An admitted
+  RoF2 session still sends nothing and offers nothing.
+- A Warrior's `/shield` of another player (gap 3.6, checklist 6.517).
+  `GameCommand::Shield` sends Titanium's 4-byte `OP_Shielding` (0x3fe6), the
+  target's spawn id widened to 32 bits, as stock `EQEmu`'s
+  `Client::Handle_OP_Shielding` reads it (`Shielding_Struct`). The server
+  checks the level, class, rule, recast, target and distance and answers
+  each with a line we already read, so nothing new is decoded. The session
+  keeps no pending state: it refuses spawn id 0 and a second shield within
+  500 ms (`SocialRefused`, nothing sent). Only stock `EQEmu` offers the new
+  `Capability::Shielding`: P99 waits for an attended check, TAKP and Quarm
+  for their own (no `EQMac` opcode is known, and the `EQMac` encoder refuses
+  it), and RoF2 sends nothing yet.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request` and
+  `Capability` (`Capability::ALL` holds 79; command kind 124), and the new
+  `shielding` module.
+- Say the player looks for a group with `/lfg` (gap 3.6, checklist 6.515).
+  `GameCommand::LookForGroup { session_id, on }` sends Titanium's
+  `OP_LFGCommand` (0x68ac), 80 bytes with only the flag set
+  (`listing::titanium_looking`), as `Client::Handle_OP_LFGCommand` reads
+  it, under the new `Capability::LookingForGroup`, which only stock `EQEmu`
+  lists (from source, not yet checked live). The server tells the sender
+  nothing, so the session keeps the flag from the admission's spawn record
+  and each change sent, tells a change with `ListingSet`, and paces two
+  changes 500 ms apart. `EQMac` refuses. **Breaking:** new variants on the
+  exhaustive `GameCommand`, `Request` and `Capability` (`Capability::ALL`
+  holds 78).
+- Read RoF2's spawn movement and removal as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.514). `rof2_player::position` reads the
+  24-byte `OP_ClientUpdate` (0x7dfc), which RoF2 gets unencoded, into
+  `WorldEvent::Position`: its position from the same bit table as the
+  spawn record's, now shared, and its velocity and forward input from the
+  deltas and animation on Titanium's scales. The delta heading and the
+  vehicle id are not read. `rof2_player::despawn` reads the 5-byte
+  `OP_DeleteSpawn` (0x7280) into `WorldEvent::Despawn`; its last byte is
+  the encoder's constant. Both refuse any other length and a zero id.
+  Coverage lists both as read by the zone decoder; `OP_MobUpdate` and
+  `OP_NPCMoveUpdate` stay unlisted, since stock `EQEmu` sends neither. An
+  admitted RoF2 session still sends nothing and offers nothing.
+- Destroy coins on the cursor (gap 3.x, checklist 6.512).
+  `GameCommand::DestroyCoins` sends `OP_MoveCoin` from the cursor to slot -1
+  with the same kind both sides (Titanium 0x7657, `EQMac` 0x2d41), as stock
+  `EQEmu`'s and TAKP's `Client::OPMoveCoin` read it: taken from the source,
+  added nowhere. That the Titanium program sends it this way is inferred
+  until read R49-11. It names one kind and exactly what the cursor holds of
+  it, or it is refused on `CoinsRefused`; the coins leave the cursor at once
+  (`Wallet::destroy`) and `CoinsElsewhere` reports it. Only stock `EQEmu`
+  offers the new `Capability::DestroyingCoins`: P99 waits for an attended
+  check, TAKP and Quarm for their own, and RoF2 sends nothing yet.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request` and
+  `Capability` (`Capability::ALL` holds 77), and `money::CoinDestroy`.
+- Open the chat server's channels link (recording checklist 6.509; the
+  Titanium program's own side is pending read R49-12). From the world's
+  Titanium chat-channel offer (`OP_SetChatServer`, letter `B`), where the
+  server type opens one (`EQEmu`; not Project 1999, withheld until Adam
+  has attended a session there, nor Quarm, TAKP or RoF2), the session
+  opens one link per character on its own thread: the offered address
+  through the zone handoff's checks, then the
+  modern transport, then `OP_MailLogin` with the key, which stays zeroized in
+  `chat_server::Login` and in no event, log or `Debug` (the transport's
+  resend queue holds the login until the server acknowledges it). A login
+  unanswered for 30 seconds (our bound, inferred) ends the link; closing
+  never waits on the offered host's resolution. The link survives zone
+  changes and ends on the character list, a camp, a stop and the session's
+  end; a second offer replaces it; nothing retries. `GameCommand::ChatChannel
+  { text }` (behind `Capability::ChatChannels`, offered only in a zone whose
+  world opened a link) sends the text the chat server takes, refused with
+  `WorldEvent::ChatChannelRefused` while the link is not up and never kept
+  for later. What the server says arrives as `WorldEvent::Channel` (a
+  message, a server line, the channels joined in slot order, a member
+  joining or leaving) and `WorldEvent::ChannelLink` (up, or lost and why).
+  Queues are bounded both ways; mail, friends and ignore opcodes go to the
+  gap log by opcode and length. New `eq_network_game::chat_server`.
+
+  Breaking: new variants on the exhaustive command, event and capability
+  enums (`Capability::ALL` holds 76).
+- Read RoF2's spawn records as stock `EQEmu` writes them, labelled inferred
+  for RoF2 (6.510). Stock `EQEmu` sends every spawn a RoF2 client sees as
+  one `OP_ZoneEntry` record. `eq_network_game::rof2_player::spawn` walks
+  any of them whole, choosing each branch from the record's own bytes as
+  the encoder chooses it: players, creatures and corpses, treasure chests
+  and destructible objects with their three strings and fixed block, and
+  non-players of races given three textures in place of nine tints and
+  nine textures. It refuses contradictory bits, a property count the
+  branch doesn't take, a GUID of any length but the encoder's, a string
+  that doesn't end in its field, a cut and a trailing byte. The packed
+  position is read from the active `Spawn_Struct_Position`; its deltas,
+  animation and angle are not, and appearance and the `/who` listing stay
+  default. `Rof2::messages` makes each record one spawn, and a refused
+  record unreadable by opcode and length. The own-spawn reader is now a
+  caller of the same walker. `Rof2Admission` keeps the first record, the
+  player's own, and any later one with the player's id to itself
+  (`Admission::kept`), so the player is never another spawn. The coverage
+  row for 0x5089 lists the zone decoder as a reader. An admitted RoF2
+  session still sends nothing and offers nothing. Still unreachable: a
+  RoF2 configuration is refused before a socket opens.
+- Challenge another player to a duel (6.492b). **Breaking:**
+  `GameCommand::ChallengeDuel { session_id, target, created }` is a new
+  variant, under `Capability::Dueling`, so exhaustive matches on
+  `GameCommand` take an arm. `Request::DuelRequest` now encodes on Titanium
+  (`socials::titanium_duel_request`: `OP_RequestDuel`, the other player then
+  the player, each 32 bits, the order `EQEmu`'s handler needs; inferred,
+  pending R49-6h). The duel feature sends a challenge only at a player in
+  its spawn list other than the player, one at a time and five seconds
+  apart, and refuses anything else with `WorldEvent::SocialRefused`, since
+  `EQEmu` looks the one challenged up unchecked. The challenge is remembered
+  for sixty seconds at most, and ends sooner on the server's
+  `OP_DuelAccept`, the other client's refusal, the one challenged leaving,
+  or a zone change. While it lasts, the record `EQEmu` sends the challenger
+  before the duel starts opens no question and sends nothing; today it
+  would have asked the player to accept their own duel. Both bounds and
+  the refusal lines are ours, labelled. Only stock `EQEmu` offers dueling,
+  as before.
+- Send petitions, bug reports and feedback to the server's staff (gap list
+  3.6, recording checklist 6.511), laid out from stock `EQEmu`'s and TAKP's
+  handlers: `eq_network_game::reports` encodes Titanium's `OP_Petition`
+  (0x251f) and `OP_Bug` (0x7ac2, 8736 bytes) and `EQMac`'s petition, bug
+  (3340 bytes) and feedback (1131 bytes). Stock `EQEmu` lists
+  `Capability::Petitioning` and `Capability::ReportingBugs`; feedback, P99,
+  Quarm and TAKP list nothing until their own live checks. A bug report
+  carries its category, the player's place and heading and the target, and
+  leaves the interface path, time played and system information empty.
+  Over-long text is refused, never cut, and two reports of a kind are 10
+  seconds apart (inferred). No refusal or diagnostic repeats a report's
+  text. **Breaking:** new variants on the exhaustive `GameCommand`
+  (`SendPetition`, `ReportBug`, `SendFeedback`), `WorldEvent`
+  (`ReportSent`, `ReportRefused`) and `Capability` (`Petitioning`,
+  `ReportingBugs`, `SendingFeedback`; `Capability::ALL` grows to 75).
+
+- Ask for a last name with `/surname` (gap 3.6, checklist 6.507).
+  `GameCommand::Surname` sends `OP_Surname`'s 100-byte record (Titanium
+  0x4668, `EQMac` 0xc441) with the surname as typed, under the new
+  `Capability::Surnaming`, which only stock `EQEmu` lists (from
+  `Client::Handle_OP_Surname`, not yet checked live; P99, TAKP and Quarm wait
+  for their own checks). The encoder refuses only what the record cannot
+  carry. One request waits at a time. The server's answer comes as
+  `WorldEvent::SurnameAnswer`, and one to no request is withheld. `EQMac`'s
+  196-byte `OP_GMLastName` now decodes to `WorldEvent::LastName`. Coverage:
+  both `OP_Surname` rows and `EQMac`'s `OP_GMLastName` are read.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request`,
+  `WorldEvent` and `Capability` (`Capability::ALL` holds 72).
+- List what RoF2's stages read in a coverage table of its own (6.508), so
+  the gap log no longer tells the login replies, the character list, the
+  world's entry and handoff, and the zone's description, profile, own
+  spawn and objects as unlisted. The description, profile and own spawn
+  are listed as partly read, naming what the entry leaves unread. Every
+  other RoF2 message stays unlisted. Nothing new is read.
+- Read RoF2's player profile and own spawn as stock `EQEmu` writes them,
+  labelled inferred for RoF2 (6.502): `eq_network_game::rof2_player`
+  walks each serialised stream whole, refusing any count but the
+  encoder's, a string that doesn't end in its field, a cut and a trailing
+  byte, and `Rof2Admission` completes with the player read from the first
+  profile and own spawn before the zone's description. Gems 9 to 12,
+  appearance and the `/who` listing are not read. An admitted RoF2 session
+  still sends nothing in the zone, and the RoF2 server type no longer
+  offers server filters or gameplay departures, which it cannot honour.
+  Still unreachable: a RoF2 configuration is refused before a socket opens.
+- Build RoF2's zone connection and entry against stock `EQEmu` from its
+  public source, labelled inferred for RoF2 (6.501). `Rof2::connect_zone`
+  speaks the modern transport, and `Rof2Admission` sends the 76-byte entry,
+  reads the zone's 948-byte description (only its short name, terminated
+  and checked) that the zone sends RoF clients unasked, asks for the zone's
+  spawns, and sends its ready once the zone's objects are sent. The profile
+  and spawn are not read, so the entry completes with no player snapshot:
+  the session only records, sending nothing in the zone, or ends with the
+  admission error when a player is at the controls. Still unreachable: a
+  RoF2 configuration is refused before a socket opens, and the handoff
+  between zones still refuses.
+- Record every server message the session drops or cannot read (6.500).
+  `ClientEvent::Gap(Box<Gap>)` tells of each one, beside the diagnostic
+  line it always wrote: a message no table row lists, one listed but left
+  unread (with the row's reason), one read only at another stage, one read
+  all but parts still to come, a kind no server is known to send, and one
+  the decoders could not read, at the login, the world or the zone, plus
+  chat decode errors, unreadable world news, character lists and login
+  replies. Messages holding nothing worth reading are counted as
+  `GapKind::Skipped`, which `GapKind::is_gap` keeps out of a gap list. The
+  first of each gap in a stage is told at once; repeats are counted and
+  told at most every 10 s and when the stage ends, with their count and
+  shortest and longest body. Only the zone's first record of each gap in
+  an attempt carries a sample, its first 256 bytes in hex; the login and
+  world never do. No record names a host, an address, the account or a
+  character. **Breaking:** a new variant on the exhaustive `ClientEvent`.
+- Build RoF2's world stage against stock `EQEmu` from its public source,
+  labelled inferred for RoF2 (6.499): the 488-byte login info, the character
+  list into the shared selection, `OP_EnterWorld` (refusing a name it would
+  have to cut), and the handoff (`OP_ZoneServerInfo`, its address terminated
+  inside its field) or the zone-unavailable notice. Between zones it enters
+  the character in play once the world's post-entry message arrives. It
+  sends nothing stock `EQEmu` ignores. Still unreachable: a RoF2
+  configuration is refused before a socket opens, and the RoF2 handoff,
+  zone connection and admission still refuse.
+
+- Take the server filters from the host and send a change again (parity
+  item 6). The filter packet (Titanium `OP_SetServerFilter` 0x6563, 29
+  words; `EQMac` 0xff41, 17 words) was a fixed array sent at zone-in.
+  `eq_network_game::filters` now names each word's kind (`FilterCategory`)
+  and mode (`FilterMode`: show, hide, mine only, group only), placed and
+  valued as the servers that read it do (`EQEmu`'s and TAKP's
+  `Client::ServerFilter`); `ServerFilters::default()` is today's packet
+  byte for byte on both generations, and RoF2 refuses.
+  `FilterCategory::modes(dialect)` says which kinds and modes a generation
+  takes; `ServerFilters::fitted` and `check` use it.
+  `ClientConfig::server_filters` is the character's starting set, checked in
+  `validate`. `GameCommand::ChooseServerFilters` at the character list keeps
+  a set for the character entered next, so its first zone-in carries it on
+  every server type. `GameCommand::SetServerFilters` mid-zone keeps a
+  change for every later zone-in, and sends it at once only where the
+  server type reads one then (`EQEmu`); elsewhere it waits for the next
+  zone-in (6.494e). The session answers `WorldEvent::ServerFiltersKept` or
+  `ServerFiltersRefused`; capabilities `ServerFilters` (every server type)
+  and `ServerFiltersAtOnce` (`EQEmu`). Which official option sets each word,
+  and when the official client sends the packet again, are unread (6.494b
+  and c). **Breaking:** `chat::server_filters` and `quarm::server_filters`
+  are removed; `ClientConfig` gains the public field `server_filters`; the
+  new variants on the exhaustive `GameCommand`, `WorldEvent` and
+  `Capability` enums.
+
+- Build RoF2's login stage, character list and world login info from
+  `EQEmu`'s public source, labelled inferred for RoF2 (6.497). The login is
+  Titanium's exchange read through the login server's opcodes for clients
+  newer than Titanium, and skips the expansion list it may send them.
+  `characters::decode` reads RoF2's variable-length list, bounding its count
+  by the body before keeping anything. `world_login::rof2` writes the
+  488-byte login info, and refuses an account or key that doesn't fit
+  rather than cut it. Nothing reaches any of it yet: a RoF2 configuration is
+  still refused before a socket opens, and the RoF2 world stage still
+  refuses.
 
 - Put a Rogue's poison on the weapon (`OP_ApplyPoison`, Titanium 0x0c2c and
   `EQMac` 0xba41): `GameCommand::ApplyPoison { slot }` sends the 8-byte
@@ -39,6 +922,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read R49-4b; RoF2 refuses. **Breaking:** `SendChatInAdmission` constructors
   need `tongue`; the JSON of every channel message gains `language` and
   `language_skill`.
+
+- Answer another player's challenge to a duel. On stock `EQEmu` a challenge
+  now also comes as `WorldEvent::DuelOffer` (`socials::DuelQuestion`, with an
+  admission-scoped `ConsentId` of the new `ConsentKind::Duel`), and
+  `GameCommand::AnswerDuel` sends the player's yes (`OP_DuelAccept`) or no
+  (`OP_DuelDecline` 0x3bad) as `Client::Handle_OP_DuelAccept` and
+  `Handle_OP_DuelDecline` read them: the challenger, then the player. The
+  question has no local deadline; zoning, death, logout, a newer challenge,
+  the duel's start and the challenger's refusal close it as interrupted.
+  `EQMac` encoders for TAKP and Quarm (`OP_RequestDuel` then `OP_DuelAccept`
+  for a yes, `OP_DuelResponse` for a no) are built and tested but no server
+  type lists them yet; P99, TAKP and Quarm wait for live checks. The field
+  order the official programs write is inferred (checklist 6.492). New
+  `Capability::Dueling`, `Request::AnswerDuel`, `Request::DuelRequest` and
+  `WorldEvent::DuelRefused`. **Breaking:** the new variants on
+  `ConsentKind`, `Capability`, `GameCommand`, `Request` and `WorldEvent`.
 
 - Add RoF2 as a placeholder client generation and server type, so each
   decision a third generation needs has an answer before any of it is built.

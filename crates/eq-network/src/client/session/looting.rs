@@ -11,7 +11,17 @@ use eq_network_game::{
     message::Message,
     world::{SpawnKind, WorldEvent},
 };
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
+
+/// The `EQMac` servers' pause between item requests on one corpse: TAKP's
+/// and Quarm's `Corpse::loot_cooldown_timer` is 10 ms (`zone/corpse.cpp`,
+/// TAKP 44afcbf and Quarm fc75fcf). `Corpse::LootCorpseItem` checks it just
+/// after its echo and ends the loot when a request comes sooner; a request
+/// that passes restarts it.
+pub(super) const EQMAC_ITEM_PACE: Duration = Duration::from_millis(10);
 
 /// Retains original host context even when shared validation rejects a command.
 fn disposition(command: &ClientCommand, status: LootRequestStatus) -> Option<WorldEvent> {
@@ -85,6 +95,9 @@ pub(super) struct Looting {
     session: Option<u64>,
     /// A server policy whose normal corpse rules require an empty item cursor.
     require_empty_cursor: bool,
+    /// The least time between item requests on one corpse, when the server
+    /// ends the loot for one sent sooner.
+    item_pace: Option<Duration>,
 }
 
 impl Looting {
@@ -96,47 +109,24 @@ impl Looting {
             ..Self::default()
         }
     }
-}
 
-/// A requested corpse, then its server-granted listing. Item records are
-/// views only; this controller never writes inventory or coins.
-struct Corpse {
-    id: u16,
-    listing: Listing,
-    closing: bool,
-    places: BTreeSet<u16>,
-    submitted: BTreeSet<u16>,
-}
-
-/// A grant precedes all item views; the matching open echo ends the list.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Listing {
-    Requested,
-    Receiving,
-    Ready,
-}
-
-impl Feature for Looting {
-    fn capabilities(&self) -> Vec<crate::world::Capability> {
-        use crate::world::Capability;
-        vec![Capability::Looting]
+    /// Never sends an item request sooner than `pace` after the last one on
+    /// the same corpse; one asked sooner is refused, so it can be asked
+    /// again ([`EQMAC_ITEM_PACE`]).
+    pub(super) fn with_item_pace(self, pace: Duration) -> Self {
+        Self {
+            item_pace: Some(pace),
+            ..self
+        }
     }
 
-    fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(
-            command,
-            ClientCommand::Loot { .. }
-                | ClientCommand::LootItem { .. }
-                | ClientCommand::EndLoot { .. }
-        )
-    }
-
-    /// Opens only a corpse the player can see; the server judges the rest.
-    fn handle(
+    /// [`Feature::handle`] at a given time.
+    fn handle_at(
         &mut self,
         command: &ClientCommand,
         world: &mut World,
         out: &mut Out<'_, '_>,
+        now: Instant,
     ) -> Result<()> {
         if command.session_id() != Some(world.session_id) {
             return actions::refuse(
@@ -166,6 +156,7 @@ impl Feature for Looting {
                     closing: false,
                     places: BTreeSet::new(),
                     submitted: BTreeSet::new(),
+                    last_item: None,
                 });
             }
             return Ok(());
@@ -214,10 +205,18 @@ impl Feature for Looting {
                         out.log,
                     );
                 }
+                if corpse.too_soon(self.item_pace, now) {
+                    return actions::refuse(
+                        command,
+                        "Wait a moment before taking the next item.",
+                        out.log,
+                    );
+                }
                 if submit(command, out)? {
                     // Do not send the same non-idempotent request again.
                     // An echo does not put the item in the inventory.
                     corpse.submitted.insert(place);
+                    corpse.last_item = Some(now);
                 }
             }
             ClientCommand::EndLoot { corpse_id, .. } => {
@@ -231,6 +230,61 @@ impl Feature for Looting {
             _ => (),
         }
         Ok(())
+    }
+}
+
+/// A requested corpse, then its server-granted listing. Item records are
+/// views only; this controller never writes inventory or coins.
+struct Corpse {
+    id: u16,
+    listing: Listing,
+    closing: bool,
+    places: BTreeSet<u16>,
+    submitted: BTreeSet<u16>,
+    /// When the last item request on this corpse was sent.
+    last_item: Option<Instant>,
+}
+
+impl Corpse {
+    /// Whether an item request now would come sooner than `pace` after the
+    /// last one on this corpse.
+    fn too_soon(&self, pace: Option<Duration>, now: Instant) -> bool {
+        pace.zip(self.last_item)
+            .is_some_and(|(pace, last)| now.saturating_duration_since(last) < pace)
+    }
+}
+
+/// A grant precedes all item views; the matching open echo ends the list.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    Requested,
+    Receiving,
+    Ready,
+}
+
+impl Feature for Looting {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Looting]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::Loot { .. }
+                | ClientCommand::LootItem { .. }
+                | ClientCommand::EndLoot { .. }
+        )
+    }
+
+    /// Opens only a corpse the player can see; the server judges the rest.
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        self.handle_at(command, world, out, Instant::now())
     }
 
     /// Correlates loot-only messages before the inventory owner hears coins.
@@ -312,7 +366,58 @@ impl Feature for Looting {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use std::time::Instant;
+
+    /// The `EQMac` servers end the loot for an item request sooner than 10 ms
+    /// after the last on the corpse, so none is sent sooner; one refused can
+    /// be asked again once the pause has passed.
+    #[test]
+    fn item_requests_on_one_corpse_wait_for_the_servers_pause() {
+        let mut looting = Looting::default().with_item_pace(EQMAC_ITEM_PACE);
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.spawns.insert(testing::spawn(8, SpawnKind::NpcCorpse));
+        let start = Instant::now();
+        let open = ClientCommand::Loot {
+            session_id: 5,
+            corpse_id: 8,
+            created: start,
+        };
+        testing::run(|out| looting.handle_at(&open, &mut world, out, start))
+            .result
+            .unwrap();
+        let corpse = looting.corpse.as_mut().unwrap();
+        corpse.listing = Listing::Ready;
+        corpse.places.extend([0, 1, 2]);
+        let take = |place| ClientCommand::LootItem {
+            session_id: 5,
+            corpse_id: 8,
+            own_id: 7,
+            place,
+            auto: true,
+            created: start,
+        };
+        let at = |millis| start + Duration::from_millis(millis);
+        for (place, millis, sent) in [(0, 0, 1), (1, 9, 0), (1, 10, 1), (2, 15, 0), (2, 20, 1)] {
+            let outcome =
+                testing::run(|out| looting.handle_at(&take(place), &mut world, out, at(millis)));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent.len(), sent, "place {place} at {millis} ms");
+        }
+        // Without a pace, nothing waits.
+        let mut looting = Looting::default();
+        testing::run(|out| looting.handle_at(&open, &mut world, out, start))
+            .result
+            .unwrap();
+        let corpse = looting.corpse.as_mut().unwrap();
+        corpse.listing = Listing::Ready;
+        corpse.places.extend([0, 1]);
+        for place in [0, 1] {
+            let outcome =
+                testing::run(|out| looting.handle_at(&take(place), &mut world, out, start));
+            assert_eq!(outcome.sent.len(), 1);
+        }
+    }
 
     #[test]
     fn only_a_corpse_the_player_can_see_is_opened() {

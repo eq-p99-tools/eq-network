@@ -73,6 +73,11 @@ impl Visit {
                 offer_id: id,
                 accept,
             },
+            ConsentKind::Duel => ClientCommand::AnswerDuel {
+                session_id: id.session_id,
+                offer_id: id,
+                accept,
+            },
         })
     }
 }
@@ -97,6 +102,12 @@ fn prompt(kind: ConsentKind, x: f32) -> (u16, Vec<u8>) {
             body[80..84].copy_from_slice(&x.to_le_bytes());
             (TRANSLOCATE_OPCODE, body)
         }
+        // A challenge carries no place; the duel's own tests are in
+        // `confirmations.rs`.
+        ConsentKind::Duel => (
+            eq_network_game::socials::REQUEST_DUEL_OPCODE,
+            [4u32, 4].iter().flat_map(|id| id.to_le_bytes()).collect(),
+        ),
     }
 }
 

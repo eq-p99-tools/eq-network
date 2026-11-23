@@ -35,8 +35,13 @@
 //! # }
 //! ```
 
+mod gaps;
 mod selection;
 mod session;
+
+pub use gaps::{
+    Gap, GapKind, GapStage, INTERVAL as GAP_INTERVAL, MORE_KINDS, MOST_KINDS, SAMPLE_BYTES,
+};
 
 use crate::{
     assets::Assets,
@@ -241,6 +246,12 @@ pub struct ClientConfig {
     /// delay is not native timing or evidence of server acceptance. Joining
     /// a list remains a separate player action.
     pub answer_list_polls: bool,
+    /// The server filters the character starts with: sent at every zone-in
+    /// until [`ClientCommand::SetServerFilters`] changes them for the
+    /// current character. Returning to character selection restores these.
+    /// The default is the packet each generation's client is known to send
+    /// ([`eq_network_game::filters`]).
+    pub server_filters: eq_network_game::filters::ServerFilters,
     /// The host's machine, for the weekly report the official client
     /// makes to the world (see [`eq_network_game::sysinfo`]): the saved
     /// time of the last report, and the machine as the host measures it
@@ -291,6 +302,7 @@ impl ClientConfig {
             local_only: false,
             auto_eat: eq_network_game::food::AutoEat::default(),
             answer_list_polls: false,
+            server_filters: eq_network_game::filters::ServerFilters::default(),
             sysinfo: None,
             sight_catalog: None,
             installed_zone_boundaries: None,
@@ -323,6 +335,9 @@ impl ClientConfig {
             ),
             GameDialect::Rof2 => anyhow::bail!("the RoF2 client generation cannot log in yet"),
         }
+        self.server_filters
+            .check(GameDialect::from(self.protocol))
+            .context("server filters")?;
         ensure!(
             self.character.len() < 64 && !self.character.contains('\0'),
             "character name exceeds protocol field size"
@@ -431,6 +446,12 @@ pub struct RunOptions {
     /// Reconnect after transient session failures, including modern peer
     /// termination. Each retry is a fresh login after the configured delay.
     pub reconnect: bool,
+    /// How many fresh logins in a row may follow transient failures before
+    /// the last failure is returned: 5 by default (our bound, 6.534; no read
+    /// or server source gives one). The count starts again once a run has
+    /// stayed in its zone for at least the reconnect delay. 0 reconnects
+    /// never, as `reconnect: false` does.
+    pub reconnect_attempts: u32,
     /// Stop after character selection without opening the zone connection.
     pub world_only: bool,
     /// Optional maximum time in the zone, including zone admission.
@@ -441,6 +462,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             reconnect: true,
+            reconnect_attempts: 5,
             world_only: false,
             zone_duration: None,
         }
@@ -679,6 +701,10 @@ pub enum ClientEvent {
     Progress(ConnectionStage),
     /// Decoded communication record.
     Record(Box<Record>),
+    /// A server message the session dropped or could not read: the first
+    /// of its kind in a stage at once, repeats counted and told at most
+    /// every ten seconds and when the stage ends ([`Gap`]).
+    Gap(Box<Gap>),
     /// Credential-safe operational diagnostic.
     Diagnostic(String),
     /// Transient failure followed by a scheduled fresh session.
@@ -687,6 +713,19 @@ pub enum ClientEvent {
         error: String,
         /// Delay before the next attempt.
         delay_seconds: u64,
+        /// Which fresh login in a row this will be, from 1.
+        attempt: u32,
+        /// How many in a row may follow ([`RunOptions::reconnect_attempts`]).
+        attempts: u32,
+    },
+    /// A command the host queued before a fresh login, dropped unread so
+    /// that nothing asked for in the ended session acts in the next one.
+    /// It names the command's kind and why, never its contents.
+    CommandDropped {
+        /// The command's kind ([`ClientCommand::name`]).
+        command: &'static str,
+        /// Why it was dropped, in our words.
+        reason: String,
     },
 }
 
@@ -798,11 +837,14 @@ impl Client {
     /// Before the zone admits the player, the queue answers the lists the
     /// session sends: the login server's worlds, when no world is
     /// configured, and the world's characters, when no character is. Other
-    /// commands are consumed only after zone admission and may remain queued
-    /// while a reconnect is in progress. A failed player admission leaves
-    /// pending commands in this host-owned receiver. Start a fresh queue for
-    /// a separate run so unscoped commands such as `SendChat` cannot carry
-    /// over. Dropping every sender disables input.
+    /// commands are consumed only after zone admission. Before each fresh
+    /// login of a reconnect, every command still queued is dropped unread
+    /// and told as [`ClientEvent::CommandDropped`]; a command sent once that
+    /// login says `ConnectionState::Connecting` is read by it. A failed
+    /// player admission, a confirmed login rejection and the end of the
+    /// reconnect count leave pending commands in this host-owned receiver.
+    /// Start a fresh queue for a separate run so unscoped commands such as
+    /// `SendChat` cannot carry over. Dropping every sender disables input.
     ///
     /// # Errors
     ///
@@ -836,9 +878,13 @@ impl Client {
             !self.config.character.is_empty() || commands.is_some() || options.world_only,
             "interactive character selection requires a command receiver"
         );
+        let mut attempt = 0;
         loop {
             if cancel.is_cancelled() {
                 return events.status(ConnectionState::Stopped, 0, None);
+            }
+            if attempt > 0 {
+                drop_queued(commands, &mut events)?;
             }
             events.reset();
             events.status(ConnectionState::Connecting, 0, None)?;
@@ -862,16 +908,25 @@ impl Client {
                 return events.status(ConnectionState::Stopped, 0, None);
             }
             events.status(ConnectionState::Disconnected, 0, None)?;
-            if !options.reconnect
-                || result.as_ref().is_err_and(|error| {
-                    error.is::<LoginError>() || error.is::<PlayerAdmissionError>()
-                })
-            {
+            let fatal = result
+                .as_ref()
+                .is_err_and(|error| error.is::<LoginError>() || error.is::<PlayerAdmissionError>());
+            let Some(next) = next_attempt(
+                attempt,
+                &options,
+                events.ready.map(|ready| ready.elapsed()),
+                self.config.reconnect_delay,
+                fatal,
+            ) else {
+                // The queue stays the host's, as with reconnect off.
                 return result;
-            }
+            };
+            attempt = next;
             events.send(ClientEvent::Reconnecting {
                 error: format!("{:#}", result.unwrap_err()),
                 delay_seconds: self.config.reconnect_delay.as_secs(),
+                attempt,
+                attempts: options.reconnect_attempts,
             })?;
             let retry = Instant::now()
                 .checked_add(self.config.reconnect_delay)
@@ -885,6 +940,47 @@ impl Client {
             }
         }
     }
+}
+
+/// Which fresh login in a row comes next after a failed run, or none: the
+/// run ends with reconnect off, after a confirmed rejection, or once
+/// `reconnect_attempts` have followed in a row (6.534). A run that stayed in
+/// its zone for at least the reconnect delay starts the count again; one
+/// admitted and dropped at once does not, so the cap still bounds it.
+fn next_attempt(
+    attempt: u32,
+    options: &RunOptions,
+    in_zone: Option<Duration>,
+    delay: Duration,
+    fatal: bool,
+) -> Option<u32> {
+    let attempt = if in_zone.is_some_and(|stayed| stayed >= delay) {
+        0
+    } else {
+        attempt
+    };
+    (options.reconnect && !fatal && attempt < options.reconnect_attempts).then_some(attempt + 1)
+}
+
+/// Drops, unread, every command the host queued before a fresh login,
+/// telling each one's kind: none was made for the next login's screens or
+/// admission (6.534). This is the one point where the queue is drained,
+/// just before the fresh login says `ConnectionState::Connecting`; a
+/// command sent after that is read by the new login, even one composed
+/// before the host saw `Reconnecting`, so hosts should prefer the
+/// admission-scoped forms such as `SendChatInAdmission`.
+fn drop_queued(commands: Option<&Receiver<ClientCommand>>, events: &mut Events<'_>) -> Result<()> {
+    let Some(commands) = commands else {
+        return Ok(());
+    };
+    while let Ok(command) = commands.try_recv() {
+        events.send(ClientEvent::CommandDropped {
+            command: command.name(),
+            reason: "The connection was lost before it was sent; ask again once back in."
+                .to_owned(),
+        })?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -915,6 +1011,10 @@ struct Events<'a> {
     spell_tables: session::spell_tables::Sequence,
     /// Tracks the delivered view used by local liquid damage proposals.
     liquid_inputs: session::hazards::Observations,
+    /// The stage under way, and what it has left unread.
+    gaps: gaps::Tally,
+    /// When this run's zone admitted the player, if it did.
+    ready: Option<Instant>,
 }
 
 impl<'a> Events<'a> {
@@ -932,6 +1032,8 @@ impl<'a> Events<'a> {
             character: config.character.clone(),
             spell_tables: session::spell_tables::Sequence::new(rand::random()),
             liquid_inputs: session::hazards::Observations::default(),
+            gaps: gaps::Tally::default(),
+            ready: None,
         }
     }
 
@@ -940,6 +1042,8 @@ impl<'a> Events<'a> {
         self.session_id = format!("{run_id:016x}");
         self.spell_tables = session::spell_tables::Sequence::new(run_id);
         self.liquid_inputs = session::hazards::Observations::default();
+        self.gaps = gaps::Tally::default();
+        self.ready = None;
         self.zone.clear();
         self.messages = 0;
         self.server.clone_from(&self.config.server);
@@ -947,6 +1051,9 @@ impl<'a> Events<'a> {
     }
 
     fn send(&mut self, event: ClientEvent) -> Result<()> {
+        if matches!(event, ClientEvent::Progress(ConnectionStage::Ready)) {
+            self.ready.get_or_insert_with(Instant::now);
+        }
         let revision = self.liquid_inputs.observe(&event);
         (self.handler)(event).map_err(EventDeliveryError)?;
         if let Some(revision) = revision {
@@ -957,6 +1064,98 @@ impl<'a> Events<'a> {
 
     fn diagnostic(&mut self, message: String) -> Result<()> {
         self.send(ClientEvent::Diagnostic(message))
+    }
+
+    /// Starts a stage of the session, telling first what the last one
+    /// still had to tell of what it left unread. Its gaps name no zone
+    /// until a zone stage's zone has named itself ([`Self::name_zone`]).
+    fn begin_stage(&mut self, stage: GapStage) -> Result<()> {
+        self.end_stage()?;
+        self.gaps.stage = stage;
+        self.gaps.zone_named = false;
+        Ok(())
+    }
+
+    /// Keeps the short name the zone being entered gives itself.
+    fn name_zone(&mut self, name: &str) {
+        name.clone_into(&mut self.zone);
+        self.gaps.zone_named = true;
+    }
+
+    /// Tells what the stage under way still has to tell of what it left
+    /// unread.
+    fn end_stage(&mut self) -> Result<()> {
+        for gap in self.gaps.drain() {
+            self.send(ClientEvent::Gap(Box::new(gap)))?;
+        }
+        Ok(())
+    }
+
+    /// Counts a server message the stage under way left unread, telling of
+    /// it when it is the first of its kind, or the repeats are due.
+    fn gap(
+        &mut self,
+        opcode: u16,
+        name: Option<&'static str>,
+        body: &[u8],
+        kind: GapKind,
+    ) -> Result<()> {
+        self.record_gap(opcode, name, body.len(), Some(body), kind)
+    }
+
+    /// Counts a message left unread by its opcode and length only: the
+    /// record keeps no sample of its body, as for the chat server's mail and
+    /// lists, whose bodies are the player's own.
+    fn gap_unsampled(
+        &mut self,
+        opcode: u16,
+        name: Option<&'static str>,
+        length: usize,
+        kind: GapKind,
+    ) -> Result<()> {
+        self.record_gap(opcode, name, length, None, kind)
+    }
+
+    fn record_gap(
+        &mut self,
+        opcode: u16,
+        name: Option<&'static str>,
+        length: usize,
+        body: Option<&[u8]>,
+        kind: GapKind,
+    ) -> Result<()> {
+        let at = Instant::now();
+        let gap = Gap {
+            stage: self.gaps.stage,
+            dialect: self.config.protocol.into(),
+            server: self.config.protocol,
+            zone: match self.gaps.stage {
+                GapStage::Zone if self.gaps.zone_named => self.zone.clone(),
+                GapStage::Login | GapStage::World | GapStage::Zone => String::new(),
+            },
+            opcode,
+            name,
+            count: 1,
+            min_length: length,
+            max_length: length,
+            kind,
+            sample: None,
+        };
+        if let Some(mut gap) = self.gaps.count(gap, body.unwrap_or_default(), at) {
+            if body.is_none() {
+                gap.sample = None;
+            }
+            self.send(ClientEvent::Gap(Box::new(gap)))?;
+        }
+        Ok(())
+    }
+
+    /// Tells of the repeats that are due.
+    fn tick_gaps(&mut self) -> Result<()> {
+        for gap in self.gaps.due(Instant::now()) {
+            self.send(ClientEvent::Gap(Box::new(gap)))?;
+        }
+        Ok(())
     }
 
     /// Completes a move discarded outside normal zone action routing.
@@ -1142,6 +1341,23 @@ mod tests {
     }
 
     #[test]
+    fn configured_server_filters_must_fit_the_generations_packet() {
+        use eq_network_game::filters::{FilterCategory, FilterMode};
+        let mut config = ClientConfig::for_protocol(ServerProtocol::EqEmu, "u", "p", "", "");
+        assert!(config.validate().is_ok());
+        config
+            .server_filters
+            .set(FilterCategory::MeleeCrits, FilterMode::GroupOnly);
+        assert!(config.validate().is_err());
+        // EQMac has no damage-over-time word, so any mode for it is left out.
+        let mut config = ClientConfig::for_protocol(ServerProtocol::Quarm, "u", "p", "", "");
+        config
+            .server_filters
+            .set(FilterCategory::DamageOverTime, FilterMode::Show);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn the_rof2_placeholder_has_no_name_to_choose_it_by() {
         let rof2 = ServerProtocol::EqEmuRof2;
         for name in [
@@ -1207,6 +1423,130 @@ mod tests {
         packet[132..136].copy_from_slice(&channel.to_le_bytes());
         packet.extend(b"Example message\0");
         chat::parse(0x1004, &packet, false).unwrap().unwrap()
+    }
+
+    #[test]
+    fn reconnects_stop_at_the_cap_and_count_again_only_after_a_settled_stay() {
+        let delay = Duration::from_secs(30);
+        let options = RunOptions::default();
+        assert_eq!(options.reconnect_attempts, 5);
+        // Five in a row, numbered from 1, then the run ends.
+        let mut attempt = 0;
+        let mut told = Vec::new();
+        while let Some(next) = next_attempt(attempt, &options, None, delay, false) {
+            told.push(next);
+            attempt = next;
+        }
+        assert_eq!(told, [1, 2, 3, 4, 5]);
+        // A zone that admitted and dropped before the delay does not reset.
+        assert_eq!(
+            next_attempt(5, &options, Some(Duration::from_secs(29)), delay, false),
+            None
+        );
+        // One that stayed for the delay starts the count again.
+        assert_eq!(
+            next_attempt(5, &options, Some(delay), delay, false),
+            Some(1)
+        );
+        // A confirmed rejection, reconnect off, or no attempts: none.
+        assert_eq!(next_attempt(0, &options, None, delay, true), None);
+        let off = RunOptions {
+            reconnect: false,
+            ..RunOptions::default()
+        };
+        assert_eq!(next_attempt(0, &off, None, delay, false), None);
+        let none = RunOptions {
+            reconnect_attempts: 0,
+            ..RunOptions::default()
+        };
+        assert_eq!(next_attempt(0, &none, Some(delay), delay, false), None);
+    }
+
+    #[test]
+    fn commands_queued_before_a_fresh_login_are_dropped_and_told_by_kind_only() {
+        use crate::chat::OutboundChat;
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let (queue, commands) = std::sync::mpsc::sync_channel(8);
+        for command in [
+            ClientCommand::SendChat(OutboundChat::Tell {
+                recipient: "Someone".into(),
+                message: "a secret".into(),
+            }),
+            ClientCommand::SelectCharacter {
+                selection_id: 1,
+                slot: 0,
+            },
+            ClientCommand::Camp {
+                session_id: 3,
+                created: Instant::now(),
+            },
+        ] {
+            queue.send(command).unwrap();
+        }
+        let mut dropped = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::CommandDropped { command, reason } = event {
+                dropped.push((command, reason));
+            }
+            Ok(())
+        };
+        let mut events = Events::new(&config, &mut handler);
+        drop_queued(Some(&commands), &mut events).unwrap();
+        // Each once, by kind, and nothing of what it said or to whom.
+        assert_eq!(
+            dropped
+                .iter()
+                .map(|(command, _)| *command)
+                .collect::<Vec<_>>(),
+            ["SendChat", "SelectCharacter", "Camp"]
+        );
+        for (_, reason) in &dropped {
+            assert!(!reason.contains("secret") && !reason.contains("Someone"));
+            assert!(!reason.contains("Tester"));
+        }
+        assert!(commands.try_recv().is_err());
+        // A command sent after the drain is the next login's to read.
+        queue
+            .send(ClientCommand::SendChat(OutboundChat::Say("ok".into())))
+            .unwrap();
+        assert!(commands.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_gap_names_only_the_zone_that_named_itself_in_its_stage() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut zones = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                zones.push((gap.stage, gap.zone));
+            }
+            Ok(())
+        };
+        let mut events = Events::new(&config, &mut handler);
+        events.reset();
+        let unlisted = || GapKind::Unlisted;
+        events.begin_stage(GapStage::Zone).unwrap();
+        events.gap(1, None, &[], unlisted()).unwrap();
+        events.name_zone("qeynos");
+        events.gap(2, None, &[], unlisted()).unwrap();
+        events.begin_stage(GapStage::World).unwrap();
+        events.gap(3, None, &[], unlisted()).unwrap();
+        events.begin_stage(GapStage::Zone).unwrap();
+        events.gap(4, None, &[], unlisted()).unwrap();
+        events.name_zone("misty");
+        events.gap(5, None, &[], unlisted()).unwrap();
+        events.end_stage().unwrap();
+        drop(events);
+        assert_eq!(
+            zones,
+            [
+                (GapStage::Zone, String::new()),
+                (GapStage::Zone, "qeynos".to_owned()),
+                (GapStage::World, String::new()),
+                (GapStage::Zone, String::new()),
+                (GapStage::Zone, "misty".to_owned()),
+            ]
+        );
     }
 
     #[test]

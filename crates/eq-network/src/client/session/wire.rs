@@ -7,7 +7,7 @@
 //! [`ServerType`](super::servers::ServerType) feature.
 
 use super::{
-    admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    admission::{Admission, EqMacAdmission, Handshake, Rof2Admission, TitaniumAdmission},
     coverage::{self, ServerMessage},
     login::{self, Credentials},
     servers::Shield,
@@ -443,13 +443,79 @@ impl Wire for EqMac {
     }
 }
 
-/// The `RoF2` client's packets: a placeholder. Every stage keeps the trait's
-/// refusal, so it logs in, enters, reads and sends nothing.
+/// The `RoF2` client's packets: a placeholder. It logs in, enters the
+/// world and the zone the way stock `EQEmu` expects the `RoF2` client to
+/// (inferred, 6.497, 6.499 and 6.501), and reads the zone's spawn records
+/// (6.510); everything else keeps the trait's refusal, so it sends nothing
+/// in the zone and reads nothing more there.
+/// Nothing reaches the login either: a configuration for the `RoF2`
+/// generation is refused before a session starts.
 pub(super) struct Rof2;
 
 impl Wire for Rof2 {
     fn dialect(&self) -> GameDialect {
         GameDialect::Rof2
+    }
+
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::rof2(opcode)
+    }
+
+    /// Its spawn records only, as stock `EQEmu` writes them (inferred,
+    /// 6.510).
+    fn messages(
+        &self,
+        opcode: u16,
+        body: &[u8],
+        _item_rules: eq_network_game::inventory::ItemRules,
+    ) -> Vec<Message> {
+        eq_network_game::message::rof2(opcode, body)
+    }
+
+    /// Its chat and the server's own lines, as stock `EQEmu` writes them
+    /// (inferred, 6.521).
+    fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
+        chat::parse_for(GameDialect::Rof2, opcode, body, include_raw)
+    }
+
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::rof2(config, stop, commands, log)
+    }
+
+    fn world(
+        &self,
+        context: &CharacterSession<'_>,
+        assets: &Assets,
+        ip: &str,
+        flags: (bool, bool),
+        log: &mut Events<'_>,
+    ) -> Result<Option<ZoneDestination>> {
+        world::rof2::world(context, assets, ip, flags, log)
+    }
+
+    /// Stock `EQEmu`'s zones speak the modern transport to the `RoF2` client
+    /// as they do to Titanium's (inferred, 6.501).
+    fn connect_zone(&self, address: SocketAddr, stop: &AtomicBool) -> Result<Box<dyn Transport>> {
+        Ok(Box::new(crate::transport::Session::connect_cancellable(
+            address, true, stop,
+        )?))
+    }
+
+    fn admit(
+        &self,
+        character: &str,
+        revolution: f32,
+        handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Box<dyn Admission>> {
+        Ok(Box::new(Rof2Admission::start(
+            character, revolution, handshake,
+        )?))
     }
 
     fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
@@ -586,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rof2_placeholder_logs_in_sends_and_reads_nothing() {
+    fn the_rof2_placeholder_sends_nothing_and_reads_only_spawns() {
         use crate::client::{ClientConfig, ServerProtocol};
         use eq_network_game::chat::OutboundChat;
         let config = ClientConfig::for_protocol(
@@ -596,25 +662,30 @@ mod tests {
             "Server",
             "",
         );
+        // Its login is built (and tested in `login`), and refused before
+        // it starts: the configuration is.
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "the RoF2 client generation cannot log in yet"
+        );
+        // Its world stage and zone entry are built (and tested in
+        // `world::rof2` and `admission::rof2`); the handoff between zones
+        // still refuses.
+        let assets = Assets {
+            client: "none".into(),
+            files: std::collections::BTreeMap::new(),
+        };
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
-        let refused = Rof2
-            .login(&config, &CancellationToken::default(), None, &mut log)
+        let handoff = Rof2
+            .handoff(None, &[0; 130], &assets, &mut log)
             .err()
             .unwrap();
         assert_eq!(
-            refused.to_string(),
-            "this client generation cannot log in yet"
+            handoff.to_string(),
+            "this client generation cannot hand off between zones yet"
         );
-        let stop = AtomicBool::new(false);
-        let zone = Rof2
-            .connect_zone(SocketAddr::from(([127, 0, 0, 1], 9)), &stop)
-            .err()
-            .unwrap();
-        assert_eq!(
-            zone.to_string(),
-            "this client generation cannot connect to a zone yet"
-        );
+        drop(log);
         let say = Request::Command(eq_network_game::command::GameCommand::SendChat(
             OutboundChat::Say("Hail".into()),
         ));
@@ -628,6 +699,11 @@ mod tests {
             );
         }
         assert!(Rof2.messages(0x3cdc, &[], ItemRules::Takp).is_empty());
+        // Its spawn records are its one zone decoder (6.510).
+        assert!(matches!(
+            Rof2.messages(0x5089, &[0; 3], ItemRules::Takp)[..],
+            [Message::Unreadable { .. }]
+        ));
         assert!(Rof2.chat(0x1004, &[0; 200], false).unwrap().is_none());
         assert!(Rof2.coverage(0x1004).is_none());
         assert!(Rof2.speeds().is_none());

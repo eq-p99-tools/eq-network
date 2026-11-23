@@ -38,11 +38,20 @@ struct PendingAssist {
     superseded: bool,
 }
 
+/// How long an assist on TAKP or Quarm waits for its answer before another
+/// may go. Both servers always answer, untagged (6.585, ours: the `EQMac`
+/// program's own pace is unread, 6.585c).
+const EQMAC_ASSIST_WAIT: Duration = Duration::from_secs(5);
+
 /// Rolls, emotes, assists and yells.
 #[derive(Default)]
 pub(super) struct Socials {
     project1999: bool,
     assist: Option<PendingAssist>,
+    /// TAKP and Quarm: rolls and assists only.
+    eqmac: bool,
+    /// There, when the last assist went, while it is unanswered.
+    eqmac_assist: Option<Instant>,
 }
 
 impl Socials {
@@ -52,11 +61,31 @@ impl Socials {
             ..Self::default()
         }
     }
+
+    /// TAKP and Quarm, each from its own `Handle_OP_RandomReq` and
+    /// `Handle_OP_Assist` (Quarm fc75fcf, TAKP 44afcbf; 6.585): rolls, with
+    /// P99's ends of 0 to 32000 in order (ours: the `EQMac` program's limit
+    /// is unread, 6.585b), and one assist at a time. Emotes and yells wait
+    /// for their own reads.
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether rolls take P99's ends, in order.
+    const fn bounded_rolls(&self) -> bool {
+        self.project1999 || self.eqmac
+    }
 }
 
 impl Feature for Socials {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
+        if self.eqmac {
+            return vec![Capability::Rolling, Capability::Assisting];
+        }
         vec![
             Capability::Rolling,
             Capability::Emoting,
@@ -66,6 +95,12 @@ impl Feature for Socials {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
+        if self.eqmac {
+            return matches!(
+                command,
+                ClientCommand::Random { .. } | ClientCommand::Assist { .. }
+            );
+        }
         matches!(
             command,
             ClientCommand::Random { .. }
@@ -78,6 +113,12 @@ impl Feature for Socials {
     }
 
     fn explain(&mut self, message: &mut Message, world: &World) {
+        if self.eqmac {
+            if matches!(message, Message::Event(WorldEvent::Assisted(_))) {
+                self.eqmac_assist = None;
+            }
+            return;
+        }
         if !self.project1999 {
             return;
         }
@@ -119,7 +160,7 @@ impl Feature for Socials {
         match command {
             ClientCommand::Random { low, high, .. } => {
                 let (mut low, mut high) = (*low, *high);
-                if self.project1999 {
+                if self.bounded_rolls() {
                     if low.max(high) > P99_ROLL_MAX {
                         return actions::refuse(
                             command,
@@ -177,6 +218,9 @@ impl Feature for Socials {
                         out.log,
                     );
                 }
+                if self.eqmac {
+                    return self.eqmac_assist(command, *spawn_id, out);
+                }
                 if !self.project1999 {
                     return out.request(&Request::Assist(*spawn_id));
                 }
@@ -231,6 +275,25 @@ fn animate(animation: u8, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Socials {
+    /// Asks TAKP or Quarm to assist, one assist at a time until its answer
+    /// or [`EQMAC_ASSIST_WAIT`].
+    fn eqmac_assist(
+        &mut self,
+        command: &ClientCommand,
+        spawn_id: u16,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self
+            .eqmac_assist
+            .is_some_and(|sent| sent.elapsed() < EQMAC_ASSIST_WAIT)
+        {
+            return actions::refuse(command, "Wait for the previous assist reply.", out.log);
+        }
+        out.request(&Request::Assist(spawn_id))?;
+        self.eqmac_assist = Some(Instant::now());
+        Ok(())
+    }
+
     /// A social emote's own line is the client's to print, so nothing is
     /// echoed; its text goes as the program built it.
     fn social_emote(
@@ -261,10 +324,411 @@ impl Socials {
     }
 }
 
+/// How long a `/surname` waits for its answer before another may go.
+/// `EQEmu` refuses with a line of its own and sends no answer, so the wait
+/// lapses rather than holding until the zone changes (inferred).
+const SURNAME_WAIT: Duration = Duration::from_secs(10);
+
+/// Asking for a last name: `/surname`, sent as typed. The server answers
+/// with the request's record ([`WorldEvent::SurnameAnswer`]) or a line of
+/// its own for each refusal (`EQEmu`'s `Client::Handle_OP_Surname`: its
+/// timer, level 12940, length 12942 and filter 1374), so the session adds
+/// no line; a surname it takes reaches the zone's spawns as their last
+/// name. One request waits at a time, and an answer to none is withheld.
+/// Only stock `EQEmu` lists it, from source, not yet checked live
+/// (checklist 6.507).
+#[derive(Default)]
+pub(super) struct Surnames {
+    asked: Option<Instant>,
+}
+
+impl Surnames {
+    fn waiting(&self) -> bool {
+        self.asked
+            .is_some_and(|asked| asked.elapsed() < SURNAME_WAIT)
+    }
+}
+
+impl Feature for Surnames {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::Surnaming]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::Surname { .. })
+    }
+
+    fn explain(&mut self, message: &mut Message, _world: &World) {
+        match message {
+            Message::ZoneOffer(_) | Message::ZoneAnswer(_) | Message::Handoff(_) => {
+                self.asked = None;
+            }
+            Message::Event(WorldEvent::SurnameAnswer { .. }) => {
+                if !self.waiting() {
+                    *message = Message::Withheld;
+                }
+                self.asked = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::Surname { surname, .. } = command else {
+            return Ok(());
+        };
+        if self.waiting() {
+            return actions::refuse(
+                command,
+                "Wait for the answer to your last surname.",
+                out.log,
+            );
+        }
+        let surname = surname.trim();
+        if surname.is_empty() || !surname.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return actions::refuse(command, "A surname is one word of plain text.", out.log);
+        }
+        if surname.len() >= eq_network_game::names::SURNAME_FIELD {
+            return actions::refuse(command, "That surname is too long.", out.log);
+        }
+        out.request(&Request::Surname(surname.to_owned()))?;
+        self.asked = Some(Instant::now());
+        Ok(())
+    }
+}
+
+/// How long a request for the title list waits for its answer before
+/// another may go (inferred: `EQEmu` always answers, so this only frees a
+/// request whose answer was lost).
+const TITLES_WAIT: Duration = Duration::from_secs(10);
+/// The least time between an answered request for the list, which draws an
+/// answer of any size, and the next: the session's usual settling.
+const TITLES_SETTLING: Duration = super::listing::SETTLING;
+
+/// Choosing a title or suffix: asking for the list the player may choose
+/// from, and choosing from it. `EQEmu` answers the request with the list
+/// (`Client::Handle_OP_RequestTitles`) and ignores, with no line, a choice
+/// of a title the character may not have (`Client::Handle_OP_SetTitle`), so
+/// the session sends only a title this admission's latest list named, of a
+/// kind it has text for, or 0 to clear either kind. A list nobody asked for
+/// is withheld and told as a gap. Only stock `EQEmu` lists it, from source,
+/// not yet checked live; nothing in a front end calls it until the program's
+/// title window is read (R49-14).
+#[derive(Default)]
+pub(super) struct Titles {
+    asked: Option<Instant>,
+    answered: Option<Instant>,
+    chosen: Option<Instant>,
+    listed: Option<Vec<eq_network_game::names::TitleChoice>>,
+    unasked: Option<usize>,
+}
+
+impl Titles {
+    fn waiting(&self) -> bool {
+        self.asked
+            .is_some_and(|asked| asked.elapsed() < TITLES_WAIT)
+    }
+
+    fn settling(&self) -> bool {
+        self.answered
+            .is_some_and(|answered| answered.elapsed() < TITLES_SETTLING)
+    }
+}
+
+impl Feature for Titles {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::Titling]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::RequestTitles { .. } | ClientCommand::SetTitle { .. }
+        )
+    }
+
+    /// A new admission forgets the list and any request in flight.
+    fn admitted(&mut self, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+        *self = Self::default();
+        Ok(())
+    }
+
+    fn explain(&mut self, message: &mut Message, _world: &World) {
+        match message {
+            Message::ZoneOffer(_) | Message::ZoneAnswer(_) | Message::Handoff(_) => {
+                self.asked = None;
+            }
+            Message::Event(WorldEvent::TitleList(titles)) => {
+                if self.waiting() {
+                    self.listed = Some(titles.clone());
+                    self.answered = Some(Instant::now());
+                } else {
+                    self.unasked = Some(eq_network_game::names::title_list_length(titles));
+                    *message = Message::Withheld;
+                }
+                self.asked = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn tick(&mut self, _now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(length) = self.unasked.take() {
+            out.log.gap_unsampled(
+                eq_network_game::names::TITLE_LIST_OPCODE,
+                Some("OP_SendTitleList"),
+                length,
+                crate::client::GapKind::Unread {
+                    reason: "a title list no request asked for".to_owned(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match command {
+            ClientCommand::RequestTitles { .. } => {
+                if self.waiting() || self.settling() {
+                    return actions::refuse(command, "Wait for the list of titles.", out.log);
+                }
+                out.request(&Request::RequestTitles)?;
+                self.asked = Some(Instant::now());
+                Ok(())
+            }
+            ClientCommand::SetTitle {
+                title_id, suffix, ..
+            } => {
+                let has_text = |title: &eq_network_game::names::TitleChoice| {
+                    title.id == *title_id
+                        && !if *suffix {
+                            &title.suffix
+                        } else {
+                            &title.prefix
+                        }
+                        .is_empty()
+                };
+                let listed = self
+                    .listed
+                    .as_ref()
+                    .is_some_and(|listed| listed.iter().any(has_text));
+                // Each choice the server takes it tells the whole zone.
+                if self
+                    .chosen
+                    .is_some_and(|chosen| chosen.elapsed() < TITLES_SETTLING)
+                {
+                    return actions::refuse(
+                        command,
+                        "Wait a moment before choosing again.",
+                        out.log,
+                    );
+                }
+                if *title_id != 0 && !listed {
+                    return actions::refuse(
+                        command,
+                        "Choose a title from the latest list, of a kind it has.",
+                        out.log,
+                    );
+                }
+                out.request(&Request::SetTitle {
+                    title_id: *title_id,
+                    suffix: *suffix,
+                })?;
+                self.chosen = Some(Instant::now());
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{feature::testing, ClientEvent};
     use super::*;
+
+    #[test]
+    fn titles_are_asked_for_once_and_chosen_only_from_the_latest_list() {
+        use eq_network_game::names::{set_title, TitleChoice};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut feature = Titles::default();
+        let refused = |outcome: &testing::Outcome<Result<()>>| {
+            outcome.sent.is_empty()
+                && outcome.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::SocialRefused { session_id: 5, .. })
+                    )
+                })
+        };
+        let choose = |feature: &mut Titles, world: &mut World, title_id, suffix| {
+            let command = ClientCommand::SetTitle {
+                session_id: 5,
+                title_id,
+                suffix,
+            };
+            testing::run(|out| feature.handle(&command, world, out))
+        };
+        // Nothing listed yet: only clearing goes, of either kind.
+        assert!(refused(&choose(&mut feature, &mut world, 7, false)));
+        for suffix in [false, true] {
+            let cleared = choose(&mut feature, &mut world, 0, suffix);
+            assert_eq!(cleared.sent[0].body, set_title(0, suffix));
+            // The next choice, a clear too, waits out the settling.
+            assert!(refused(&choose(&mut feature, &mut world, 0, suffix)));
+            feature.chosen = Instant::now().checked_sub(TITLES_SETTLING);
+        }
+
+        // A list nobody asked for is withheld, names nothing, and is a gap.
+        let list = || {
+            Message::Event(WorldEvent::TitleList(vec![TitleChoice {
+                id: 7,
+                prefix: "Lord".into(),
+                suffix: String::new(),
+            }]))
+        };
+        let mut unasked = list();
+        feature.explain(&mut unasked, &world);
+        assert!(matches!(unasked, Message::Withheld));
+        let told = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+        assert!(told
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::Gap(_))));
+        assert!(refused(&choose(&mut feature, &mut world, 7, false)));
+
+        let ask = ClientCommand::RequestTitles { session_id: 5 };
+        let asked = testing::run(|out| feature.handle(&ask, &mut world, out));
+        assert_eq!(
+            (asked.sent[0].opcode, asked.sent[0].body.len()),
+            (eq_network_game::names::REQUEST_TITLES_OPCODE, 0)
+        );
+        // A second waits for the answer.
+        assert!(refused(&testing::run(
+            |out| feature.handle(&ask, &mut world, out)
+        )));
+        let mut answer = list();
+        feature.explain(&mut answer, &world);
+        assert!(matches!(answer, Message::Event(_)));
+        // Answered, the next still waits out the settling.
+        assert!(refused(&testing::run(
+            |out| feature.handle(&ask, &mut world, out)
+        )));
+        let chosen = choose(&mut feature, &mut world, 7, false);
+        assert_eq!(
+            (chosen.sent[0].opcode, &chosen.sent[0].body),
+            (
+                eq_network_game::names::SET_TITLE_OPCODE,
+                &set_title(7, false)
+            )
+        );
+        feature.chosen = None;
+        // Not listed, or a kind the title has no text for.
+        assert!(refused(&choose(&mut feature, &mut world, 9, false)));
+        assert!(refused(&choose(&mut feature, &mut world, 7, true)));
+
+        // Settled, a fresh request goes; one whose answer never comes lapses.
+        feature.answered = Instant::now().checked_sub(TITLES_SETTLING);
+        assert_eq!(
+            testing::run(|out| feature.handle(&ask, &mut world, out))
+                .sent
+                .len(),
+            1
+        );
+        assert!(refused(&testing::run(
+            |out| feature.handle(&ask, &mut world, out)
+        )));
+        feature.asked = Instant::now().checked_sub(TITLES_WAIT);
+        assert_eq!(
+            testing::run(|out| feature.handle(&ask, &mut world, out))
+                .sent
+                .len(),
+            1
+        );
+        // A new admission forgets the list and the request in flight.
+        testing::run(|out| feature.admitted(&mut world, out));
+        assert!(feature.listed.is_none() && feature.asked.is_none() && feature.answered.is_none());
+        assert!(refused(&choose(&mut feature, &mut world, 7, false)));
+    }
+
+    #[test]
+    fn a_surname_goes_to_the_server_as_typed_one_at_a_time() {
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut feature = Surnames::default();
+        let mut run = |world: &mut World, surname: &str| {
+            let command = ClientCommand::Surname {
+                session_id: 5,
+                surname: surname.into(),
+            };
+            testing::run(|out| feature.handle(&command, world, out))
+        };
+        let refused = |outcome: &testing::Outcome<Result<()>>| {
+            outcome.sent.is_empty()
+                && outcome.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::SocialRefused { session_id: 5, .. })
+                    )
+                })
+        };
+        for word in ["", "Ex ample", "Exämple", &"a".repeat(32)] {
+            assert!(refused(&run(&mut world, word)), "{word:?}");
+        }
+        let asked = run(&mut world, " ex-emplum ");
+        let sender = eq_network_game::request::Sender {
+            name: "Tester",
+            spawn_id: Some(7),
+        };
+        assert_eq!(
+            asked.sent,
+            [
+                eq_network_game::request::titanium(&Request::Surname("ex-emplum".into()), sender)
+                    .unwrap()
+            ]
+        );
+        // A second waits for the first one's answer.
+        assert!(refused(&run(&mut world, "Exemplum")));
+    }
+
+    #[test]
+    fn an_answer_releases_the_wait_and_one_to_no_request_is_withheld() {
+        let world = World::new(5);
+        let answer = || {
+            Message::Event(WorldEvent::SurnameAnswer {
+                accepted: true,
+                last_name: "Exemplum".into(),
+            })
+        };
+        let mut feature = Surnames::default();
+        let mut unasked = answer();
+        feature.explain(&mut unasked, &world);
+        assert!(matches!(unasked, Message::Withheld));
+
+        feature.asked = Some(Instant::now());
+        let mut heard = answer();
+        feature.explain(&mut heard, &world);
+        assert!(matches!(heard, Message::Event(_)));
+        assert!(!feature.waiting());
+
+        // A wait that lapsed holds nothing, and its late answer is withheld.
+        feature.asked = Instant::now().checked_sub(SURNAME_WAIT);
+        assert!(!feature.waiting());
+        let mut late = answer();
+        feature.explain(&mut late, &world);
+        assert!(matches!(late, Message::Withheld));
+    }
 
     #[test]
     fn a_late_assist_answer_releases_the_wait_without_selecting_a_target() {
@@ -292,6 +756,72 @@ mod tests {
         assert!(matches!(answer, Message::Withheld));
         let next = testing::run(|out| feature.handle(&command, &mut world, out));
         assert_eq!(next.sent, [socials::assist(8)]);
+    }
+
+    #[test]
+    fn eqmac_socials_roll_and_assist_only_in_the_mac_packets() {
+        use crate::world::Capability;
+        let wire = &super::super::wire::EqMac;
+        let mut feature = Socials::eqmac();
+        assert_eq!(
+            feature.capabilities(),
+            [Capability::Rolling, Capability::Assisting]
+        );
+        let emote = ClientCommand::Emote {
+            session_id: 5,
+            text: "waves.".into(),
+        };
+        assert!(!feature.owns(&emote));
+        assert!(!feature.owns(&ClientCommand::SocialEmote {
+            session_id: 5,
+            text: " nudges ".into(),
+        }));
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let roll = |low, high| ClientCommand::Random {
+            session_id: 5,
+            low,
+            high,
+        };
+        let run = |feature: &mut Socials, command: &ClientCommand, world: &mut World| {
+            let outcome = testing::run_on(wire, |out| feature.handle(command, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        // Ends in order, at most 32000 (ours, 6.585b).
+        assert_eq!(
+            run(&mut feature, &roll(6, 1), &mut world).sent,
+            [socials::eqmac_random(1, 6)]
+        );
+        assert_eq!(run(&mut feature, &roll(0, 32_001), &mut world).sent, []);
+        let assist = |spawn_id| ClientCommand::Assist {
+            session_id: 5,
+            spawn_id,
+        };
+        assert_eq!(
+            run(&mut feature, &assist(300), &mut world).sent,
+            [socials::eqmac_assist(300)]
+        );
+        // One at a time until the answer.
+        assert_eq!(run(&mut feature, &assist(301), &mut world).sent, []);
+        // The server names the player's own spawn: it passes on as named.
+        let mut answer =
+            Message::Event(WorldEvent::Assisted(socials::Assisted { target: Some(7) }));
+        feature.explain(&mut answer, &world);
+        assert!(matches!(
+            answer,
+            Message::Event(WorldEvent::Assisted(socials::Assisted { target: Some(7) }))
+        ));
+        assert_eq!(
+            run(&mut feature, &assist(301), &mut world).sent,
+            [socials::eqmac_assist(301)]
+        );
+        // Or the wait runs out.
+        feature.eqmac_assist = Instant::now().checked_sub(EQMAC_ASSIST_WAIT);
+        assert_eq!(run(&mut feature, &assist(302), &mut world).sent.len(), 1);
+        // Never oneself.
+        feature.eqmac_assist = None;
+        assert_eq!(run(&mut feature, &assist(7), &mut world).sent, []);
     }
 
     #[test]

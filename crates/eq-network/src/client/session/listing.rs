@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 /// Time between sends of the same kind. Twice `EQEmu`'s 250 ms receiver
 /// interval and an inferred local pacing limit on P99 (6.404).
-const SETTLING: Duration = Duration::from_millis(500);
+pub(super) const SETTLING: Duration = Duration::from_millis(500);
 
 /// Away, anonymous and roleplaying, as the player turns them.
 #[derive(Default)]
@@ -227,6 +227,85 @@ impl Feature for Helm {
     }
 }
 
+/// Saying the player looks for a group, `/lfg` (checklist 6.515). `EQEmu`
+/// tells every client but the sender (`Client::Handle_OP_LFGCommand`), so
+/// the state is kept here: from the player's spawn record at admission,
+/// then each change actually sent, or the server's word for the player's
+/// own spawn. A zone session builds its features anew, so each zone starts
+/// from its own admission's record.
+#[derive(Default)]
+pub(super) struct Looking {
+    /// Whether the player looks for a group, once a change says.
+    looking: Option<bool>,
+    /// When the session last sent a change.
+    sent: Option<Instant>,
+}
+
+impl Feature for Looking {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::LookingForGroup]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::LookForGroup { .. })
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::LookForGroup { on, .. } = *command else {
+            return Ok(());
+        };
+        let now = Instant::now();
+        let Some(player) = world.player.as_ref().filter(|player| player.spawn_id != 0) else {
+            return actions::refuse(command, "Your listing is not ready yet.", out.log);
+        };
+        if settling(self.sent, now) {
+            return actions::refuse(
+                command,
+                "Wait a moment before changing that again.",
+                out.log,
+            );
+        }
+        let current = self.looking.unwrap_or(player.listing.looking);
+        let looking = on.unwrap_or(!current);
+        // Asking for the state the player is in still sends, as the server
+        // stores the record again, but tells no second change.
+        out.request(&Request::SetLooking(looking))?;
+        self.looking = Some(looking);
+        self.sent = Some(now);
+        if looking == current {
+            return Ok(());
+        }
+        out.log.send(ClientEvent::World(WorldEvent::ListingSet {
+            session_id: world.session_id,
+            change: ListingChange::Looking(looking),
+        }))
+    }
+
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        // Any word of the player's own flag from the server stands.
+        if let Message::Event(WorldEvent::Listing {
+            spawn_id,
+            change: ListingChange::Looking(looking),
+        }) = message
+        {
+            if world.own_spawn == Some(*spawn_id) {
+                self.looking = Some(*looking);
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{feature::testing, ClientEvent};
@@ -259,6 +338,111 @@ mod tests {
         let before = Instant::now().checked_sub(SETTLING * 2);
         feature.away_sent = before;
         feature.anonymity_sent = before;
+    }
+
+    /// What one `/lfg` sent and the changes it told.
+    fn look(
+        feature: &mut Looking,
+        world: &mut World,
+        on: Option<bool>,
+    ) -> (
+        Vec<eq_network_game::command::EncodedCommand>,
+        Vec<ListingChange>,
+        bool,
+    ) {
+        let command = ClientCommand::LookForGroup { session_id: 5, on };
+        let outcome = testing::run(|out| feature.handle(&command, world, out));
+        outcome.result.unwrap();
+        let mut refused = false;
+        let told = outcome
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::ListingSet { change, .. }) => Some(*change),
+                ClientEvent::World(WorldEvent::ListingRefused { .. }) => {
+                    refused = true;
+                    None
+                }
+                _ => None,
+            })
+            .collect();
+        (outcome.sent, told, refused)
+    }
+
+    /// A world admitted with the player listed as looking for a group, or not.
+    fn listed(looking: bool) -> World {
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.listing.looking = looking;
+        world.player.admit(player);
+        world
+    }
+
+    #[test]
+    fn lfg_turns_over_from_the_admitted_record_and_is_paced() {
+        let mut feature = Looking::default();
+        let mut world = listed(true);
+        // Listed as looking at admission: a bare /lfg turns it off.
+        let (sent, told, refused) = look(&mut feature, &mut world, None);
+        assert!(!refused);
+        assert_eq!(sent, [listing::titanium_looking(false)]);
+        assert_eq!(told, [ListingChange::Looking(false)]);
+        // Too soon for another: refused, nothing sent, the flag kept.
+        let (sent, told, refused) = look(&mut feature, &mut world, Some(true));
+        assert!(refused);
+        assert!(sent.is_empty() && told.is_empty());
+        assert_eq!(feature.looking, Some(false));
+        feature.sent = Instant::now().checked_sub(SETTLING * 2);
+        let (sent, told, _) = look(&mut feature, &mut world, None);
+        assert_eq!(sent, [listing::titanium_looking(true)]);
+        assert_eq!(told, [ListingChange::Looking(true)]);
+    }
+
+    #[test]
+    fn lfg_on_when_already_on_sends_again_but_tells_no_change() {
+        let mut feature = Looking::default();
+        let mut world = listed(true);
+        let (sent, told, refused) = look(&mut feature, &mut world, Some(true));
+        assert!(!refused);
+        assert_eq!(sent, [listing::titanium_looking(true)]);
+        assert!(told.is_empty(), "told {told:?}");
+        feature.sent = None;
+        let (sent, told, _) = look(&mut feature, &mut world, Some(false));
+        assert_eq!(sent, [listing::titanium_looking(false)]);
+        assert_eq!(told, [ListingChange::Looking(false)]);
+    }
+
+    #[test]
+    fn lfg_waits_for_the_players_spawn() {
+        let mut feature = Looking::default();
+        let mut world = World::new(5);
+        let (sent, _, refused) = look(&mut feature, &mut world, None);
+        assert!(refused);
+        assert_eq!(sent, []);
+        assert_eq!(feature.looking, None);
+    }
+
+    #[test]
+    fn the_servers_word_on_our_own_flag_stands_and_anothers_leaves_it() {
+        let mut feature = Looking::default();
+        let mut world = listed(false);
+        world.own_spawn = Some(7);
+        let heard = |feature: &mut Looking, world: &mut World, spawn_id| {
+            let message = Message::Event(WorldEvent::Listing {
+                spawn_id,
+                change: ListingChange::Looking(true),
+            });
+            testing::run(|out| feature.observe(&message, world, out))
+                .result
+                .unwrap();
+        };
+        heard(&mut feature, &mut world, 12);
+        assert_eq!(feature.looking, None);
+        heard(&mut feature, &mut world, 7);
+        assert_eq!(feature.looking, Some(true));
+        // A bare /lfg now turns it off.
+        let (sent, _, _) = look(&mut feature, &mut world, None);
+        assert_eq!(sent, [listing::titanium_looking(false)]);
     }
 
     #[test]

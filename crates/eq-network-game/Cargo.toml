@@ -21,6 +21,10 @@ rand.workspace = true
 serde.workspace = true
 zeroize.workspace = true
 
+[features]
+# Bodies built from the field list, for the session's own tests only.
+test-bodies = []
+
 [dev-dependencies]
 serde_json.workspace = true
 

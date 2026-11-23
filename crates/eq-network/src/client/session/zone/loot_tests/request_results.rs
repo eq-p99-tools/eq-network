@@ -120,8 +120,10 @@ fn shared_loot_validation_and_unoffered_policy_report_original_admission() {
                 1 => world.admitted = None,
                 2 => world.lifecycle.mark_dead(),
                 3 => {
+                    // A server type that offers no looting: TAKP offers it
+                    // since 6.577, RoF2 doesn't yet.
                     features = Features::new(
-                        servers::server_type(ServerProtocol::Takp),
+                        servers::server_type(ServerProtocol::EqEmuRof2),
                         "Tester",
                         AutoEat::default(),
                     );

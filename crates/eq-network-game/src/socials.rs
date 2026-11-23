@@ -18,7 +18,19 @@
 //! the one who accepted. TAKP passes the clients' own records between
 //! them, and with them a client's answer turning a challenge down
 //! (`OP_DuelResponse`), where `EQEmu` and Quarm send a line of text.
-//! Nothing here answers a challenge yet.
+//!
+//! The player's answer to a challenge ([`titanium_duel_accept`](crate::socials::titanium_duel_accept),
+//! [`titanium_duel_decline`](crate::socials::titanium_duel_decline), [`eqmac_duel_accept`](crate::socials::eqmac_duel_accept),
+//! [`eqmac_duel_decline`](crate::socials::eqmac_duel_decline)) names the challenger, then the player, as each
+//! server's handler reads it: `EQEmu`'s `Handle_OP_DuelAccept` takes the
+//! challenger as `duel_initiator` and the player as `duel_target`, and its
+//! `Handle_OP_DuelDecline` tells the challenger in either order; TAKP's
+//! handlers take the player as the sender, and Quarm's
+//! `Handle_OP_DuelResponse2` and `Handle_OP_DuelResponse` read the same
+//! bytes as initiator and target. TAKP says the `EQMac` client sends
+//! `OP_RequestDuel` both when it challenges and when it accepts
+//! ([`eqmac_duel_request`](crate::socials::eqmac_duel_request)). The field order the official programs write
+//! is inferred from those handlers (checklist 6.492, pending R49-6a).
 //!
 //! Layout reference: `EQEmu`'s Titanium `RandomReq_Struct`,
 //! `RandomReply_Struct`, `Emote_Struct`, `EntityId_Struct` and
@@ -70,6 +82,14 @@ pub const EQMAC_REQUEST_DUEL_OPCODE: u16 = 0xcf40;
 pub const EQMAC_DUEL_ACCEPT_OPCODE: u16 = 0x5d41;
 /// TAKP's `OP_DuelResponse`: a client's answer turning a challenge down.
 pub const EQMAC_DUEL_RESPONSE_OPCODE: u16 = 0xd040;
+/// `OP_DuelDecline`: the player turns a challenge down (Titanium).
+pub const DUEL_DECLINE_OPCODE: u16 = 0x3bad;
+/// `OP_RandomReq` on TAKP and Quarm (Mac 0x41e7).
+pub const EQMAC_RANDOM_OPCODE: u16 = 0xe741;
+/// `OP_RandomReply` on TAKP and Quarm (Mac 0x4016).
+pub const EQMAC_ROLL_OPCODE: u16 = 0x1640;
+/// `OP_Assist` on TAKP and Quarm (Mac 0x4200), both ways.
+pub const EQMAC_ASSIST_OPCODE: u16 = 0x0042;
 
 /// The emote's text field; the server reads at most 512 bytes of it.
 const EMOTE_TEXT: usize = 1024;
@@ -167,6 +187,20 @@ pub enum DuelUpdate {
         /// Why.
         reason: DuelRefusal,
     },
+}
+
+/// A challenge to a duel the player may answer, once
+/// ([`crate::confirmations::ConsentKind::Duel`]). It has no local
+/// deadline: it stays open until the player answers, or zoning, death or
+/// logout, the duel's start or the challenger's refusal ends it. Whether
+/// the official prompt times out is not read (checklist 6.492, pending
+/// R49-6a), so none declines on the player's behalf.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct DuelQuestion {
+    /// Identity to return with the answer.
+    pub id: crate::confirmations::ConsentId,
+    /// The player who challenged.
+    pub challenger: u16,
 }
 
 /// Why a client turned a duel down, by TAKP's numbers for it.
@@ -332,6 +366,87 @@ pub fn titanium_yell() -> EncodedCommand {
     }
 }
 
+/// Titanium's yes to a challenge: `OP_DuelAccept` (8 bytes), the
+/// challenger then the player, each 32 bits (`Duel_Struct`). The order is
+/// what `EQEmu`'s handler takes (inferred, 6.492, pending R49-6a).
+#[must_use]
+pub fn titanium_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: DUEL_ACCEPT_OPCODE,
+        body: [u32::from(challenger), u32::from(own)]
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect(),
+    }
+}
+
+/// Titanium's no to a challenge: `OP_DuelDecline` (12 bytes,
+/// `DuelResponse_Struct`), the challenger, the player and a zero word.
+/// `EQEmu` tells the challenger in either order; this one is inferred
+/// (6.492, pending R49-6a).
+#[must_use]
+pub fn titanium_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: DUEL_DECLINE_OPCODE,
+        body: [u32::from(challenger), u32::from(own), 0]
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect(),
+    }
+}
+
+/// Titanium's challenge to a duel: `OP_RequestDuel` (8 bytes,
+/// `Duel_Struct`), the other player then the player, each 32 bits.
+/// `EQEmu`'s `Handle_OP_RequestDuel` swaps the two words and looks up the
+/// first as the one challenged, so it must name a spawn in the zone; the
+/// order the official program writes is inferred from that handler
+/// (checklist 6.492b, pending R49-6h).
+#[must_use]
+pub fn titanium_duel_request(other: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: REQUEST_DUEL_OPCODE,
+        body: [u32::from(other), u32::from(own)]
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect(),
+    }
+}
+
+/// `EQMac`'s `OP_RequestDuel` (4 bytes): the other player, then the player,
+/// each 16 bits (TAKP's `DuelChallenge_Struct`: the target, then the
+/// challenger, who must be the sender). The client sends it to challenge
+/// and, by TAKP's note, again to accept.
+#[must_use]
+pub fn eqmac_duel_request(other: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_REQUEST_DUEL_OPCODE,
+        body: [other.to_le_bytes(), own.to_le_bytes()].concat(),
+    }
+}
+
+/// `EQMac`'s yes to a challenge: `OP_DuelAccept` (Quarm's
+/// `OP_DuelResponse2`, 4 bytes), the challenger then the player, each 16
+/// bits.
+#[must_use]
+pub fn eqmac_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_DUEL_ACCEPT_OPCODE,
+        body: [challenger.to_le_bytes(), own.to_le_bytes()].concat(),
+    }
+}
+
+/// `EQMac`'s no to a challenge: `OP_DuelResponse` (6 bytes), the
+/// challenger, the player, the reason 0 (declined) and a byte of padding.
+#[must_use]
+pub fn eqmac_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
+    let mut body = [challenger.to_le_bytes(), own.to_le_bytes()].concat();
+    body.extend([0, 0]);
+    EncodedCommand {
+        opcode: EQMAC_DUEL_RESPONSE_OPCODE,
+        body,
+    }
+}
+
 /// Takes the target of the spawn assisted.
 #[must_use]
 pub fn assist(spawn_id: u16) -> EncodedCommand {
@@ -339,6 +454,47 @@ pub fn assist(spawn_id: u16) -> EncodedCommand {
         opcode: ASSIST_OPCODE,
         body: u32::from(spawn_id).to_le_bytes().to_vec(),
     }
+}
+
+/// Rolls a die on TAKP and Quarm: the same 8 bytes as Titanium's, low then
+/// high, on the `EQMac` opcode. Both servers' `Handle_OP_RandomReq` drop
+/// another size, order the ends, and roll 0 to 100 for two zeros (Quarm
+/// fc75fcf, TAKP 44afcbf).
+#[must_use]
+pub fn eqmac_random(low: u32, high: u32) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_RANDOM_OPCODE,
+        ..random(low, high)
+    }
+}
+
+/// Asks TAKP or Quarm for the target of the spawn assisted: the `EQMac`
+/// `EntityId_Struct`, the spawn in 2 bytes, the only size both servers'
+/// `Handle_OP_Assist` read.
+#[must_use]
+pub fn eqmac_assist(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_ASSIST_OPCODE,
+        body: spawn_id.to_le_bytes().to_vec(),
+    }
+}
+
+/// Reads TAKP's or Quarm's answer to an assist: the request sent back with
+/// one spawn in it. Both servers always answer: with the assistee's target
+/// when it has one and stands within 250 (any distance for a GM), else the
+/// player's own spawn, or -1 when `Combat:AssistNoTargetSelf` is off. The
+/// player's own spawn is the target named, as the server names it; -1 is
+/// none (whether the `EQMac` program treats its own spawn otherwise is
+/// unread, 6.585a).
+///
+/// # Errors
+/// Rejects any length but 2.
+pub(crate) fn eqmac_assist_answer(body: &[u8]) -> Result<Assisted> {
+    ensure!(body.len() == 2, "invalid EQMac assist length");
+    let target = u16::from_le_bytes([body[0], body[1]]);
+    Ok(Assisted {
+        target: (target != 0 && target != u16::MAX).then_some(target),
+    })
 }
 
 /// Decodes a die rolled nearby; None for any other opcode.
@@ -349,15 +505,26 @@ pub fn decode_roll(opcode: u16, body: &[u8]) -> Result<Option<Roll>> {
     if opcode != ROLL_OPCODE {
         return Ok(None);
     }
+    roll(body).map(Some)
+}
+
+/// Reads a roll's result, the server's 76-byte `RandomReply_Struct`, which
+/// stock `EQEmu` sends Titanium and `RoF2` alike with no encoder
+/// (`Client::Handle_OP_RandomRequest`): the low and high ends, the result,
+/// and the roller's name in 64 bytes.
+///
+/// # Errors
+/// Rejects any length but 76.
+pub(crate) fn roll(body: &[u8]) -> Result<Roll> {
     ensure!(body.len() == 12 + NAME, "invalid roll length");
     let field = &body[12..12 + NAME];
     let end = field.iter().position(|byte| *byte == 0).unwrap_or(NAME);
-    Ok(Some(Roll {
+    Ok(Roll {
         name: String::from_utf8_lossy(&field[..end]).into_owned(),
         low: word(body, 0),
         high: word(body, 4),
         result: word(body, 8),
-    }))
+    })
 }
 
 /// Decodes the server's answer to an assist; None for any other opcode.
@@ -368,11 +535,22 @@ pub fn decode_assist(opcode: u16, body: &[u8]) -> Result<Option<Assisted>> {
     if opcode != ASSIST_OPCODE {
         return Ok(None);
     }
+    assist_answer(body).map(Some)
+}
+
+/// Reads the server's answer to an assist, the 4-byte `EntityId_Struct`
+/// stock `EQEmu` sends Titanium and `RoF2` alike with no encoder
+/// (`Client::Handle_OP_Assist`, `Client::Handle_OP_AssistGroup`): the new
+/// target, or 0 for none.
+///
+/// # Errors
+/// Rejects any length but 4 and a target past 16 bits.
+pub(crate) fn assist_answer(body: &[u8]) -> Result<Assisted> {
     ensure!(body.len() == 4, "invalid assist length");
     let target = u16::try_from(word(body, 0))?;
-    Ok(Some(Assisted {
+    Ok(Assisted {
         target: (target != 0).then_some(target),
-    }))
+    })
 }
 
 /// What Titanium's messages from other players say: a yell for help, a
@@ -521,6 +699,75 @@ pub(crate) fn eqmac_refused(body: &[u8]) -> Result<DuelUpdate> {
 mod tests {
     use super::*;
     use crate::world::titanium_update;
+
+    #[test]
+    fn eqmac_rolls_and_assists_are_the_sizes_both_mac_servers_read() {
+        let roll = eqmac_random(5, 1);
+        assert_eq!(roll.opcode, 0xe741);
+        assert_eq!(roll.body, [5, 0, 0, 0, 1, 0, 0, 0]);
+        let assist = eqmac_assist(0x1234);
+        assert_eq!(assist.opcode, 0x0042);
+        assert_eq!(assist.body, [0x34, 0x12]);
+    }
+
+    #[test]
+    fn an_eqmac_assist_answer_names_a_spawn_the_player_or_none() {
+        assert_eq!(
+            eqmac_assist_answer(&[0x34, 0x12]).unwrap().target,
+            Some(0x1234)
+        );
+        // The player's own spawn, as the server names it.
+        assert_eq!(eqmac_assist_answer(&[7, 0]).unwrap().target, Some(7));
+        assert_eq!(eqmac_assist_answer(&[0xff, 0xff]).unwrap().target, None);
+        assert_eq!(eqmac_assist_answer(&[0, 0]).unwrap().target, None);
+        assert!(eqmac_assist_answer(&[1, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn a_titanium_challenge_names_the_other_player_then_the_player() {
+        let challenge = titanium_duel_request(0x1234, 7);
+        assert_eq!(challenge.opcode, 0x28e1);
+        assert_eq!(challenge.body, [0x34, 0x12, 0, 0, 7, 0, 0, 0]);
+    }
+
+    #[test]
+    fn duel_answers_name_the_challenger_then_the_player() {
+        let yes = titanium_duel_accept(0x1234, 7);
+        assert_eq!(yes.opcode, 0x1b09);
+        assert_eq!(yes.body, [0x34, 0x12, 0, 0, 7, 0, 0, 0]);
+        // What the challenger's client reads back is the same struct.
+        assert_eq!(
+            titanium_accepted(&yes.body).unwrap(),
+            DuelUpdate::Accepted {
+                challenger: 0x1234,
+                accepter: 7
+            }
+        );
+        let no = titanium_duel_decline(0x1234, 7);
+        assert_eq!(no.opcode, 0x3bad);
+        assert_eq!(no.body, [0x34, 0x12, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]);
+        let request = eqmac_duel_request(0x1234, 7);
+        assert_eq!(
+            (request.opcode, request.body),
+            (0xcf40, vec![0x34, 0x12, 7, 0])
+        );
+        let yes = eqmac_duel_accept(0x1234, 7);
+        assert_eq!(
+            (yes.opcode, yes.body.clone()),
+            (0x5d41, vec![0x34, 0x12, 7, 0])
+        );
+        let no = eqmac_duel_decline(0x1234, 7);
+        assert_eq!(no.opcode, 0xd040);
+        assert_eq!(no.body, [0x34, 0x12, 7, 0, 0, 0]);
+        // TAKP relays it as is: the challenger reads the player's refusal.
+        assert_eq!(
+            eqmac_refused(&no.body).unwrap(),
+            DuelUpdate::Refused {
+                from: 7,
+                reason: DuelRefusal::Declined
+            }
+        );
+    }
 
     #[test]
     fn requests_are_the_servers_structs() {

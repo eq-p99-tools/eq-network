@@ -390,6 +390,7 @@ impl Feature for Spellbook {
                 | ClientCommand::UseKnightAbility { .. }
                 | ClientCommand::UseDiscipline { .. }
                 | ClientCommand::UseItem(_)
+                | ClientCommand::UseBeltItem(_)
                 | ClientCommand::SetPosture { .. }
         ) {
             self.cancel("Movement, casting or posture changed", out)?;
@@ -538,7 +539,9 @@ impl Feature for Spellbook {
     fn explain(&mut self, message: &mut Message, world: &World) {
         if let Message::Event(WorldEvent::Inventory(update)) = message {
             let received = std::mem::replace(update, InventoryUpdate::Invalidated);
-            *update = self.consumption.reconcile(&world.inventory, received);
+            *update = self
+                .consumption
+                .reconcile(&world.inventory, received, Instant::now());
         }
     }
 }

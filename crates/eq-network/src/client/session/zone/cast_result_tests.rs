@@ -28,6 +28,8 @@ impl CastStream {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(session_id);
@@ -60,6 +62,7 @@ impl CastStream {
         inventory.apply(InventoryUpdate::Snapshot(vec![item]));
         self.world.inventory = inventory.into();
         ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: self.world.session_id,
             revision: self.world.inventory.revision(),

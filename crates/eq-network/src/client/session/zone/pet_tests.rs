@@ -348,3 +348,38 @@ fn p99_refuses_later_commands_and_leader_can_ask_a_visible_pet_without_owning_on
         None,
     );
 }
+
+#[test]
+fn mac_servers_send_every_order_they_know_on_their_own_opcode() {
+    for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+        let mut zone = Session::new(protocol, 5);
+        let pet = zone
+            .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
+            .identity();
+        assert!(pet.is_some(), "{protocol:?}");
+        for order in [PetCommand::TauntOn, PetCommand::NoCast, PetCommand::Focus] {
+            refused(
+                zone.send(zone.order(order, pet)),
+                "That pet command is unavailable on this server",
+            );
+        }
+        for order in [
+            PetCommand::BackOff,
+            PetCommand::Follow,
+            PetCommand::TauntOff,
+            PetCommand::Hold,
+            PetCommand::Feign,
+        ] {
+            let command = zone.order(order, pet);
+            let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+                apply_commands(&[command], &mut zone.features, &mut zone.world, out, true)
+            });
+            assert!(outcome.result.unwrap().is_none());
+            assert_eq!(
+                outcome.sent,
+                [pets::eqmac_command(order, None)],
+                "{order:?}"
+            );
+        }
+    }
+}

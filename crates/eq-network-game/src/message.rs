@@ -16,6 +16,15 @@ const PROFILE_OPCODE: u16 = 0x75df;
 /// What a zone packet says.
 #[derive(Debug)]
 pub enum Message {
+    /// The `EQMac` zone's string 5029 in place of a who answer: no player
+    /// matched ([`crate::who::eqmac::NO_RESULTS`]). The line itself still
+    /// reaches the host as chat; this tells the session the query was
+    /// answered.
+    WhoUnmatched,
+    /// TAKP or Quarm refused the player's split, with string 12328 or 13112
+    /// ([`crate::split::eqmac_refused`]); the additions that follow give the
+    /// coins back. The line itself still reaches the host as chat.
+    SplitRefused,
     /// Read-only Titanium AA facts, scoped and published by the server feature.
     AlternateAdvancement(crate::alternate_advancement::Update),
     /// News the host hears about too.
@@ -24,8 +33,15 @@ pub enum Message {
     TrainingReply(crate::training::TrainingReply),
     /// A correlated P99 assist selection for the session's target owner.
     AssistSelection(u16),
+    /// A skill's new value for a spawn (`EQMac`'s silent update), which is
+    /// the player's own only when the spawn is theirs.
+    SpawnSkill(crate::training::SpawnSkill),
     /// A decoded resurrection that still needs admission and consent checks.
     Resurrection(crate::resurrection::ResurrectionOffer),
+    /// TAKP's completion of an accepted resurrection: its kept offer with
+    /// the answer 1, which moves the player only for the offer this session
+    /// accepted (6.596).
+    ResurrectionCompleted(crate::resurrection::ResurrectionOffer),
     /// A decoded translocate that still needs admission and consent checks.
     TranslocateOffer(crate::confirmations::TranslocateOffer),
     /// A received Titanium completion that still needs exact consent correlation.
@@ -35,6 +51,21 @@ pub enum Message {
     /// feature keeping the merchant window tells the host the places that
     /// left and each item listed.
     MerchantList(Vec<crate::merchant::MerchantItem>),
+    /// A Titanium merchant item packet (`ItemPacketMerchant`), with the
+    /// serial number its header carries: a trader's item while the player
+    /// browses them, a merchant's otherwise. The feature keeping the browse
+    /// takes it as the trader's; else the merchant's feature takes it as
+    /// `WorldEvent::Merchant`, or as unreadable.
+    MerchantView {
+        /// The serial number, where the header carries one
+        /// ([`crate::merchant::view_serial`]).
+        serial: Option<u32>,
+        /// The packet's length, for a gap.
+        length: usize,
+        /// The item as the merchant's list reads it, or why it could not
+        /// be read.
+        item: Result<Box<crate::merchant::MerchantItem>, String>,
+    },
     /// Titanium merchant update whose wire entity must be checked against
     /// the open catalog or an outstanding transaction before publication.
     MerchantScoped {
@@ -66,10 +97,23 @@ pub enum Message {
     Bind(zoning::BindPoint),
     /// Ability-slot reuse received in a Titanium knight profile.
     KnightRefresh(std::time::Duration),
+    /// A Titanium task journal message, which the session's journal
+    /// checks against the entries it holds before the host hears of it.
+    Journal {
+        /// What it says.
+        news: crate::tasks::News,
+        /// Its body's length, for a gap that tells of it without its words.
+        length: usize,
+    },
     /// The server logging the character out.
     LoggedOut,
     /// A Titanium system notice identifying an invalid tradeskill recipe.
     TradeskillNoRecipe,
+    /// `EQMac`'s empty `OP_ClickObjectAction`: TAKP and Quarm answer every
+    /// close with it, after which the player uses no world container. What
+    /// the container held stays in it (`Object::Close` saves it), so its
+    /// places leave the player's view (6.598).
+    ContainerReleased,
     /// The server refusing a scribe or memorization because the player has
     /// not reached the spell's level: `EQEmu`'s `SPELL_LEVEL_TO_LOW` (string
     /// 12048), the only answer its `OPMemorizeSpell` gives before returning.
@@ -127,6 +171,151 @@ impl fmt::Display for Part {
     }
 }
 
+/// The numbers [`rof2`] reads, for the session's coverage table.
+pub const ROF2_READS: [u16; 67] = [
+    crate::rof2_player::SPAWN_OPCODE,
+    crate::rof2_player::POSITION_OPCODE,
+    crate::rof2_player::DESPAWN_OPCODE,
+    crate::rof2_looks::APPEARANCE_OPCODE,
+    crate::rof2_looks::SIZE_OPCODE,
+    crate::rof2_looks::HIT_POINTS_OPCODE,
+    crate::rof2_looks::HEALTH_OPCODE,
+    crate::rof2_looks::WEAR_CHANGE_OPCODE,
+    crate::rof2_looks::ANIMATION_OPCODE,
+    crate::rof2_looks::STATES_ADDED_OPCODE,
+    crate::rof2_looks::STATES_REMOVED_OPCODE,
+    crate::rof2_news::DEATH_OPCODE,
+    crate::rof2_news::LEVEL_OPCODE,
+    crate::rof2_news::EXPERIENCE_OPCODE,
+    crate::rof2_news::STAMINA_OPCODE,
+    crate::rof2_news::MONEY_OPCODE,
+    crate::rof2_news::TIME_OPCODE,
+    crate::rof2_news::MANA_OPCODE,
+    crate::rof2_news::DAMAGE_OPCODE,
+    crate::rof2_news::CONSIDER_OPCODE,
+    crate::rof2_news::SKILL_OPCODE,
+    crate::rof2_casting::BEGIN_CAST_OPCODE,
+    crate::rof2_casting::ACTION_OPCODE,
+    crate::rof2_casting::INTERRUPT_OPCODE,
+    crate::rof2_casting::STUN_OPCODE,
+    crate::rof2_casting::ILLUSION_OPCODE,
+    crate::rof2_casting::FACE_OPCODE,
+    crate::rof2_buffs::UPDATE_OPCODE,
+    crate::rof2_buffs::ICONS_OPCODE,
+    crate::rof2_buffs::TARGET_ICONS_OPCODE,
+    crate::rof2_buffs::PET_OPCODE,
+    crate::rof2_spellbook::MEMORIZE_OPCODE,
+    crate::rof2_spellbook::SWAP_OPCODE,
+    crate::rof2_spellbook::DELETE_OPCODE,
+    crate::rof2_pools::MANA_OPCODE,
+    crate::rof2_pools::ENDURANCE_OPCODE,
+    crate::rof2_pools::MANA_PERCENT_OPCODE,
+    crate::rof2_pools::ENDURANCE_PERCENT_OPCODE,
+    crate::rof2_world::SPAWN_DOOR_OPCODE,
+    crate::rof2_world::MOVE_DOOR_OPCODE,
+    crate::rof2_world::GROUND_SPAWN_OPCODE,
+    crate::rof2_world::CLICK_OBJECT_OPCODE,
+    crate::rof2_world::WEATHER_OPCODE,
+    crate::rof2_socials::ROLL_OPCODE,
+    crate::rof2_socials::ASSIST_OPCODE,
+    crate::rof2_socials::YELL_OPCODE,
+    crate::rof2_socials::LEVEL_APPEARANCE_OPCODE,
+    crate::rof2_socials::CAMERA_EFFECT_OPCODE,
+    crate::rof2_socials::PLAY_MP3_OPCODE,
+    crate::rof2_socials::SPELL_EFFECT_OPCODE,
+    crate::rof2_answers::TARGET_OPCODE,
+    crate::rof2_answers::TARGET_OF_TARGET_OPCODE,
+    crate::rof2_answers::CHARM_OPCODE,
+    crate::rof2_answers::CASH_REWARD_OPCODE,
+    crate::rof2_answers::LINKED_REUSE_OPCODE,
+    crate::rof2_answers::BEGGING_OPCODE,
+    crate::rof2_answers::PICK_POCKET_OPCODE,
+    crate::rof2_answers::BIND_WOUND_OPCODE,
+    crate::rof2_notices::SOUND_OPCODE,
+    crate::rof2_notices::RENAME_OPCODE,
+    crate::rof2_notices::NEW_TITLES_OPCODE,
+    crate::rof2_notices::BANKER_CHANGE_OPCODE,
+    crate::rof2_loot_titles::MONEY_OPCODE,
+    crate::rof2_loot_titles::LOOT_COMPLETE_OPCODE,
+    crate::rof2_loot_titles::SURNAME_OPCODE,
+    crate::rof2_loot_titles::TITLE_LIST_OPCODE,
+    crate::rof2_loot_titles::TITLE_OPCODE,
+];
+
+/// What one `RoF2` zone packet says. Only its spawn records (6.510), its
+/// spawns' movement and removal (6.514), how they look and how hurt they
+/// are (6.518), the player's own news and the combat records (6.519), and
+/// casting, stuns and illusions (6.522), buffs (6.527), the spell book and
+/// gems (6.532), the mana and endurance pools (6.538), doors, ground objects
+/// and the weather (6.539), rolls, assists, yells and effects (6.541), and
+/// targets, charms, rewards, reuse and skill answers (6.544), and quest
+/// rewards, renames, new titles and the banker's change (6.549), and corpse
+/// money and the loot close, the surname answer and titles (6.552) are read
+/// yet; a body a reader refuses is unreadable, told by its opcode and length
+/// only.
+#[must_use]
+pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
+    match opcode {
+        crate::rof2_player::SPAWN_OPCODE => vec![crate::rof2_player::spawn(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |spawn| Message::Event(WorldEvent::Spawns(vec![spawn])),
+        )],
+        crate::rof2_player::POSITION_OPCODE => vec![crate::rof2_player::position(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
+        crate::rof2_player::DESPAWN_OPCODE => vec![crate::rof2_player::despawn(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
+        _ => rof2_readers(opcode, body).unwrap_or_default(),
+    }
+}
+
+/// What `RoF2`'s readers past the spawn records say of a packet, each with
+/// Titanium's part for its message; None when no reader takes its opcode.
+fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
+    let events = |read: anyhow::Result<Option<Vec<WorldEvent>>>, part| match read {
+        Ok(Some(events)) => Some(events.into_iter().map(Message::Event).collect()),
+        Ok(None) => None,
+        Err(error) => Some(vec![unreadable(part, &error)]),
+    };
+    let one = |read: anyhow::Result<Option<WorldEvent>>, part| {
+        events(read.map(|event| event.map(|event| vec![event])), part)
+    };
+    let spell = |read: anyhow::Result<Option<crate::spells::SpellUpdate>>| {
+        one(
+            read.map(|update| update.map(WorldEvent::Spell)),
+            Part::Spells,
+        )
+    };
+    events(crate::rof2_news::read(opcode, body), Part::World)
+        .or_else(|| one(crate::rof2_looks::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_buffs::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_pools::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_world::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_socials::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_answers::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_notices::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_loot_titles::read(opcode, body), Part::World))
+        .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
+        .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
+}
+
+/// What one of `RoF2`'s casting messages says, with Titanium's parts: a
+/// spell's beginning or interruption is the spells part's, the rest the
+/// world's. None for another opcode.
+fn rof2_casting(opcode: u16, body: &[u8]) -> Option<Message> {
+    let part = match opcode {
+        crate::rof2_casting::BEGIN_CAST_OPCODE | crate::rof2_casting::INTERRUPT_OPCODE => {
+            Part::Spells
+        }
+        _ => Part::World,
+    };
+    match crate::rof2_casting::read(opcode, body) {
+        Ok(None) => None,
+        Ok(Some(crate::rof2_casting::Casting::Event(event))) => Some(Message::Event(event)),
+        Ok(Some(crate::rof2_casting::Casting::Action(read))) => Some(action(Ok(read))),
+        Err(error) => Some(unreadable(part, &error)),
+    }
+}
+
 /// What one Titanium zone packet says. A mana update is both a spell notice
 /// and a change in resources, so one packet can say two things; the player's
 /// profile says what is in their spellbook, which buffs they wear and the
@@ -141,9 +330,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         Err(error) => messages.push(unreadable(Part::Spells, &error)),
     }
     let message = match opcode {
-        crate::alternate_advancement::DEFINITION_OPCODE
-        | crate::alternate_advancement::SELECTIONS_OPCODE
-        | crate::alternate_advancement::CLEAR_OPCODE => {
+        opcode if crate::alternate_advancement::is_titanium(opcode) => {
             titanium_aa_message(opcode, body, &mut messages)
         }
         zoning::POINTS_OPCODE => zoning::ZonePoints::decode(body).map_or_else(
@@ -221,42 +408,87 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             }
         }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
+        crate::bazaar::SEARCH_OPCODE => return bazaar(body, messages),
+        crate::bazaar::BROWSE_OPCODE => bazaar_event(crate::bazaar::admission(body)),
+        crate::bazaar::SIGN_OPCODE => bazaar_event(crate::bazaar::sign(body)),
+        crate::bazaar::SHOP_END_OPCODE => bazaar_event(crate::bazaar::shop_end(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
         }
-        _ => match inventory::decode(opcode, body) {
-            Ok(Some(update)) => Message::Event(WorldEvent::Inventory(update)),
-            Err(error) => unreadable(Part::Inventory, &error),
-            Ok(None) => match crate::world::titanium_update(opcode, body) {
-                Ok(Some(event)) => Message::Event(event),
-                Ok(None) => return messages,
-                Err(error) => unreadable(Part::World, &error),
-            },
+        _ => match titanium_other(opcode, body) {
+            Some(message) => message,
+            None => return messages,
         },
     };
     messages.push(message);
     messages
 }
 
+/// What a Titanium packet no other reader took says: the task journal, the
+/// inventory, or the rest of the world; None when nothing reads it.
+fn titanium_other(opcode: u16, body: &[u8]) -> Option<Message> {
+    if let Some(news) = crate::tasks::titanium(opcode, body) {
+        return Some(news.map_or_else(
+            |error| unreadable(Part::World, &error),
+            |news| Message::Journal {
+                news,
+                length: body.len(),
+            },
+        ));
+    }
+    match inventory::decode(opcode, body) {
+        Ok(Some(update)) => Some(Message::Event(WorldEvent::Inventory(update))),
+        Err(error) => Some(unreadable(Part::Inventory, &error)),
+        Ok(None) => match crate::world::titanium_update(opcode, body) {
+            Ok(Some(WorldEvent::Merchant(crate::merchant::MerchantUpdate::Item(item)))) => {
+                Some(Message::MerchantView {
+                    serial: crate::merchant::view_serial(body),
+                    length: body.len(),
+                    item: Ok(item),
+                })
+            }
+            Ok(Some(event)) => Some(Message::Event(event)),
+            Ok(None) => None,
+            // Every reader before the merchant's leaves a merchant item
+            // packet alone, so its fault is the merchant's.
+            Err(error) if crate::merchant::is_item_packet(opcode, body) => {
+                Some(Message::MerchantView {
+                    serial: crate::merchant::view_serial(body),
+                    length: body.len(),
+                    item: Err(error.to_string()),
+                })
+            }
+            Err(error) => Some(unreadable(Part::World, &error)),
+        },
+    }
+}
+
 fn titanium_aa_message(opcode: u16, body: &[u8], messages: &mut Vec<Message>) -> Message {
     match crate::alternate_advancement::titanium(opcode, body) {
         Ok(update) => Message::AlternateAdvancement(update),
-        Err(error) => {
-            messages.push(unreadable(Part::World, &error));
-            Message::AlternateAdvancement(crate::alternate_advancement::invalidated(opcode, body))
-        }
+        Err(error) => match crate::alternate_advancement::invalidated(opcode, body) {
+            Some(update) => {
+                messages.push(unreadable(Part::World, &error));
+                Message::AlternateAdvancement(update)
+            }
+            None => unreadable(Part::World, &error),
+        },
     }
 }
 
 fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Message {
     match crate::alternate_advancement::titanium_profile(body) {
-        Ok(update) => messages.push(Message::AlternateAdvancement(update)),
+        Ok(updates) => messages.extend(updates.map(Message::AlternateAdvancement)),
         Err(error) => {
             messages.push(unreadable(Part::World, &error));
-            messages.push(Message::AlternateAdvancement(
-                crate::alternate_advancement::Update::Selections(None),
-            ));
+            messages.extend(
+                [
+                    crate::alternate_advancement::Update::Selections(None),
+                    crate::alternate_advancement::Update::Points(None),
+                ]
+                .map(Message::AlternateAdvancement),
+            );
         }
     }
     messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
@@ -267,6 +499,10 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         Ok(group) => messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update)))),
         Err(error) => messages.push(unreadable(Part::World, &error)),
     }
+    messages.push(crate::guild_bank::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |banker| Message::Event(WorldEvent::GuildBank(banker)),
+    ));
     messages.push(crate::buffs::titanium_profile(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
@@ -283,6 +519,18 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         |error| unreadable(Part::World, &error),
         |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
     ));
+    // A bad set or belt field withdraws only these two, and says they are
+    // unknown (6.559, 6.564).
+    match crate::bandolier::titanium_profile(body) {
+        Ok((sets, belt)) => messages.extend([
+            Message::Event(WorldEvent::Bandoliers(Box::new(sets))),
+            Message::Event(WorldEvent::PotionBelt(Box::new(belt))),
+        ]),
+        Err(error) => messages.extend([
+            unreadable(Part::World, &error),
+            Message::Event(WorldEvent::BandoliersUnknown),
+        ]),
+    }
     messages.push(crate::money::titanium_elsewhere(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |(cursor, bank)| {
@@ -293,6 +541,10 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
                 offered: crate::world::Coins::default(),
             })
         },
+    ));
+    messages.push(crate::world::titanium_bind_zone(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |zone_id| Message::Event(WorldEvent::BoundIn { zone_id }),
     ));
     spells::SpellBook::titanium_profile(body).map_or_else(
         |error| unreadable(Part::Spells, &error),
@@ -358,12 +610,26 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             Message::ZonePoints,
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        crate::bazaar::eqmac::SEARCH_OPCODE => vec![eqmac_bazaar(body)],
+        opcode if crate::alternate_advancement::is_eqmac(opcode) => {
+            match crate::alternate_advancement::eqmac(opcode, body) {
+                Ok(update) => vec![Message::AlternateAdvancement(update)],
+                Err(error) => std::iter::once(unreadable(Part::World, &error))
+                    .chain(
+                        crate::alternate_advancement::eqmac_invalidated(opcode)
+                            .map(Message::AlternateAdvancement),
+                    )
+                    .collect(),
+            }
+        }
         crate::buffs::EQMAC_ACTION_OPCODE => vec![action(crate::buffs::eqmac_action(body))],
         crate::quarm::ZONE_NEW => crate::clock::eqmac_zone_sky(body)
             .map(sky)
             .into_iter()
             .chain([described(crate::zones::eqmac_description(body))])
             .collect(),
+        _ if let Some(message) = eqmac_people(opcode, body) => vec![message],
+        _ if let Some(message) = eqmac_training(opcode, body) => vec![message],
         crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
@@ -384,7 +650,14 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
                 ),
             ]
         }
+        crate::who::eqmac::FORMATTED_OPCODE if crate::who::eqmac::unmatched(opcode, body) => {
+            vec![Message::WhoUnmatched]
+        }
+        crate::who::eqmac::FORMATTED_OPCODE if crate::split::eqmac_refused(opcode, body) => {
+            vec![Message::SplitRefused]
+        }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
+        _ if let Some(message) = eqmac_crafts_and_boats(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
         _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {
@@ -396,6 +669,68 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             ),
         },
     }
+}
+
+/// What TAKP and Quarm say of other players: a die rolled near the player,
+/// the answer to an assist, a consent given to the player, and an offer
+/// to resurrect the player and TAKP's completion of it (6.585, 6.591,
+/// 6.596); None for other messages.
+fn eqmac_people(opcode: u16, body: &[u8]) -> Option<Message> {
+    let read = |result: anyhow::Result<WorldEvent>| {
+        result.map_or_else(|error| unreadable(Part::World, &error), Message::Event)
+    };
+    Some(match opcode {
+        crate::corpses::EQMAC_CONSENT_RESPONSE_OPCODE => {
+            read(crate::corpses::decode_consent(body).map(WorldEvent::Consent))
+        }
+        crate::socials::EQMAC_ROLL_OPCODE => read(crate::socials::roll(body).map(WorldEvent::Roll)),
+        crate::socials::EQMAC_ASSIST_OPCODE => {
+            read(crate::socials::eqmac_assist_answer(body).map(WorldEvent::Assisted))
+        }
+        crate::resurrection::EQMAC_OFFER_OPCODE => crate::resurrection::eqmac_offer(body)
+            .map_or_else(
+                |error| unreadable(Part::World, &error),
+                Message::Resurrection,
+            ),
+        crate::resurrection::EQMAC_COMPLETE_OPCODE => crate::resurrection::eqmac_completion(body)
+            .map_or_else(
+                |error| unreadable(Part::World, &error),
+                Message::ResurrectionCompleted,
+            ),
+        _ => return None,
+    })
+}
+
+/// A guildmaster's answer and a skill's silent update on TAKP and Quarm
+/// (6.597); None for other messages.
+fn eqmac_training(opcode: u16, body: &[u8]) -> Option<Message> {
+    Some(match opcode {
+        crate::training::EQMAC_OFFER_OPCODE => crate::training::eqmac_reply(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            Message::TrainingReply,
+        ),
+        crate::training::EQMAC_SKILL_OPCODE => crate::training::eqmac_skill(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::SpawnSkill),
+        _ => return None,
+    })
+}
+
+/// TAKP's and Quarm's combine answer and close answer (6.598) and boat
+/// control echo (6.602); None for other messages.
+fn eqmac_crafts_and_boats(opcode: u16, body: &[u8]) -> Option<Message> {
+    Some(match opcode {
+        crate::objects::eqmac::ACTION_OPCODE if body.is_empty() => Message::ContainerReleased,
+        crate::boats::EQMAC_OPCODE => crate::boats::ControlBoat::eqmac(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |packet| Message::Event(WorldEvent::BoatControl(packet)),
+        ),
+        crate::tradeskills::EQMAC_COMBINE_OPCODE => crate::tradeskills::eqmac_decode(body)
+            .map_or_else(
+                |error| unreadable(Part::World, &error),
+                |answer| Message::Event(WorldEvent::Combine(answer)),
+            ),
+        _ => return None,
+    })
 }
 
 /// Corpse views are decoded before inventory packets, so their places can
@@ -451,10 +786,21 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
         |error| unreadable(Part::World, &error),
         |value| Message::Event(WorldEvent::Nourishment(value)),
     ));
-    messages.push(
-        crate::quarm::bind_point(body)
-            .map_or_else(|error| unreadable(Part::World, &error), Message::Bind),
-    );
+    messages.push(crate::quarm::profile_auto_split(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |on| Message::Event(WorldEvent::AutoSplit(on)),
+    ));
+    match crate::quarm::bind_point(body) {
+        // The move home after death takes the whole point; the client is
+        // told its zone, as Titanium's profile tells it (6.524).
+        Ok(bind) => messages.extend([
+            Message::Bind(bind),
+            Message::Event(WorldEvent::BoundIn {
+                zone_id: bind.zone_id,
+            }),
+        ]),
+        Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
     // The profile lists the player's group as each zone admits them.
     match crate::quarm::profile_group(body) {
         Ok(group) => {
@@ -462,7 +808,55 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
         }
         Err(error) => messages.push(unreadable(Part::World, &error)),
     }
+    // Its AA array and points (6.548), last.
+    match crate::quarm::profile_aa(body) {
+        Ok(updates) => messages.extend(updates.map(Message::AlternateAdvancement)),
+        Err(error) => {
+            messages.push(unreadable(Part::World, &error));
+            messages.extend(
+                [
+                    crate::alternate_advancement::Update::MacSelections(None),
+                    crate::alternate_advancement::Update::MacPoints(None),
+                ]
+                .map(Message::AlternateAdvancement),
+            );
+        }
+    }
+    // The boat the player rode, which both servers keep across zones (6.602).
+    messages.push(Message::VehicleName(crate::quarm::profile_vehicle(body)));
     messages
+}
+
+/// What the server's `OP_BazaarSearch` adds to the packet's messages: an
+/// event; nothing for the parcel costs `EQEmu` sends after a search's
+/// results, which only `RoF` and later use (the coverage table's needless
+/// part); or a kind no server is known to send Titanium.
+fn bazaar(body: &[u8], mut messages: Vec<Message>) -> Vec<Message> {
+    messages.extend(match crate::bazaar::answer(body) {
+        Ok(crate::bazaar::Answer::Event(event)) => Some(Message::Event(WorldEvent::Bazaar(event))),
+        Ok(crate::bazaar::Answer::DeliveryCosts) => None,
+        Ok(crate::bazaar::Answer::Other(kind)) => Some(Message::UnknownKind(kind)),
+        Err(error) => Some(unreadable(Part::World, &error)),
+    });
+    messages
+}
+
+/// What a Mac-era server's `OP_BazaarSearch` says: an event, a kind no
+/// server is known to send, or why it could not be read.
+fn eqmac_bazaar(body: &[u8]) -> Message {
+    match crate::bazaar::eqmac::answer(body) {
+        Ok(crate::bazaar::eqmac::Answer::Event(event)) => Message::Event(WorldEvent::Bazaar(event)),
+        Ok(crate::bazaar::eqmac::Answer::Other(kind)) => Message::UnknownKind(kind.into()),
+        Err(error) => unreadable(Part::World, &error),
+    }
+}
+
+/// A Bazaar event, or why its record could not be read.
+fn bazaar_event(event: anyhow::Result<crate::bazaar::BazaarEvent>) -> Message {
+    event.map_or_else(
+        |error| unreadable(Part::World, &error),
+        |event| Message::Event(WorldEvent::Bazaar(event)),
+    )
 }
 
 /// What an action says: a spell's, the spin, or a kind no server is known
@@ -527,6 +921,186 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_bandolier_field_withdraws_only_the_sets_and_belt() {
+        let has = |messages: &[Message], test: fn(&WorldEvent) -> bool| {
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::Event(event) if test(event)))
+        };
+        let profile = vec![0; 19592];
+        let read = titanium(PROFILE_OPCODE, &profile);
+        assert!(has(
+            &read,
+            |event| matches!(event, WorldEvent::Bandoliers(sets) if sets.iter().all(Option::is_none))
+        ));
+        assert!(has(&read, |event| matches!(
+            event,
+            WorldEvent::PotionBelt(_)
+        )));
+        let unreadable = |messages: &[Message]| {
+            messages
+                .iter()
+                .filter(|message| matches!(message, Message::Unreadable { .. }))
+                .count()
+        };
+        let before = unreadable(&read);
+        // The first set's name with no end within its 32 bytes.
+        let mut bad = profile;
+        bad[6164..6196].fill(b'a');
+        let read = titanium(PROFILE_OPCODE, &bad);
+        assert_eq!(unreadable(&read), before + 1);
+        assert!(!has(&read, |event| matches!(
+            event,
+            WorldEvent::Bandoliers(_) | WorldEvent::PotionBelt(_)
+        )));
+        assert!(has(&read, |event| matches!(
+            event,
+            WorldEvent::BandoliersUnknown
+        )));
+        assert!(has(&read, |event| matches!(event, WorldEvent::Coins(_))));
+        assert!(has(&read, |event| matches!(
+            event,
+            WorldEvent::BuffSnapshot(_)
+        )));
+    }
+
+    #[test]
+    fn a_merchant_item_packet_carries_its_serial() {
+        let mut fields = vec!["0".to_owned(); 159];
+        fields[1] = "Test ration".into();
+        fields[4] = "13005".into();
+        fields[5] = "25".into();
+        fields[11] = "500".into();
+        fields[154] = "-1".into();
+        let mut text = format!("1|0|30|1250|1|0|90210|0|0|0|0|\"{}\"", fields.join("|"));
+        text.push_str(&"|".repeat(10));
+        text.push('\0');
+        let mut body = crate::merchant::ITEM_PACKET_KIND.to_le_bytes().to_vec();
+        body.extend_from_slice(text.as_bytes());
+        let [Message::MerchantView {
+            serial: Some(90_210),
+            length,
+            item: Ok(item),
+        }] = &titanium(0x3397, &body)[..]
+        else {
+            panic!("a merchant view");
+        };
+        assert_eq!((item.slot, item.price, item.quantity), (30, 1250, 1));
+        assert_eq!(*length, body.len());
+        // A merchant item the merchant's reader refuses is still the
+        // merchant's view, so a browse can end on it.
+        let broken = &body[..20];
+        assert!(matches!(
+            titanium(0x3397, broken)[..],
+            [Message::MerchantView {
+                serial: None,
+                length: 20,
+                item: Err(_),
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_trader_click_sign_and_shop_end_are_bazaar_events() {
+        let answer: Vec<u8> = [312_u32, 0, 0, 1]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert!(matches!(
+            titanium(crate::bazaar::BROWSE_OPCODE, &answer)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::Admitted {
+                    trader: 312,
+                    approved: true
+                }
+            ))]
+        ));
+        assert!(matches!(
+            titanium(crate::bazaar::BROWSE_OPCODE, &answer[..8])[..],
+            [Message::Unreadable { .. }]
+        ));
+        let mut sign = vec![0; crate::bazaar::SIGN_LENGTH];
+        sign[0] = 40;
+        sign[4] = 1;
+        assert!(matches!(
+            titanium(crate::bazaar::SIGN_OPCODE, &sign)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::TraderSign {
+                    spawn: 40,
+                    on: true
+                }
+            ))]
+        ));
+        assert!(matches!(
+            titanium(crate::bazaar::SHOP_END_OPCODE, &[])[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::ShopEnded
+            ))]
+        ));
+    }
+
+    #[test]
+    fn a_bazaar_answer_is_an_event_nothing_a_kind_or_unreadable() {
+        let mut done = vec![0; 20];
+        done[0] = 12;
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &done)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::SearchDone
+            ))]
+        ));
+        let mut costs = vec![0; 14];
+        costs[0] = 29;
+        assert!(titanium(crate::bazaar::SEARCH_OPCODE, &costs).is_empty());
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &[22, 0, 0, 0])[..],
+            [Message::UnknownKind(22)]
+        ));
+        let mut short_row = vec![0; crate::bazaar::ROW_LENGTH - 1];
+        short_row[0] = 7;
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &short_row)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn an_eqmac_bazaar_answer_is_a_row_the_end_a_kind_or_unreadable() {
+        let mut row = vec![0; crate::bazaar::eqmac::ROW_LENGTH];
+        row[0] = 7;
+        row[2] = 1;
+        row[12..18].copy_from_slice(b"Rusty ");
+        assert!(matches!(
+            &eqmac(0x1142, &row)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::Results(rows)
+            ))] if rows.len() == 1
+        ));
+        let mut done = vec![0; crate::bazaar::eqmac::DONE_LENGTH];
+        done[0] = 12;
+        assert!(matches!(
+            quarm(0x1142, &done)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::SearchDone
+            ))]
+        ));
+        assert!(matches!(
+            eqmac(0x1142, &[22, 0, 0, 0])[..],
+            [Message::UnknownKind(22)]
+        ));
+        assert!(matches!(
+            eqmac(0x1142, &row[..crate::bazaar::eqmac::ROW_LENGTH - 1])[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
     fn an_action_is_a_spells_the_spin_or_a_kind_no_server_sends() {
         let mut spin = [0u8; 31];
         spin[..4].copy_from_slice(&[0x0b, 0x0a, 0x0b, 0x0a]);
@@ -556,6 +1130,32 @@ mod tests {
     }
 
     #[test]
+    fn aa_timers_and_experience_are_read_and_an_unreadable_one_says_so() {
+        use crate::alternate_advancement::{Update, PROGRESS_OPCODE, TIMER_OPCODE};
+        assert!(matches!(
+            titanium(TIMER_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::Timer(_))]
+        ));
+        assert!(matches!(
+            titanium(PROGRESS_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::Progress(Some(_)))]
+        ));
+        // A short timer is only unreadable; short experience also withdraws
+        // the last.
+        assert!(matches!(
+            &titanium(TIMER_OPCODE, &[0; 11])[..],
+            [Message::Unreadable { part: Part::World, error }] if error.ends_with("length 11")
+        ));
+        assert!(matches!(
+            &titanium(PROGRESS_OPCODE, &[0; 13])[..],
+            [
+                Message::Unreadable { part: Part::World, error },
+                Message::AlternateAdvancement(Update::Progress(None)),
+            ] if error.ends_with("length 13")
+        ));
+    }
+
+    #[test]
     fn the_profile_says_what_is_in_the_spellbook() {
         let mut profile = vec![0; 19592];
         profile[12940..12946].copy_from_slice(b"Tester");
@@ -565,13 +1165,20 @@ mod tests {
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(Some(_))),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(Some(_))),
                 Message::VehicleName(None),
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
+                Message::Event(WorldEvent::GuildBank(
+                    crate::guild_bank::GuildBankUpdate::Banker(false)
+                )),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
                 Message::Event(WorldEvent::AutoSplit(true)),
                 Message::Event(WorldEvent::Nourishment(_)),
+                Message::Event(WorldEvent::Bandoliers(_)),
+                Message::Event(WorldEvent::PotionBelt(_)),
                 Message::Event(WorldEvent::CoinsElsewhere { .. }),
+                Message::Event(WorldEvent::BoundIn { zone_id: 0 }),
                 Message::Event(WorldEvent::SpellBook(book)),
             ] if book.slots()[0] == Some(73)
         ));
@@ -585,6 +1192,7 @@ mod tests {
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(
                     None
                 )),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(None)),
                 Message::VehicleName(None),
                 Message::Unreadable {
                     part: Part::World,
@@ -602,6 +1210,19 @@ mod tests {
                     part: Part::World,
                     ..
                 },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Event(WorldEvent::BandoliersUnknown),
                 Message::Unreadable {
                     part: Part::World,
                     ..
@@ -616,6 +1237,15 @@ mod tests {
                 }
             ]
         ));
+        // The primary bind's zone is the first word of `binds[5]` at 24;
+        // the second bind is not it (6.524).
+        let mut profile = vec![0; 19592];
+        profile[24..28].copy_from_slice(&29u32.to_le_bytes());
+        profile[44..48].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(crate::world::titanium_bind_zone(&profile).unwrap(), 29);
+        profile[24..28].copy_from_slice(&70_000u32.to_le_bytes());
+        assert!(crate::world::titanium_bind_zone(&profile).is_err());
+        assert!(crate::world::titanium_bind_zone(&profile[..24]).is_err());
     }
 
     #[test]
@@ -892,7 +1522,8 @@ mod tests {
             ]
         ));
         // A profile that cannot be read leaves the spells, the coins, the
-        // bind point and the group unknown.
+        // nourishment, the automatic splitting, the bind point, the group
+        // and the AA unknown, and names no boat.
         assert!(matches!(
             eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
             [
@@ -916,7 +1547,120 @@ mod tests {
                     part: Part::World,
                     ..
                 },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::MacSelections(
+                    None
+                )),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::MacPoints(
+                    None
+                )),
+                Message::VehicleName(None),
             ]
+        ));
+    }
+
+    #[test]
+    fn eqmac_rolls_assists_and_split_refusals_are_read() {
+        // A die rolled near the player, and the server's answer to an assist
+        // (6.585); a malformed one is a gap, never a crash.
+        let mut rolled = [0; 76];
+        rolled[0..4].copy_from_slice(&1u32.to_le_bytes());
+        rolled[4..8].copy_from_slice(&6u32.to_le_bytes());
+        rolled[8..12].copy_from_slice(&4u32.to_le_bytes());
+        rolled[12..18].copy_from_slice(b"Roller");
+        assert!(matches!(
+            &eqmac(crate::socials::EQMAC_ROLL_OPCODE, &rolled)[..],
+            [Message::Event(WorldEvent::Roll(roll))]
+                if roll.low == 1 && roll.high == 6 && roll.result == 4 && roll.name == "Roller"
+        ));
+        assert!(matches!(
+            &eqmac(crate::socials::EQMAC_ASSIST_OPCODE, &[0x34, 0x12])[..],
+            [Message::Event(WorldEvent::Assisted(
+                crate::socials::Assisted {
+                    target: Some(0x1234)
+                }
+            ))]
+        ));
+        for (opcode, body) in [
+            (crate::socials::EQMAC_ROLL_OPCODE, &rolled[..75]),
+            (crate::socials::EQMAC_ASSIST_OPCODE, &[0x34, 0x12, 0, 0][..]),
+        ] {
+            assert!(matches!(
+                eqmac(opcode, body)[..],
+                [Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }]
+            ));
+        }
+        // A consent given to the player, as only the one consented hears it
+        // on these servers (6.591).
+        let mut consent = [0; 161];
+        consent[..6].copy_from_slice(b"Helper");
+        consent[64..69].copy_from_slice(b"Owner");
+        consent[128] = 1;
+        consent[129..138].copy_from_slice(b"all zones");
+        assert!(matches!(
+            &eqmac(crate::corpses::EQMAC_CONSENT_RESPONSE_OPCODE, &consent)[..],
+            [Message::Event(WorldEvent::Consent(given))]
+                if given.granted == "Helper" && given.owner == "Owner" && given.given
+                    && given.zone == "all zones"
+        ));
+        assert!(matches!(
+            eqmac(
+                crate::corpses::EQMAC_CONSENT_RESPONSE_OPCODE,
+                &consent[..160]
+            )[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+        // A split refused, as the line's number says; the line itself goes
+        // as chat.
+        let mut refused = vec![0, 0];
+        refused.extend_from_slice(&12328u16.to_le_bytes());
+        refused.extend_from_slice(&[0; 8]);
+        assert!(matches!(
+            eqmac(crate::who::eqmac::FORMATTED_OPCODE, &refused)[..],
+            [Message::SplitRefused]
+        ));
+    }
+
+    #[test]
+    fn eqmac_aa_packets_are_read_and_an_unreadable_one_says_so() {
+        use crate::alternate_advancement::{
+            Update, EQMAC_PROGRESS_OPCODE, EQMAC_RANKS_OPCODE, EQMAC_TIMER_OPCODE,
+        };
+        assert!(matches!(
+            eqmac(EQMAC_RANKS_OPCODE, &[0; 227])[..],
+            [Message::AlternateAdvancement(Update::MacRanks(Some(_)))]
+        ));
+        assert!(matches!(
+            eqmac(EQMAC_PROGRESS_OPCODE, &[0; 8])[..],
+            [Message::AlternateAdvancement(Update::MacProgress(Some(_)))]
+        ));
+        assert!(matches!(
+            eqmac(EQMAC_TIMER_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::MacTimer(_))]
+        ));
+        assert!(matches!(
+            &eqmac(EQMAC_RANKS_OPCODE, &[0; 226])[..],
+            [
+                Message::Unreadable { part: Part::World, error },
+                Message::AlternateAdvancement(Update::MacRanks(None)),
+            ] if error.ends_with("length 226")
+        ));
+        assert!(matches!(
+            &eqmac(EQMAC_TIMER_OPCODE, &[0; 256])[..],
+            [Message::Unreadable { part: Part::World, error }] if error.ends_with("length 256")
         ));
     }
 }

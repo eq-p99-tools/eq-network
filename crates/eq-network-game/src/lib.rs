@@ -7,9 +7,13 @@ pub mod alternate_advancement;
 /// How spawns look: worn gear, features, lights and the like, and the
 /// updates, states and illusions that change them.
 pub mod appearance;
+/// The player's bandolier sets and potion belt, from the Titanium profile.
+pub mod bandolier;
 /// A banker's change of the purse's and the bank's coins into the fewest
 /// coins of the largest kinds.
 pub mod banker;
+/// The Bazaar's search on stock `EQEmu`, read only.
+pub mod bazaar;
 /// Binding wounds with bandages.
 pub mod bind_wound;
 /// Received Titanium boat-control packets and conservative echo correlation.
@@ -24,6 +28,7 @@ pub mod channels;
 pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
 pub mod chat;
+pub mod chat_server;
 /// The time of day in Norrath, and how a zone's sky and fog look.
 pub mod clock;
 /// Consider, auto-attack and combat-damage records.
@@ -53,6 +58,9 @@ pub mod effects;
 pub mod exchange;
 /// Feign Death and the lying posture, by client generation.
 pub mod feign;
+/// The server filters: which kinds of message the player asks the server
+/// not to send.
+pub mod filters;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
 /// Asking which of the player's friends are online.
@@ -67,6 +75,8 @@ pub mod group;
 /// The player's guild: its member list, its members' changes and
 /// invitations.
 pub mod guild;
+/// The guild bank as the server tells of it, read only.
+pub mod guild_bank;
 /// Damage the world does to the player, which the client reports: falls,
 /// drowning, lava and freezing.
 pub mod hazards;
@@ -111,14 +121,30 @@ pub mod raid;
 /// How far each client generation lets the player reach doors, objects,
 /// merchants and the one they bandage.
 pub mod reach;
+/// Reports to the server's staff: petitions, bug reports and feedback.
+pub mod reports;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
 /// What a quest or a task gives the player.
 pub mod rewards;
+pub mod rof2_answers;
+pub mod rof2_buffs;
+pub mod rof2_casting;
+pub mod rof2_looks;
+pub mod rof2_loot_titles;
+pub mod rof2_news;
+pub mod rof2_notices;
+pub mod rof2_player;
+pub mod rof2_pools;
+pub mod rof2_socials;
+pub mod rof2_spellbook;
+pub mod rof2_world;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.
 pub mod servers;
+/// A Warrior's `/shield` of another player.
+pub mod shielding;
 /// Rolling dice, emoting and assisting; and other players' yells for help,
 /// voice macros, requests to inspect the player and duels.
 pub mod socials;
@@ -134,6 +160,8 @@ pub mod stats;
 pub mod sysinfo;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
+/// The task journal stock `EQEmu` keeps for a Titanium player.
+pub mod tasks;
 /// The server's regeneration tick and how often it comes.
 pub mod ticks;
 /// Tracking: the server's list and following a spawn.
@@ -148,6 +176,8 @@ pub mod vision;
 pub mod who;
 /// Renderer-independent world-state packet decoding.
 pub mod world;
+/// The login info a client generation opens the world with.
+pub mod world_login;
 /// Zone numbers and short names.
 pub mod zones;
 /// Death and server-directed zone transfer codecs.
@@ -304,6 +334,18 @@ impl GameDialect {
         }
     }
 
+    /// Which postures this generation's program lets the player jump from
+    /// ([`feign::JumpGate`]).
+    #[must_use]
+    pub const fn jump_gate(self) -> feign::JumpGate {
+        match self {
+            Self::Titanium => feign::TITANIUM_JUMP,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.jump_gate(),
+            Self::EqMac => feign::EQMAC_JUMP,
+        }
+    }
+
     /// How this generation's sit/stand toggle chooses
     /// ([`feign::SitToggle`]).
     #[must_use]
@@ -376,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rof2_placeholder_refuses_every_packet_layout() {
+    fn the_rof2_placeholder_refuses_every_packet_it_would_send() {
         use crate::chat::{self, OutboundChat};
         use crate::command::{self, GameCommand};
         let rof2 = GameDialect::Rof2;
@@ -385,12 +427,15 @@ mod tests {
         };
         let say = OutboundChat::Say("Hail".into());
         refused(chat::encode_outbound_for(rof2, &say, "Tester").map(drop));
+        // Its chat is read (6.521), and the other generations' numbers say
+        // nothing to it.
         let mut channel_message = vec![0; 148];
         channel_message.extend(b"Hail\0");
         for opcode in [0x1004, 0x0741, 0x5a48, 0x024d] {
-            refused(chat::parse_for(rof2, opcode, &channel_message, false).map(drop));
+            assert!(chat::parse_for(rof2, opcode, &channel_message, false)
+                .unwrap()
+                .is_none());
         }
-        refused(crate::characters::decode(rof2, &[0; 4096]).map(drop));
         let now = std::time::Instant::now();
         for request in [
             GameCommand::SendChat(say),

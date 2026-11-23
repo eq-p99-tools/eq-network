@@ -61,6 +61,7 @@ fn eqmac_admission_replays_state_and_offers_guarded_ordinary_door_use() {
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run_on(wire, |out| features.handle(&click, &mut world, out));

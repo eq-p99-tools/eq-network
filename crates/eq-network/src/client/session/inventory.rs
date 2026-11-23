@@ -146,6 +146,36 @@ fn purse_uncertain(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     Ok(())
 }
 
+/// A practice's cost TAKP or Quarm took without a word (6.597).
+fn eqmac_practice_cost(rules: MoveRules, message: &Message) -> Option<u64> {
+    match message {
+        Message::Event(WorldEvent::Training(TrainingUpdate::Trained { cost, .. }))
+            if *cost > 0 && matches!(rules, MoveRules::Takp | MoveRules::Quarm) =>
+        {
+            Some(*cost)
+        }
+        _ => None,
+    }
+}
+
+/// TAKP and Quarm take a practice's cost with `Client::TakeMoneyFromPP`,
+/// copper first and without a word to the client, as for a split: the purse
+/// becomes what the server keeps ([`eq_network_game::split::eqmac_take`]),
+/// or uncertain when the purse the session holds could not have paid
+/// (6.597, T1).
+fn eqmac_practice_paid(cost: u64, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    let Some(purse) = world.coins.0.purse else {
+        return Ok(());
+    };
+    match eq_network_game::split::eqmac_take(purse, cost) {
+        Some(kept) => {
+            world.coins.0.purse = Some(kept);
+            tell_coins(world, true, out)
+        }
+        None => purse_uncertain(world, out),
+    }
+}
+
 /// A paid training request or unresolved outcome leaves potentially spent coins
 /// unavailable until the server supplies a fresh balance. Free practices do not.
 fn training_cost_uncertain(message: &Message) -> bool {
@@ -451,6 +481,9 @@ pub(super) struct Allowances {
     pub(super) splitting: bool,
     /// Asking a banker to change the purse's and the bank's coins.
     pub(super) banker_change: bool,
+    /// Destroying coins from the cursor, where the server type's own live
+    /// check has shown it takes them (checklist 6.512).
+    pub(super) destroying_coins: bool,
 }
 
 impl Allowances {
@@ -463,6 +496,7 @@ impl Allowances {
         meals: true,
         splitting: false,
         banker_change: false,
+        destroying_coins: false,
     };
 }
 
@@ -552,7 +586,10 @@ impl Belongings {
             merchant: OpenMerchant::default(),
             quotes,
             meals: meals::Meals::new(auto_eat, hungry),
-            sharing: sharing::Sharing::default(),
+            sharing: match rules {
+                MoveRules::EqEmu => sharing::Sharing::default(),
+                MoveRules::Takp | MoveRules::Quarm => sharing::Sharing::eqmac(),
+            },
             poisons: poisons::Poisons::default(),
             heard: false,
         }
@@ -986,6 +1023,52 @@ impl Belongings {
         out.log.diagnostic(format!("Coin move refused: {reason}"))
     }
 
+    /// Destroys coins of one kind from the cursor. No answer comes and the
+    /// server takes no more than it counts on the cursor, so only what the
+    /// ledger already holds there goes, all of that kind at once
+    /// (checklist 6.512, reviewer K2).
+    fn destroy_coins(
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::DestroyCoins {
+            session_id,
+            destroy,
+            ..
+        } = command
+        else {
+            return Ok(());
+        };
+        let held = world.coins.cursor.of(destroy.coin);
+        let refusal = if held == destroy.amount {
+            let mut after = *world.coins;
+            match after
+                .destroy(*destroy)
+                .map_err(str::to_owned)
+                .and_then(|()| {
+                    out.encode(&Request::DestroyCoins(*destroy))
+                        .map_err(|error| error.to_string())
+                }) {
+                Ok(packet) => {
+                    out.send(&packet)?;
+                    world.coins.0 = after;
+                    return tell_coins(world, false, out);
+                }
+                Err(reason) => reason,
+            }
+        } else {
+            "Destroy the coins on the cursor, all of one kind".to_owned()
+        };
+        out.log.send(ClientEvent::World(WorldEvent::CoinsRefused {
+            session_id: *session_id,
+            reason: refusal.clone(),
+            string_id: None,
+        }))?;
+        out.log
+            .diagnostic(format!("Coin destroy refused: {refusal}"))
+    }
+
     /// Opens or closes a merchant's window; only a merchant the player can
     /// see will trade, and opens only within the generation's reach where
     /// it is read (TAKP: 3-D, at most 20). Out of reach the program says
@@ -1037,7 +1120,40 @@ impl Belongings {
     }
 }
 
+/// Takes a merchant item packet no browse took as the merchant's: its
+/// item, or unreadable.
+pub(super) fn merchant_view(message: &mut Message) {
+    if let Message::MerchantView { item, .. } = message {
+        *message = match item {
+            Ok(item) => Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(item.clone()))),
+            Err(error) => Message::Unreadable {
+                part: eq_network_game::message::Part::World,
+                error: std::mem::take(error),
+            },
+        };
+    }
+}
+
 impl Feature for Belongings {
+    /// A bandolier swap's moves are predicted by its own feature, and
+    /// `EQEmu` confirms them no more than an ordinary move's: they settle
+    /// by the same silence (6.566). A swap goes only with no prediction
+    /// left, so this restarts no other move's wait.
+    fn notice(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if matches!(command, ClientCommand::SwapBandolier { .. })
+            && self.rules.settles_by_silence()
+            && !world.inventory.predicted()
+        {
+            self.settlement.sent(Instant::now());
+        }
+        Ok(())
+    }
+
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
         let mut offered = Vec::new();
@@ -1059,6 +1175,9 @@ impl Feature for Belongings {
         }
         if self.allows.banker_change {
             offered.push(Capability::BankerChange);
+        }
+        if self.allows.coins && self.allows.destroying_coins {
+            offered.push(Capability::DestroyingCoins);
         }
         offered
     }
@@ -1135,6 +1254,7 @@ impl Feature for Belongings {
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::DropItem(_) => self.allows.ground_drop,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
+            ClientCommand::DestroyCoins { .. } => self.allows.coins && self.allows.destroying_coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
             }
@@ -1160,10 +1280,13 @@ impl Feature for Belongings {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::DestroyItem(request) => self.destroy_item(request, world, out),
             ClientCommand::DropItem(request) => Self::drop_item(request, world, out),
-            ClientCommand::MoveCoins { .. } if self.sharing.changing() => {
+            ClientCommand::MoveCoins { .. } | ClientCommand::DestroyCoins { .. }
+                if self.sharing.changing() =>
+            {
                 super::actions::refuse(command, "Wait for the banker's change.", out.log)
             }
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
+            ClientCommand::DestroyCoins { .. } => Self::destroy_coins(command, world, out),
             ClientCommand::SplitCoins { coins, .. } => {
                 self.sharing.split(command, *coins, world, out)
             }
@@ -1227,6 +1350,7 @@ impl Feature for Belongings {
     /// session remembers adds nothing, so the purse never rises past what
     /// the server added.
     fn explain(&mut self, message: &mut Message, _world: &World) {
+        merchant_view(message);
         if let Message::Event(event) = message {
             self.sharing.heard(event);
         }
@@ -1295,6 +1419,10 @@ impl Feature for Belongings {
             purse_uncertain(world, out)?;
         }
         let known_coins = match message {
+            _ if let Some(cost) = eqmac_practice_cost(self.rules, message) => {
+                eqmac_practice_paid(cost, world, out)?;
+                false
+            }
             Message::Event(WorldEvent::Merchant(update)) => {
                 let known = self.trades.coins_current(update);
                 let coin_bearing = matches!(
@@ -1316,6 +1444,8 @@ impl Feature for Belongings {
                 tell_coins(world, purse, out)?;
             }
         }
+        // TAKP's and Quarm's answer to a split, once its addition is in.
+        self.sharing.eqmac_answer(message, world, out)?;
         match message {
             Message::MerchantScoped {
                 merchant_id,
@@ -2812,6 +2942,33 @@ mod tests {
     }
 
     #[test]
+    fn a_bandolier_swaps_prediction_settles_as_an_ordinary_moves_does() {
+        let (mut belongings, mut world) = admitted();
+        let swap = ClientCommand::SwapBandolier {
+            session_id: 5,
+            set: 0,
+        };
+        testing::run(|out| belongings.notice(&swap, &mut world, out))
+            .result
+            .unwrap();
+        // The swap's own feature applies its moves after the notice.
+        let mut moved = item(22);
+        moved.slot = InventorySlot(13);
+        world
+            .inventory
+            .0
+            .apply(InventoryUpdate::Prediction(vec![moved]));
+        let later = Instant::now() + REFUSAL_WINDOW;
+        let outcome = testing::run(|out| belongings.tick(later, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [&InventoryUpdate::Settled]
+        );
+        assert!(!world.inventory.predicted());
+    }
+
+    #[test]
     fn a_sale_holds_the_inventory_until_the_merchant_echoes_it() {
         let (mut belongings, mut world) = admitted();
         shopping_at(&mut belongings, &mut world);
@@ -3164,6 +3321,108 @@ mod tests {
             );
             assert_eq!(coins_refused(&outcome.events), [reason]);
         }
+    }
+
+    #[test]
+    fn two_kinds_destroyed_back_to_back_are_both_sent_with_nothing_held() {
+        // A host destroys a cursor holding two kinds as two commands in one
+        // frame. Nothing paces or holds a destroy (actions.rs lists it with
+        // the coin moves that hold nothing back), so the second goes as the
+        // first did.
+        use eq_network_game::money::{Coin, CoinDestroy, MOVE_OPCODE as COIN_OPCODE};
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.destroying_coins = true;
+        world.coins.0.cursor = Coins {
+            platinum: 3,
+            gold: 2,
+            ..Coins::default()
+        };
+        let destroy = |coin, amount| ClientCommand::DestroyCoins {
+            session_id: 5,
+            destroy: CoinDestroy { coin, amount },
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| {
+            belongings.handle(&destroy(Coin::Platinum, 3), &mut world, out)?;
+            belongings.handle(&destroy(Coin::Gold, 2), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 2);
+        assert!(outcome
+            .sent
+            .iter()
+            .all(|packet| packet.opcode == COIN_OPCODE));
+        assert_eq!(&outcome.sent[0].body[8..12], &3i32.to_le_bytes());
+        assert_eq!(&outcome.sent[1].body[8..12], &2i32.to_le_bytes());
+        assert_eq!(coins_refused(&outcome.events), [] as [String; 0]);
+        assert!(world.coins.cursor.is_empty());
+        assert_eq!(world.coins.purse.map(|purse| purse.gold), Some(5));
+    }
+
+    #[test]
+    fn coins_on_the_cursor_are_destroyed_all_of_one_kind_and_only_where_offered() {
+        use eq_network_game::money::{
+            Coin, CoinDestroy, CoinPlace, EQMAC_MOVE_OPCODE, MOVE_OPCODE as COIN_OPCODE,
+        };
+        let (mut belongings, mut world, move_coins) = with_gold();
+        let standard = belongings.allows;
+        belongings.allows.destroying_coins = true;
+        let destroy = |coin, amount| ClientCommand::DestroyCoins {
+            session_id: 5,
+            destroy: CoinDestroy { coin, amount },
+            created: Instant::now(),
+        };
+        // Two gold onto the cursor.
+        testing::run(|out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        assert!(belongings.owns(&destroy(Coin::Gold, 2)));
+        assert!(belongings
+            .capabilities()
+            .contains(&crate::world::Capability::DestroyingCoins));
+        // Not all of the kind, more than it, or a kind not there: nothing sent.
+        for (coin, amount) in [(Coin::Gold, 1), (Coin::Gold, 3), (Coin::Platinum, 1)] {
+            let outcome =
+                testing::run(|out| belongings.handle(&destroy(coin, amount), &mut world, out));
+            assert_eq!(outcome.sent, [], "{coin:?} {amount}");
+            assert_eq!(
+                coins_refused(&outcome.events),
+                ["Destroy the coins on the cursor, all of one kind"]
+            );
+        }
+        assert_eq!(world.coins.cursor.gold, 2);
+        let outcome =
+            testing::run(|out| belongings.handle(&destroy(Coin::Gold, 2), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, COIN_OPCODE);
+        assert_eq!(&outcome.sent[0].body[4..8], &(-1i32).to_le_bytes());
+        assert!(world.coins.cursor.is_empty());
+        assert_eq!(world.coins.purse.map(|purse| purse.gold), Some(3));
+        // The purse is unchanged, so only the rest is told.
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::CoinsElsewhere { cursor, .. })] if cursor.is_empty()
+        ));
+        // TAKP's packet is its own opcode, the same five words.
+        world.coins.0.cursor.gold = 2;
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&destroy(Coin::Gold, 2), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent[0].opcode, EQMAC_MOVE_OPCODE);
+        // Standard allowances neither offer nor take it.
+        belongings.allows = standard;
+        assert!(!belongings.owns(&destroy(Coin::Gold, 2)));
+        assert!(!belongings
+            .capabilities()
+            .contains(&crate::world::Capability::DestroyingCoins));
     }
 
     #[test]
@@ -3527,6 +3786,225 @@ mod tests {
         assert!(world.inventory.stale());
     }
 
+    /// A grouped player on TAKP or Quarm with `purse`, splitting `asked`;
+    /// what the split sent.
+    fn eqmac_split(
+        purse: Coins,
+        asked: Coins,
+    ) -> (
+        Belongings,
+        World,
+        Vec<eq_network_game::command::EncodedCommand>,
+    ) {
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.splitting = true;
+        belongings.sharing = sharing::Sharing::eqmac();
+        world.grouped = true;
+        world.coins.0.purse = Some(purse);
+        let command = ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: asked,
+        };
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&command, &mut world, out)
+        });
+        outcome.result.unwrap();
+        (belongings, world, outcome.sent)
+    }
+
+    /// Hears what TAKP or Quarm sends back, in order.
+    fn eqmac_answers(
+        belongings: &mut Belongings,
+        world: &mut World,
+        messages: &[Message],
+    ) -> Vec<ClientEvent> {
+        let mut events = Vec::new();
+        for message in messages {
+            let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+                belongings.observe(message, world, out)
+            });
+            outcome.result.unwrap();
+            events.extend(outcome.events);
+        }
+        events
+    }
+
+    /// The four additions, platinum to copper, each of its own kind.
+    fn additions(platinum: u32, gold: u32, silver: u32, copper: u32) -> Vec<Message> {
+        [
+            Coins {
+                platinum,
+                ..Coins::default()
+            },
+            Coins {
+                gold,
+                ..Coins::default()
+            },
+            Coins {
+                silver,
+                ..Coins::default()
+            },
+            Coins {
+                copper,
+                ..Coins::default()
+            },
+        ]
+        .into_iter()
+        .map(Message::PurseAdded)
+        .collect()
+    }
+
+    const fn coins(platinum: u32, gold: u32, silver: u32, copper: u32) -> Coins {
+        Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        }
+    }
+
+    #[test]
+    fn an_eqmac_split_goes_on_the_mac_opcode() {
+        let (_, world, sent) = eqmac_split(coins(1, 2, 3, 4), coins(1, 0, 0, 4));
+        assert_eq!(
+            sent,
+            [eq_network_game::split::eqmac_split(coins(1, 0, 0, 4)).unwrap()]
+        );
+        // The program takes the coins first.
+        assert_eq!(world.coins.purse, Some(coins(0, 2, 3, 0)));
+    }
+
+    #[test]
+    fn an_eqmac_split_that_made_change_ends_at_the_servers_take_plus_the_share() {
+        // 1 platinum from 500 copper and 2 platinum: the server takes the
+        // copper and 500 more, keeping 1 platinum and 5 gold, then pays the
+        // splitter's share of 1 platinum (2 in the group, the remainder).
+        let (mut belongings, mut world, _) = eqmac_split(coins(2, 0, 0, 500), coins(1, 0, 0, 0));
+        let answers = additions(1, 0, 0, 0);
+        eqmac_answers(&mut belongings, &mut world, &answers[..3]);
+        // Not settled until all four are in.
+        assert_eq!(world.coins.purse, Some(coins(2, 0, 0, 500)));
+        let events = eqmac_answers(&mut belongings, &mut world, &answers[3..]);
+        assert_eq!(world.coins.purse, Some(coins(2, 5, 0, 0)));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Coins(told)) if *told == coins(2, 5, 0, 0)
+        )));
+        // Settled: the wait ends without making the purse unknown.
+        belongings.sharing.backdate(sharing::SPLIT_ANSWER);
+        testing::run(|out| belongings.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.purse, Some(coins(2, 5, 0, 0)));
+    }
+
+    #[test]
+    fn zero_additions_count_and_the_ones_after_them_still_apply() {
+        // 6 copper from 10: taken from copper alone, then a share of 3.
+        let (mut belongings, mut world, _) = eqmac_split(coins(0, 0, 0, 10), coins(0, 0, 0, 6));
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 4)));
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 3));
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 7)));
+        // The split is settled, so a later addition is the purse's alone.
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 1)[3..]);
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 8)));
+    }
+
+    #[test]
+    fn a_refused_eqmac_split_is_known_only_when_each_kind_comes_back_as_asked() {
+        let before = coins(2, 0, 0, 500);
+        let asked = coins(1, 0, 0, 0);
+        let mut answers = vec![Message::SplitRefused];
+        answers.extend(additions(1, 0, 0, 0));
+        let (mut belongings, mut world, _) = eqmac_split(before, asked);
+        eqmac_answers(&mut belongings, &mut world, &answers);
+        assert_eq!(world.coins.purse, Some(before));
+        // The server held less platinum than we asked of it, so it gave
+        // back what it held: our purse was wrong, and now is unknown.
+        let mut short = vec![Message::SplitRefused];
+        short.extend(additions(0, 0, 0, 0));
+        let (mut belongings, mut world, _) = eqmac_split(before, asked);
+        let events = eqmac_answers(&mut belongings, &mut world, &short);
+        assert_eq!(world.coins.purse, None);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PurseUncertain { .. }))));
+    }
+
+    #[test]
+    fn a_second_eqmac_split_waits_for_the_first_ones_answer() {
+        let (mut belongings, mut world, sent) = eqmac_split(coins(0, 0, 0, 10), coins(0, 0, 0, 6));
+        assert_eq!(sent.len(), 1);
+        let again = ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: coins(0, 0, 0, 1),
+        };
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&again, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Wait for the last split's answer."]
+        );
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 4)));
+        // Once answered, the next goes.
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 3));
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&again, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+    }
+
+    #[test]
+    fn coins_moved_while_an_eqmac_split_waits_leave_the_purse_unknown() {
+        let (mut belongings, mut world, _) = eqmac_split(coins(2, 0, 0, 500), coins(1, 0, 0, 0));
+        // A coin move to the cursor while the split waits.
+        let purse = world.coins.0.purse.as_mut().unwrap();
+        purse.copper -= 100;
+        let events = eqmac_answers(&mut belongings, &mut world, &additions(1, 0, 0, 0));
+        assert_eq!(world.coins.purse, None);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PurseUncertain { .. }))));
+    }
+
+    #[test]
+    fn titanium_sharing_ignores_the_mac_answers() {
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.splitting = true;
+        world.grouped = true;
+        let split = ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: Coins {
+                gold: 1,
+                ..Coins::default()
+            },
+        };
+        testing::run(|out| belongings.handle(&split, &mut world, out))
+            .result
+            .unwrap();
+        let before = world.coins.purse;
+        let mut answers = vec![Message::SplitRefused];
+        answers.extend(additions(0, 0, 0, 0));
+        eqmac_answers(&mut belongings, &mut world, &answers);
+        assert_eq!(world.coins.purse, before);
+    }
+
+    #[test]
+    fn an_eqmac_split_with_fewer_than_four_additions_leaves_the_purse_unknown() {
+        // Quarm pays a self-found splitter nothing.
+        let (mut belongings, mut world, _) = eqmac_split(coins(0, 0, 0, 10), coins(0, 0, 0, 6));
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 0)[..2]);
+        belongings.sharing.backdate(sharing::SPLIT_ANSWER);
+        testing::run(|out| belongings.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.purse, None);
+    }
+
     #[test]
     fn a_split_leaves_the_purse_at_once_until_the_money_update_or_the_wait_ends() {
         let (mut belongings, mut world, _) = with_gold();
@@ -3722,5 +4200,43 @@ mod tests {
         );
         assert_eq!(world.coins.purse, Some(changed.purse));
         assert!(!belongings.sharing.changing());
+    }
+
+    #[test]
+    fn a_mac_practice_takes_coins_as_the_server_does_or_leaves_the_purse_unknown() {
+        let (_, mut world) = admitted();
+        // 799 copper from 1 platinum, 2 gold and 5 copper: copper first, then
+        // silver (none), then gold, whose rest comes back as change.
+        world.coins.0.purse = Some(Coins {
+            platinum: 1,
+            gold: 2,
+            copper: 5,
+            ..Coins::default()
+        });
+        let paid = testing::run(|out| eqmac_practice_paid(799, &mut world, out));
+        paid.result.unwrap();
+        assert_eq!(
+            world.coins.0.purse,
+            eq_network_game::split::eqmac_take(
+                Coins {
+                    platinum: 1,
+                    gold: 2,
+                    copper: 5,
+                    ..Coins::default()
+                },
+                799
+            )
+        );
+        assert!(matches!(
+            paid.events[..],
+            [ClientEvent::World(WorldEvent::Coins(_))]
+        ));
+        let short = testing::run(|out| eqmac_practice_paid(100_000, &mut world, out));
+        short.result.unwrap();
+        assert_eq!(world.coins.0.purse, None);
+        assert!(matches!(
+            short.events[..],
+            [ClientEvent::World(WorldEvent::PurseUncertain { .. })]
+        ));
     }
 }

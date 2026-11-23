@@ -1,18 +1,15 @@
 //! The `EQMac` client's messages, which TAKP and Quarm send.
 
 use super::{
-    planned, sent, unasked, Part,
+    planned, sent, sent_private, unasked, Part,
     Reader::{Admission, Answer, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::Needless,
     ServerMessage,
-    Step::{
-        AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
-        Social,
-    },
-    BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
-    EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK, LOG_SERVER, OWN_NAME,
-    PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    Step::{Bazaar, EqMacExchanges, EqMacWorld, PlayerState, Raids, Social},
+    BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_AA, EQMAC_DESCRIPTION, EQMAC_ILLUSION,
+    EQMAC_PROFILE, EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK,
+    LOG_SERVER, OWN_NAME, PETITION, QUARM, REMOVAL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -20,7 +17,7 @@ use super::{
 #[allow(clippy::too_many_lines, reason = "one row per message")]
 pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
-        0x0042 => sent("OP_Assist", EQMAC, unasked(EqMacWorld)),
+        0x0042 => sent("OP_Assist", EQMAC, Read(&[Zone])),
         0x0180 => sent("OP_EnterWorld", EQMAC, Read(&[World])),
         // The login server's error, which TAKP's login names OP_ClientError;
         // the zone's OP_ClientError is another message (0x4148).
@@ -28,8 +25,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0400 => sent("OP_LoginAccepted", TAKP, Read(&[Login])),
         0x0442 => sent("OP_GuildMOTD", EQMAC, Read(&[Chat])),
         0x0480 => sent("OP_ZoneServerInfo", EQMAC, Read(&[World])),
-        0x0541 => sent("OP_TradeSkillCombine", EQMAC, planned(EqMacWorld)),
-        0x0542 => sent("OP_ClearObject", EQMAC, planned(EqMacWorld)),
+        0x0541 => sent("OP_TradeSkillCombine", EQMAC, Read(&[Zone])),
+        0x0542 => sent("OP_ClearObject", EQMAC, Read(&[Zone])),
         0x0580 => sent("OP_ZoneUnavail", EQMAC, Read(&[World])),
         // An offer, and TAKP's word that the player may go after their yes.
         0x0642 => sent("OP_Translocate", EQMAC, Partly(&[Zone], TRANSLOCATE)),
@@ -44,38 +41,41 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0741 => sent("OP_ChannelMessage", EQMAC, Read(&[Chat])),
         0x0840 => sent("OP_MoneyUpdate", EQMAC, planned(Bazaar)),
         0x0980 => sent("OP_SetChatServer", EQMAC, Read(&[World])),
-        0x0b20 => sent("OP_WhoAllResponse", EQMAC, planned(EqMacWorld)),
+        // Players' names and, for a game master, accounts: no sample.
+        0x0b20 => sent_private("OP_WhoAllResponse", EQMAC, Read(&[Zone])),
         0x0b40 => sent("OP_ShopRequest", EQMAC, Read(&[Zone])),
         0x0c40 => sent("OP_ShopInventoryPacket", EQMAC, Read(&[Zone])),
         0x1040 => sent("OP_TradeReset", EQMAC, planned(EqMacExchanges)),
         0x1140 => sent("OP_PetitionRefresh", EQMAC, Partly(&[Zone], PETITION)),
-        0x1142 => sent("OP_BazaarSearch", EQMAC, planned(Bazaar)),
-        0x1242 => sent("OP_Trader", EQMAC, planned(Bazaar)),
+        0x1142 => sent_private("OP_BazaarSearch", EQMAC, Read(&[Zone])),
+        0x1242 => sent_private("OP_Trader", EQMAC, planned(Bazaar)),
         0x1342 => sent("OP_ShopPlayerRecharge", QUARM, unasked(EqMacExchanges)),
         // The world's text for one player, which the zone relays; nothing
         // in TAKP's or Quarm's world sends it today.
         0x1440 => sent("OP_MultiLineMsg", EQMAC, Read(&[Chat])),
-        0x1442 => sent("OP_AAAction", EQMAC, planned(AlternateAdvancement)),
+        0x1442 => sent("OP_AAAction", EQMAC, Partly(&[Zone], EQMAC_AA)),
         0x1540 => sent("OP_Emote", EQMAC, Read(&[Chat])),
-        0x1542 => sent("OP_RespondAA", EQMAC, planned(AlternateAdvancement)),
-        0x1640 => sent("OP_RandomReply", EQMAC, planned(EqMacWorld)),
-        0x1642 => sent("OP_TraderShop", EQMAC, planned(Bazaar)),
+        0x1542 => sent("OP_RespondAA", EQMAC, Partly(&[Zone], EQMAC_AA)),
+        0x1640 => sent("OP_RandomReply", EQMAC, Read(&[Zone])),
+        0x1642 => sent_private("OP_TraderShop", EQMAC, planned(Bazaar)),
         0x1741 => sent("OP_GuildInvite", EQMAC, Partly(&[Zone], INVITE)),
-        0x1842 => sent("OP_BecomeTrader", EQMAC, planned(Bazaar)),
+        0x1842 => sent_private("OP_BecomeTrader", EQMAC, planned(Bazaar)),
         // TAKP and Quarm send it only when a removal fails.
         0x1941 => sent("OP_GuildRemove", EQMAC, Partly(&[Zone], REMOVAL)),
         0x1942 => sent("OP_ManaUpdate", EQMAC, Read(&[Zone])),
         0x2140 => sent("OP_CorpsePosition", EQMAC, Read(&[Zone])),
-        0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
-        0x2442 => sent("OP_TraderBuy", EQMAC, planned(Bazaar)),
+        0x2342 => sent("OP_AAExpUpdate", EQMAC, Partly(&[Zone], EQMAC_AA)),
+        0x2442 => sent_private("OP_TraderBuy", EQMAC, planned(Bazaar)),
         0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
         0x2542 => sent("OP_FaceChange", EQMAC, Read(&[Zone])),
         0x2620 => sent("OP_GroupUpdate", EQMAC, Read(&[Zone])),
-        0x2641 => sent("OP_ControlBoat", EQMAC, unasked(LaterSystems)),
+        // Read and tested (6.602); control is not offered until the `EQMac`
+        // program's steering and riding are read.
+        0x2641 => sent("OP_ControlBoat", EQMAC, Read(&[Zone])),
         0x2740 => sent("OP_ShopPlayerSell", EQMAC, Read(&[Zone])),
         0x2840 => sent("OP_ZoneEntry", EQMAC, Read(&[Admission])),
         0x2940 => sent("OP_DeleteSpawn", EQMAC, Read(&[Zone])),
-        0x2a41 => sent("OP_RezzRequest", EQMAC, planned(EqMacExchanges)),
+        0x2a41 => sent("OP_RezzRequest", EQMAC, Read(&[Zone])),
         0x2b40 => sent("OP_ClickObject", EQMAC, Read(&[Zone])),
         0x2c40 => sent("OP_GroundSpawn", EQMAC, Read(&[Zone])),
         0x2c41 => sent("OP_MoveItem", EQMAC, Read(&[Zone])),
@@ -164,7 +164,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6c40 => sent("OP_GMKill", EQMAC, Partly(&[Zone], KICK)),
         0x6d40 => sent("OP_GMKick", EQMAC, Partly(&[Zone], KICK)),
         0x6e40 => sent("OP_GMGoto", QUARM, Read(&[Zone])),
-        0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
+        0x6e41 => sent("OP_GMLastName", EQMAC, Read(&[Zone])),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
         // The answer to OP_GetGuildsList, with the player's own guild; not news
@@ -188,7 +188,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x9841 => sent("OP_LevelUpdate", EQMAC, planned(EqMacWorld)),
         0x9941 => sent("OP_ExpUpdate", EQMAC, Read(&[Zone])),
         0x9b40 => sent("OP_DespawnDoor", EQMAC, Read(&[Zone])),
-        0x9c40 => sent("OP_GMTraining", EQMAC, planned(EqMacWorld)),
+        0x9c40 => sent("OP_GMTraining", EQMAC, Read(&[Zone])),
         0x9f40 => sent("OP_MobUpdate", EQMAC, Read(&[Zone])),
         0xa040 => sent("OP_LootItem", EQMAC, Read(&[Zone])),
         0xa140 => sent("OP_Animation", EQMAC, Read(&[Zone])),
@@ -204,9 +204,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xb540 => sent("OP_InspectRequest", EQMAC, Partly(&[Zone], INSPECT_REQUEST)),
         0xb640 => sent("OP_InspectAnswer", EQMAC, unasked(Social)),
         0xba41 => sent("OP_ApplyPoison", EQMAC, Read(&[Zone])),
-        0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
+        0xbe41 => sent("OP_SkillUpdate2", EQMAC, Read(&[Zone])),
         0xc341 => sent("OP_LogServer", EQMAC, Partly(&[World, Zone], LOG_SERVER)),
-        0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
+        0xc441 => sent("OP_Surname", EQMAC, Read(&[Zone])),
         0xcb40 => sent("OP_GMNameChange", EQMAC, Partly(&[Zone], GM_RENAME)),
         0xce40 => sent("OP_ReadBook", EQMAC, Read(&[Zone])),
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),
@@ -218,9 +218,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd140 => sent("OP_TradeRequest", EQMAC, Read(&[Zone])),
         0xd341 => sent("OP_SpellTextMessage", EQMAC, Read(&[Chat])),
         0xd440 => sent("OP_SetTitle", EQMAC, Partly(&[Zone], EQMAC_TITLE)),
-        0xd540 => sent("OP_ConsentResponse", EQMAC, planned(EqMacExchanges)),
+        0xd540 => sent("OP_ConsentResponse", EQMAC, Read(&[Zone])),
         0xd640 => sent("OP_TradeRefused", EQMAC, Read(&[Zone])),
-        0xd740 => sent("OP_ClickObjectAction", EQMAC, planned(EqMacWorld)),
+        0xd740 => sent("OP_ClickObjectAction", EQMAC, Read(&[Zone])),
         0xd840 => sent("OP_SendExpZonein", EQMAC, Read(&[Admission])),
         0xd841 => sent("OP_ExpansionInfo", EQMAC, Read(&[World])),
         0xda40 => sent("OP_TradeAcceptClick", EQMAC, Read(&[Zone])),
@@ -234,7 +234,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xea41 => sent("OP_Sacrifice", EQMAC, Partly(&[Zone], SACRIFICE)),
         // TAKP's word that the player may go to their corpse after their
         // yes, which its client moves itself on, as on a translocate's.
-        0xec41 => sent("OP_RezzComplete", TAKP, planned(EqMacExchanges)),
+        0xec41 => sent("OP_RezzComplete", TAKP, Read(&[Zone])),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
         0xf240 => sent("OP_TimeOfDay", EQMAC, Read(&[Zone])),
         0xf241 => sent("OP_DisciplineChange", EQMAC, Read(&[Zone])),
@@ -257,7 +257,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         ),
         0xf641 => sent("OP_CharInventory", EQMAC, Read(&[Zone])),
         0xf741 => sent("OP_SpawnDoor", EQMAC, Read(&[Zone])),
-        0xfb40 => sent("OP_ObjectItemPacket", EQMAC, planned(EqMacWorld)),
+        0xfb40 => sent("OP_ObjectItemPacket", EQMAC, Read(&[Zone])),
         0xfe41 => sent("OP_TargetCommand", EQMAC, Read(&[Zone])),
         _ => return None,
     })

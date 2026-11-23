@@ -67,11 +67,11 @@ pub const TITANIUM: Reaches = Reaches {
     // The use key and a left click (0x4906c5, 0x435b55) measure in 3-D from
     // the point the click ray hit on the door as drawn to the player, within
     // the player's size and 20 (0x644368; read R16b, R16e); only walking
-    // into a door of types 50, 57, 35 or 115 and up measures in 2-D. Ours
-    // measures in 3-D to the door's origin where it stands now, within 20:
-    // inside the program's rule where the origin is on the model, and short
-    // of it where a part of the model is nearer than the origin, and by the
-    // player's size (recording checklist 6.436).
+    // into a door of types 50, 57, 35 or 115 and up measures in 2-D. A click
+    // that names its point takes that rule
+    // ([`crate::doors::Doors::check_click_at`], 6.530). This reach is for a
+    // click with none (a key, a script): 3-D to the door's origin where it
+    // stands now, within 20, stricter than the program (6.436).
     doors: Reach {
         distance: 20.0,
         flat: false,

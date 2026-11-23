@@ -144,8 +144,8 @@ pub struct StrafeCalibration {
     /// The strafe rate with walking selected, where it is slower than
     /// [`Self::units_per_second`], which is then the rate running: the
     /// Titanium program strafes on whichever base speed is selected. The
-    /// session bounds a strafe by the running rate, since a strafe doesn't
-    /// say which is selected. None strafes at the one rate either way.
+    /// session bounds a [`super::Pace::Walk`] strafe by it (6.540). None
+    /// strafes at the one rate either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub walk_units_per_second: Option<f32>,
 }
@@ -268,15 +268,20 @@ impl Rates {
             })
             .transpose()?;
         let (speed, velocity_scale, animation) = match along {
-            MovementMode::Strafe => {
+            MovementMode::Strafe(pace) => {
                 let strafe = calibration
                     .strafe
                     .ok_or_else(|| anyhow::anyhow!("strafing is not calibrated"))?;
-                (
-                    strafe.units_per_second,
-                    strafe.velocity_scale,
-                    strafe.animation,
-                )
+                // A walking strafe takes the walking rate where the grant
+                // has one, and the one rate where it has none (EQMac): only
+                // ever the slower side (6.540).
+                let speed = match pace {
+                    super::Pace::Run => strafe.units_per_second,
+                    super::Pace::Walk => strafe
+                        .walk_units_per_second
+                        .unwrap_or(strafe.units_per_second),
+                };
+                (speed, strafe.velocity_scale, strafe.animation)
             }
             MovementMode::Walk => {
                 let walk = calibration
@@ -1189,7 +1194,7 @@ impl MotionSession {
             super::carriers::heading_arc(self.position.heading, request.position.heading);
         let own_turn = super::carriers::heading_arc(from_heading, to_heading);
         flags.carried_turn(world_turn - own_turn);
-        let strafing = diagonal.is_some() || along == MovementMode::Strafe;
+        let strafing = diagonal.is_some() || matches!(along, MovementMode::Strafe(_));
         let release = self.release(&sample, &mut flags, now, strafing)?;
         Ok(PreparedMove {
             owner: self,

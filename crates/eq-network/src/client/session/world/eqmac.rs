@@ -97,7 +97,12 @@ fn world_owned(
         deletion.tick(log)?;
         if !entered {
             let choice = match &selection {
-                Some(list) => Selection::poll(list, context.commands, log)?,
+                Some(list) => Selection::poll(
+                    list,
+                    context.commands,
+                    Some((&context.server_filters, eq_network_game::GameDialect::EqMac)),
+                    log,
+                )?,
                 None => None,
             };
             match choice {
@@ -142,7 +147,7 @@ fn world_owned(
         let Some(packet) = session.receive()? else {
             continue;
         };
-        record_chat(config, "", &packet, log)?;
+        let chatted = record_chat(config, "", &packet, log)?;
         log.diagnostic(format!(
             "Quarm world received 0x{:04x} ({} bytes)",
             packet.opcode,
@@ -168,7 +173,12 @@ fn world_owned(
                     && (creating.is_none()
                         || creating.as_ref().is_some_and(Creating::requested)) =>
             {
-                let entries = super::character_list(server, config.protocol.into(), &packet.body)?;
+                let entries = super::character_list(
+                    server,
+                    config.protocol.into(),
+                    (packet.opcode, &packet.body),
+                    log,
+                )?;
                 let initial = selection.is_none() && creating.is_none();
                 if let Some(attempt) = creating.take() {
                     attempt.created(&entries, log)?;
@@ -210,7 +220,11 @@ fn world_owned(
                     shield: None,
                 }));
             }
-            _ => news(packet.opcode, &packet.body, log)?,
+            _ => {
+                if !news(packet.opcode, &packet.body, log)? && !chatted {
+                    super::unheard(server.wire(), packet.opcode, &packet.body, log)?;
+                }
+            }
         }
     }
 }
@@ -224,32 +238,36 @@ mod transport_tests;
 ///
 /// # Errors
 /// Returns an error when the host's event handler fails.
-fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<()> {
+fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<bool> {
     match opcode {
         rules::EQMAC_LOG_SERVER_OPCODE => {
             let name = rules::eqmac_world_name(body);
             tell(
                 name.map(|short_name| WorldEvent::WorldName { short_name }),
                 "World short name",
+                (opcode, body),
                 log,
             )?;
             tell(
                 rules::eqmac_rules(body).map(WorldEvent::Rules),
                 "World rules",
+                (opcode, body),
                 log,
             )
         }
         rules::EQMAC_EXPANSIONS_OPCODE => tell(
             rules::expansions(body).map(WorldEvent::Expansions),
             "Expansion mask",
+            (opcode, body),
             log,
         ),
         channels::EQMAC_CHANNELS_OPCODE => tell(
             channels::offer(ChatService::Channels, body).map(WorldEvent::ChatServer),
             "Chat server offer",
+            (opcode, body),
             log,
         ),
-        _ => Ok(()),
+        _ => Ok(false),
     }
 }
 
@@ -306,7 +324,7 @@ pub(in crate::client::session) fn zone_destination(body: &[u8]) -> Result<(Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::session::world::tests::heard;
+    use crate::client::session::world::tests::{heard, unreadable_at_world};
     use eq_network_game::{channels::ChatServer, rules::Expansions};
 
     #[test]
@@ -325,7 +343,7 @@ mod tests {
             .unwrap();
             // Quarm's zones send 24 bytes of rules, and no name.
             news(0xc341, &settings[..24], log).unwrap();
-            news(0x4740, &[0; 8], log).unwrap();
+            assert!(!news(0x4740, &[0; 8], log).unwrap());
         });
         assert!(matches!(
             &events[..],
@@ -337,9 +355,11 @@ mod tests {
                     service: ChatService::Channels,
                     ..
                 })),
+                ClientEvent::Gap(gap),
                 ClientEvent::Diagnostic(unnamed),
                 ClientEvent::World(WorldEvent::Rules(zone)),
             ] if short_name == "testworld"
+                && unreadable_at_world(gap, 0xc341, "invalid EQMac log-server settings length")
                 && world.pvp == 1
                 && world.locale == Some(0)
                 && zone.locale.is_none()

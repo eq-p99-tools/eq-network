@@ -12,7 +12,8 @@ pub use actions::{
     MOVE_OPCODE,
 };
 pub use activation::{
-    titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
+    titanium_belt_cast, titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse,
+    CAST_OPCODE,
 };
 pub use banking::banker_in_range;
 pub use destruction::{titanium_destroy, InventoryDestroy};
@@ -263,6 +264,9 @@ pub struct ItemPlacement {
     pub bag_weight_reduction: u8,
     /// Item category, including weapon handedness.
     pub item_type: u8,
+    /// Whether the item's definition lets the potion belt hold it
+    /// (Titanium's `PotionBelt` field); false where the generation has none.
+    pub potion_belt: bool,
     /// Deity restrictions; zero is unrestricted.
     pub deity_mask: u32,
 }
@@ -289,9 +293,26 @@ pub struct InventoryItem {
     pub charges: i32,
     /// Number of usable container slots, zero for non-containers.
     pub bag_slots: u8,
+    /// The id of the augment in each of a common item's sockets, or `None`
+    /// for an empty one. Titanium serializes them as the item's children
+    /// (`EQEmu`'s `GetAugment` is `GetItem` on a common item); `EQMac` has
+    /// none.
+    pub augments: [Option<u32>; AUGMENT_SOCKETS],
 }
 
+/// Titanium's augment sockets on an item (`EQEmu`'s
+/// `invaug::SOCKET_COUNT` for Titanium).
+pub const AUGMENT_SOCKETS: usize = 5;
+
 impl InventoryItem {
+    /// Whether any socket holds an augment. What the augments add (weight,
+    /// stats, effects) is not summed yet, so anything derived from this
+    /// item reads as unknown (6.570 G2).
+    #[must_use]
+    pub fn augmented(&self) -> bool {
+        self.augments.iter().any(Option::is_some)
+    }
+
     /// Build a Titanium chat link from the metadata retained with this record.
     ///
     /// # Errors
@@ -653,10 +674,16 @@ impl Inventory {
     /// Unversioned partial slot updates cannot retire it; a full snapshot or
     /// existing policy-driven settlement starts a new contribution baseline.
     /// False does not confirm inventory placement or establish carried weight.
-    /// Callers must still require a received, non-stale inventory.
+    /// Callers must still require a received, non-stale inventory. An
+    /// augmented item worn now is uncertain too, since what its augments add
+    /// is not summed.
     #[must_use]
     pub fn equipment_stats_uncertain(&self) -> bool {
-        !self.equipment_uncertainty.is_empty()
+        // An augment's stats and effects are not summed yet (6.570 G2).
+        self.items
+            .iter()
+            .any(|(slot, item)| slot.is_equipment() && item.augmented())
+            || !self.equipment_uncertainty.is_empty()
             || !self.station_equipment_uncertainty.is_empty()
             || self
                 .bandage_stock_uncertain
@@ -734,6 +761,20 @@ impl Inventory {
     }
 
     fn change(&mut self, update: InventoryUpdate) {
+        let returned = match update {
+            InventoryUpdate::Remove(slot) => self.refused_station_pickup(slot),
+            _ => None,
+        };
+        self.follow(update);
+        if let Some(item) = returned {
+            // The refused item never left the container.
+            self.unconfirmed.remove(&item.slot);
+            self.items.insert(item.slot, item);
+            self.resolved();
+        }
+    }
+
+    fn follow(&mut self, update: InventoryUpdate) {
         self.observe_stack_weight(&update);
         let arrival = self.rebase_cursor_arrival(&update);
         self.observe_rebased_weight(&update, arrival);
@@ -836,6 +877,31 @@ impl Inventory {
             }
             InventoryUpdate::Settled => self.settle_predictions(),
         }
+    }
+
+    /// The item a server's delete takes back from an unconfirmed pickup out
+    /// of a world container, still in its place.
+    ///
+    /// A pickup that would break a lore rule is refused by every server's
+    /// `Client::SwapItem` with a delete of the destination and the
+    /// duplicate-lore line; the item stays in the container (6.598 C7). This
+    /// applies only when the deleted slot was empty before an unconfirmed
+    /// prediction, now holds exactly what one unconfirmed world place held
+    /// before, and that place is empty.
+    fn refused_station_pickup(&self, slot: InventorySlot) -> Option<InventoryItem> {
+        if slot.is_world() || !matches!(self.unconfirmed.get(&slot), Some(None)) {
+            return None;
+        }
+        let held = self.items.get(&slot)?;
+        let mut places = self.unconfirmed.iter().filter_map(|(place, before)| {
+            before.as_ref().filter(|before| {
+                place.is_world()
+                    && !self.items.contains_key(place)
+                    && prediction::same_item(before, held)
+            })
+        });
+        let item = places.next()?;
+        places.next().is_none().then(|| item.clone())
     }
 
     fn settle_predictions(&mut self) {

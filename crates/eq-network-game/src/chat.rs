@@ -42,18 +42,6 @@ impl LinkExpansion {
     }
 }
 
-/// Titanium uses mixed polarity: guild/social/group/shout/auction/OOC and
-/// melee-miss filters show messages when set to one. Most spell filters use
-/// zero. This matches the successful stock client's 29-word filter packet.
-#[must_use]
-pub fn server_filters() -> [u8; 116] {
-    let mut filters = [0; 116];
-    for index in (1..=7).chain(14..=17) {
-        filters[index * 4] = 1;
-    }
-    filters
-}
-
 /// Stable names for communication channels emitted by the client.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -282,6 +270,33 @@ impl Layout {
     }
 }
 
+/// The numbers `RoF2`'s chat reads (6.521), for the session's coverage
+/// table.
+pub const ROF2_READS: [u16; 9] = [
+    0x0c22, 0x2b2d, 0x373b, 0x0083, 0x1024, 0x213f, 0x3e13, 0x4f1f, 0x43af,
+];
+
+/// The chat packet layouts this module reads, one for each client
+/// generation. `RoF2`'s are stock `EQEmu`'s (6.521): its channel message is
+/// its own, and its other lines keep Titanium's shape with links of 56
+/// characters.
+#[derive(Clone, Copy)]
+enum Reading {
+    Titanium,
+    EqMac,
+    Rof2,
+}
+
+impl Reading {
+    const fn of(generation: GameDialect) -> Self {
+        match generation {
+            GameDialect::Titanium => Self::Titanium,
+            GameDialect::EqMac => Self::EqMac,
+            GameDialect::Rof2 => Self::Rof2,
+        }
+    }
+}
+
 /// Encode a client-to-zone `ChannelMessage_Struct` in the common tongue for
 /// the selected client family.
 ///
@@ -391,13 +406,17 @@ enum CommunicationOpcode {
     MultiLineMessage,
     SpellText,
     SpellTextStringId,
+    /// `EQMac`'s `OP_InterruptCast`, a line only when it says a discipline
+    /// is ready ([`crate::spells::DISCIPLINE_READY`]); the spells reader
+    /// takes every other.
+    DisciplineReady,
     Unknown(u16),
 }
 
 impl CommunicationOpcode {
-    const fn for_protocol(layout: Layout, value: u16) -> Self {
+    const fn for_protocol(layout: Reading, value: u16) -> Self {
         match layout {
-            Layout::Titanium => match value {
+            Reading::Titanium => match value {
                 0x024d => Self::Motd,
                 0x1004 => Self::ChannelMessage,
                 0x547a => Self::Emote,
@@ -409,7 +428,7 @@ impl CommunicationOpcode {
                 0x0b2d => Self::ColoredText,
                 value => Self::Unknown(value),
             },
-            Layout::EqMac => match value {
+            Reading::EqMac => match value {
                 0xdd41 => Self::Motd,
                 0x0741 => Self::ChannelMessage,
                 0x1540 => Self::Emote,
@@ -419,6 +438,20 @@ impl CommunicationOpcode {
                 0x1440 => Self::MultiLineMessage,
                 0xd341 => Self::SpellText,
                 0x4142 => Self::SpellTextStringId,
+                crate::spells::EQMAC_INTERRUPT_OPCODE => Self::DisciplineReady,
+                value => Self::Unknown(value),
+            },
+            // Stock `EQEmu`'s (`utils/patches/patch_RoF2.conf`; 6.521).
+            Reading::Rof2 => match value {
+                0x0c22 => Self::Motd,
+                0x2b2d => Self::ChannelMessage,
+                0x373b => Self::Emote,
+                0x0083 => Self::SpecialMessage,
+                0x1024 => Self::FormattedMessage,
+                0x213f => Self::SimpleMessage,
+                0x3e13 => Self::GuildMotd,
+                0x4f1f => Self::GuildMotdReply,
+                0x43af => Self::ColoredText,
                 value => Self::Unknown(value),
             },
         }
@@ -454,13 +487,18 @@ pub const fn channel_name(id: u32) -> ChannelName {
 /// A Titanium special message: the speak mode, the journal mode and the
 /// language, the message type, the spawn it is meant for, the speaker's name
 /// (empty on a plain server line), twelve unused bytes, then the text.
-fn titanium_special(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+fn titanium_special(
+    layout: Reading,
+    opcode: u16,
+    body: &[u8],
+    include_raw: bool,
+) -> Result<ChatEvent> {
     ensure!(body.len() >= 24, "truncated SpecialMesg");
     let sender = cstr(&body[11..]);
     let offset = 11 + sender.len() + 1 + 12;
     ensure!(offset < body.len(), "truncated SpecialMesg text");
     let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
-        .with_message(message_for(Layout::Titanium, &body[offset..], include_raw));
+        .with_message(message_for(layout, &body[offset..], include_raw));
     // A plain server line names no speaker.
     event.sender = (!sender.is_empty()).then(|| String::from_utf8_lossy(sender).into_owned());
     event.speak_mode = Some(SpeakMode::from_byte(body[0]));
@@ -474,11 +512,11 @@ fn titanium_special(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatE
 /// Titanium's coloured text (`ColoredText_Struct`): a colour, which is a
 /// message type or, below 256, a consider colour, then NUL-terminated text
 /// with the links and markup of any other line.
-fn colored_text(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+fn colored_text(layout: Reading, opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
     ensure!(body.len() >= 5, "truncated ColoredText");
     ensure!(body[4..].contains(&0), "unterminated ColoredText");
     let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
-        .with_message(message_for(Layout::Titanium, &body[4..], include_raw));
+        .with_message(message_for(layout, &body[4..], include_raw));
     event.message_type = Some(u32_at(body, 0));
     Ok(event)
 }
@@ -487,7 +525,7 @@ fn colored_text(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent
 /// the text with no NUL; one ends it if it comes. Nothing in TAKP's or
 /// Quarm's world sends it today; the zones only relay it.
 fn eqmac_world_text(opcode: u16, body: &[u8], include_raw: bool) -> ChatEvent {
-    let text = message_for(Layout::EqMac, body, include_raw);
+    let text = message_for(Reading::EqMac, body, include_raw);
     ChatEvent::new(opcode, body, ChannelName::System, include_raw).with_message(text)
 }
 
@@ -496,7 +534,7 @@ fn eqmac_world_text(opcode: u16, body: &[u8], include_raw: bool) -> ChatEvent {
 fn eqmac_spell_text(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
     ensure!(body.len() > 2, "truncated SpellTextMessage");
     let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
-        .with_message(message_for(Layout::EqMac, &body[2..], include_raw));
+        .with_message(message_for(Reading::EqMac, &body[2..], include_raw));
     event.source_spawn_id = nonzero_spawn(u16_at(body, 0));
     Ok(event)
 }
@@ -509,7 +547,7 @@ fn eqmac_spell_text_by_number(opcode: u16, body: &[u8], include_raw: bool) -> Re
         body[6..].contains(&0),
         "unterminated SpellTextMessageStringID"
     );
-    let caster_name = message_for(Layout::EqMac, &body[6..], include_raw);
+    let caster_name = message_for(Reading::EqMac, &body[6..], include_raw);
     let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
     event.string_id = Some(u32_at(body, 2));
     event.arguments = Some(vec![caster_name]);
@@ -589,11 +627,13 @@ fn hex_number(bytes: &[u8]) -> u32 {
     })
 }
 
-fn item_id(layout: Layout, body: &[u8]) -> u32 {
+fn item_id(layout: Reading, body: &[u8]) -> u32 {
     let digits = &body[1..];
     match layout {
-        Layout::Titanium => hex_number(&digits[..5]),
-        Layout::EqMac => std::str::from_utf8(digits)
+        // `RoF2`'s 56-character body keeps the item at digits 1 to 5
+        // (`common/say_link.cpp`).
+        Reading::Titanium | Reading::Rof2 => hex_number(&digits[..5]),
+        Reading::EqMac => std::str::from_utf8(digits)
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or_else(|| hex_number(digits)),
@@ -790,7 +830,7 @@ impl ChatEvent {
 /// Extract readable text and complete item-link bodies from a wire message.
 /// `start`/`end` retain wire byte offsets, including both 0x12 delimiters.
 /// `text_start`/`text_end` address the decoded label after lossy UTF-8 conversion.
-fn message_for(layout: Layout, bytes: &[u8], include_raw: bool) -> Message {
+fn message_for(layout: Reading, bytes: &[u8], include_raw: bool) -> Message {
     let bytes = cstr(bytes);
     let mut links = Vec::new();
     let mut readable = String::new();
@@ -798,8 +838,9 @@ fn message_for(layout: Layout, bytes: &[u8], include_raw: bool) -> Message {
     let mut pos = 0;
     while pos < bytes.len() {
         let body_size = match layout {
-            Layout::Titanium => 45,
-            Layout::EqMac => 7,
+            Reading::Titanium => 45,
+            Reading::EqMac => 7,
+            Reading::Rof2 => 56,
         };
         if bytes[pos] == 0x12 && pos + body_size + 1 < bytes.len() {
             let body = &bytes[pos + 1..pos + 1 + body_size];
@@ -841,7 +882,7 @@ fn message_for(layout: Layout, bytes: &[u8], include_raw: bool) -> Message {
 /// Extract Titanium/P99 item links and readable text from a wire message.
 #[must_use]
 pub fn message(bytes: &[u8], include_raw: bool) -> Message {
-    message_for(Layout::Titanium, bytes, include_raw)
+    message_for(Reading::Titanium, bytes, include_raw)
 }
 
 /// Decode every Titanium communication packet, without filtering channel IDs.
@@ -858,21 +899,22 @@ pub fn parse(opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatE
 /// record's setter then message at 68, Titanium's player, setter and
 /// message at 4, 68 and 136.
 fn guild_motd(
-    layout: Layout,
+    layout: Reading,
     opcode: u16,
     body: &[u8],
     channel: ChannelName,
     include_raw: bool,
 ) -> Result<ChatEvent> {
     Ok(match layout {
-        Layout::EqMac => {
+        Reading::EqMac => {
             ensure!(body.len() > 68, "truncated guild MOTD");
             let mut event = ChatEvent::new(opcode, body, channel, include_raw)
                 .with_message(message_for(layout, &body[68..], include_raw));
             event.sender = nonempty_text(&body[..64]);
             event
         }
-        Layout::Titanium => {
+        // Neither generation has an encoder for it: the server's struct.
+        Reading::Titanium | Reading::Rof2 => {
             ensure!(body.len() >= 137, "truncated guild MOTD");
             let mut event = ChatEvent::new(opcode, body, channel, include_raw)
                 .with_message(message_for(layout, &body[136..], include_raw));
@@ -884,44 +926,139 @@ fn guild_motd(
 }
 
 /// A channel message: the recipient, the sender, the language, the channel,
-/// two unknown words and the skill, then the text.
+/// two unknown words and the skill, then the text; `RoF2`'s is its own
+/// ([`rof2_channel_message`]).
 fn channel_message(
-    layout: Layout,
+    layout: Reading,
     opcode: u16,
     body: &[u8],
     include_raw: bool,
 ) -> Result<ChatEvent> {
-    let header = match layout {
-        Layout::Titanium => TITANIUM_CHANNEL_MESSAGE_HEADER,
-        Layout::EqMac => MAC_CHANNEL_MESSAGE_HEADER,
+    let checked = |header: usize| -> Result<usize> {
+        ensure!(body.len() > header, "truncated ChannelMessage");
+        ensure!(body[header..].contains(&0), "unterminated ChannelMessage");
+        Ok(header)
     };
-    ensure!(body.len() > header, "truncated ChannelMessage");
-    ensure!(body[header..].contains(&0), "unterminated ChannelMessage");
-    let channel = match layout {
-        Layout::Titanium => u32_at(body, 132),
-        Layout::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
-    };
-    let name = match channel {
-        TELL_ECHO => ChannelName::TellEcho,
-        _ => channel_name(channel),
-    };
-    let mut event = ChatEvent::new(opcode, body, name, include_raw).with_message(message_for(
-        layout,
-        &body[header..],
-        include_raw,
-    ));
-    event.channel = Some(channel);
-    event.sender = Some(text(&body[64..128]));
-    event.target = nonempty_text(&body[..64]);
     // As sent: `EQEmu` sends 27 for a tongue the listener barely
     // knows and the lower of the two skills; TAKP the speaker's.
-    let (language, skill) = match layout {
-        Layout::Titanium => (u32_at(body, 128), u32_at(body, 144)),
-        Layout::EqMac => (u32::from(u16_at(body, 128)), u32::from(u16_at(body, 134))),
+    let (header, channel, language, skill) = match layout {
+        Reading::Titanium => (
+            checked(TITANIUM_CHANNEL_MESSAGE_HEADER)?,
+            u32_at(body, 132),
+            u32_at(body, 128),
+            u32_at(body, 144),
+        ),
+        Reading::EqMac => (
+            checked(MAC_CHANNEL_MESSAGE_HEADER)?,
+            u32::from(u16::from_le_bytes([body[130], body[131]])),
+            u32::from(u16_at(body, 128)),
+            u32::from(u16_at(body, 134)),
+        ),
+        Reading::Rof2 => return rof2_channel_message(opcode, body, include_raw),
     };
-    event.language = Some(u8::try_from(language).unwrap_or(u8::MAX));
-    event.language_skill = Some(u8::try_from(skill).unwrap_or(u8::MAX));
-    Ok(event)
+    Ok(channel_event(
+        ChannelParts {
+            opcode,
+            body,
+            message: message_for(layout, &body[header..], include_raw),
+            channel,
+            sender: text(&body[64..128]),
+            target: nonempty_text(&body[..64]),
+            language,
+            skill,
+        },
+        include_raw,
+    ))
+}
+
+/// What a channel message says, wherever its generation puts each part.
+struct ChannelParts<'a> {
+    opcode: u16,
+    body: &'a [u8],
+    message: Message,
+    channel: u32,
+    sender: String,
+    target: Option<String>,
+    language: u32,
+    skill: u32,
+}
+
+/// The event a channel message gives, the same for every generation: the
+/// channel's name, the tell echo told apart, and the language and skill as
+/// sent, a number past 254 read as 255.
+fn channel_event(parts: ChannelParts<'_>, include_raw: bool) -> ChatEvent {
+    let name = match parts.channel {
+        TELL_ECHO => ChannelName::TellEcho,
+        _ => channel_name(parts.channel),
+    };
+    let mut event =
+        ChatEvent::new(parts.opcode, parts.body, name, include_raw).with_message(parts.message);
+    event.channel = Some(parts.channel);
+    event.sender = Some(parts.sender);
+    event.target = parts.target;
+    event.language = Some(u8::try_from(parts.language).unwrap_or(u8::MAX));
+    event.language_skill = Some(u8::try_from(parts.skill).unwrap_or(u8::MAX));
+    event
+}
+
+/// The longest name the server's 64-byte fields hold, its terminator aside.
+const ROF2_NAME_LIMIT: usize = 63;
+
+/// The bytes after a `RoF2` channel message's text: `ENCODE(OP_ChannelMessage)`
+/// writes three words, a 16-bit word and a byte, all zero.
+const ROF2_CHANNEL_TAIL: usize = 15;
+
+/// `RoF2`'s channel message, as `ENCODE(OP_ChannelMessage)` writes it
+/// (6.521): the sender and the target, each ended by a NUL; a word the
+/// encoder writes as 0, the language, the channel, another 0 word and a 0
+/// byte; the skill; the text, ended by a NUL; and 15 zero bytes. The
+/// encoder's zeros carry nothing from the server and are not read, the
+/// tail's included: its length is checked, and a nonzero byte there is
+/// ignored, as the encoder writes only zeros. Each
+/// name comes from a 64-byte field of the server's, so one past 63 bytes
+/// cannot come from it.
+///
+/// # Errors
+/// Refuses a name or text that does not end inside the body, a name past 63
+/// bytes, a cut field, and a body that is not exactly the text's end and
+/// the 15-byte tail.
+fn rof2_channel_message(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+    let ended = |from: usize| -> Option<usize> {
+        body.get(from..)?
+            .iter()
+            .position(|&byte| byte == 0)
+            .map(|length| from + length)
+    };
+    let sender_end =
+        ended(0).ok_or_else(|| anyhow::anyhow!("unterminated RoF2 channel message name"))?;
+    let target_end = ended(sender_end + 1)
+        .ok_or_else(|| anyhow::anyhow!("unterminated RoF2 channel message name"))?;
+    ensure!(
+        sender_end <= ROF2_NAME_LIMIT && target_end - sender_end - 1 <= ROF2_NAME_LIMIT,
+        "RoF2 channel message name too long"
+    );
+    let fixed = target_end + 1;
+    let text_start = fixed + 21;
+    ensure!(body.len() > text_start, "truncated RoF2 channel message");
+    let text_end = ended(text_start)
+        .ok_or_else(|| anyhow::anyhow!("unterminated RoF2 channel message text"))?;
+    ensure!(
+        body.len() == text_end + 1 + ROF2_CHANNEL_TAIL,
+        "invalid RoF2 channel message length"
+    );
+    Ok(channel_event(
+        ChannelParts {
+            opcode,
+            body,
+            message: message_for(Reading::Rof2, &body[text_start..=text_end], include_raw),
+            channel: u32_at(body, fixed + 8),
+            sender: text(&body[..sender_end]),
+            target: nonempty_text(&body[sender_end + 1..target_end]),
+            language: u32_at(body, fixed + 4),
+            skill: u32_at(body, fixed + 17),
+        },
+        include_raw,
+    ))
 }
 
 /// Decode communication packets for the selected server protocol.
@@ -935,15 +1072,15 @@ pub fn parse_for(
     body: &[u8],
     include_raw: bool,
 ) -> Result<Option<ChatEvent>> {
-    let layout = Layout::of(protocol)?;
+    let layout = Reading::of(protocol);
     let event = match CommunicationOpcode::for_protocol(layout, opcode) {
         CommunicationOpcode::Motd => ChatEvent::new(opcode, body, ChannelName::Motd, include_raw)
             .with_message(message_for(layout, body, include_raw)),
         CommunicationOpcode::ChannelMessage => channel_message(layout, opcode, body, include_raw)?,
         CommunicationOpcode::Emote => {
             let text_offset = match layout {
-                Layout::Titanium => 4,
-                Layout::EqMac => 2,
+                Reading::Titanium | Reading::Rof2 => 4,
+                Reading::EqMac => 2,
             };
             ensure!(body.len() > text_offset, "truncated Emote");
             ChatEvent::new(opcode, body, ChannelName::Emote, include_raw).with_message(message_for(
@@ -953,17 +1090,22 @@ pub fn parse_for(
             ))
         }
         CommunicationOpcode::SpecialMessage => match layout {
-            Layout::EqMac => {
+            Reading::EqMac => {
                 ensure!(body.len() > 4, "truncated SpecialMesg");
                 ChatEvent::new(opcode, body, ChannelName::System, include_raw)
                     .with_message(message_for(layout, &body[4..], include_raw))
             }
-            Layout::Titanium => titanium_special(opcode, body, include_raw)?,
+            // `ENCODE(OP_SpecialMesg)` writes Titanium's shape for `RoF2`.
+            Reading::Titanium | Reading::Rof2 => {
+                titanium_special(layout, opcode, body, include_raw)?
+            }
         },
         CommunicationOpcode::FormattedMessage => {
+            // `ENCODE(OP_FormattedMessage)` writes Titanium's shape for
+            // `RoF2`.
             let arguments_offset = match layout {
-                Layout::Titanium => 12,
-                Layout::EqMac => 6,
+                Reading::Titanium | Reading::Rof2 => 12,
+                Reading::EqMac => 6,
             };
             ensure!(body.len() >= arguments_offset, "truncated FormattedMessage");
             let arguments = body[arguments_offset..]
@@ -973,13 +1115,13 @@ pub fn parse_for(
                 .collect();
             let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
             event.string_id = Some(match layout {
-                Layout::Titanium => u32_at(body, 4),
-                Layout::EqMac => u32::from(u16_at(body, 2)),
+                Reading::Titanium | Reading::Rof2 => u32_at(body, 4),
+                Reading::EqMac => u32::from(u16_at(body, 2)),
             });
             // EqMac's layout is left until it is checked on TAKP.
             event.message_type = match layout {
-                Layout::Titanium => Some(u32_at(body, 8)),
-                Layout::EqMac => None,
+                Reading::Titanium | Reading::Rof2 => Some(u32_at(body, 8)),
+                Reading::EqMac => None,
             };
             event.arguments = Some(arguments);
             event
@@ -1001,16 +1143,31 @@ pub fn parse_for(
             ChannelName::GuildMotdReply,
             include_raw,
         )?,
-        CommunicationOpcode::ColoredText => colored_text(opcode, body, include_raw)?,
+        CommunicationOpcode::ColoredText => colored_text(layout, opcode, body, include_raw)?,
         CommunicationOpcode::MultiLineMessage => eqmac_world_text(opcode, body, include_raw),
         CommunicationOpcode::SpellText => eqmac_spell_text(opcode, body, include_raw)?,
         CommunicationOpcode::SpellTextStringId => {
             eqmac_spell_text_by_number(opcode, body, include_raw)?
         }
+        CommunicationOpcode::DisciplineReady => {
+            // A malformed body is the spells reader's to log.
+            match crate::spells::eqmac_token(body) {
+                Ok((string_id, color)) if string_id == crate::spells::DISCIPLINE_READY => {
+                    let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
+                    event.string_id = Some(u32::from(string_id));
+                    event.message_type = Some(u32::from(color));
+                    event
+                }
+                _ => return Ok(None),
+            }
+        }
         CommunicationOpcode::Unknown(_) => return Ok(None),
     };
     Ok(Some(event))
 }
+
+#[cfg(test)]
+mod rof2_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1495,6 +1652,34 @@ mod tests {
         for opcode in [0x1440, 0xd341, 0x4142] {
             assert!(parse(opcode, &by_number, false).unwrap().is_none());
         }
+    }
+
+    #[test]
+    fn eqmac_discipline_ready_is_a_line_and_other_interruptions_are_not() {
+        let eqmac = |body: &[u8]| parse_for(GameDialect::EqMac, 0x3542, body, false);
+        // Quarm's four bytes and TAKP's six: string 393 in the color sent.
+        for body in [&[0x89, 0x01, 15, 0][..], &[0x89, 0x01, 15, 0, 0, 0]] {
+            let event = eqmac(body).unwrap().unwrap();
+            assert_eq!(event.channel_name, ChannelName::System);
+            assert_eq!(
+                (event.string_id, event.message_type, event.message.is_none()),
+                (Some(393), Some(15), true)
+            );
+        }
+        // A cast's interruption is the spells reader's, and a malformed
+        // body is its to log.
+        for body in [
+            &[173, 0, 13, 0][..],
+            &[173, 0, 13, 0, 0, 0],
+            &[0x89, 0x01, 15, 0, 1, 0],
+            &[0x89, 0x01, 15],
+        ] {
+            assert!(eqmac(body).unwrap().is_none());
+        }
+        // Titanium's 0x3542 is not this.
+        assert!(parse(0x3542, &[0x89, 0x01, 15, 0], false)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

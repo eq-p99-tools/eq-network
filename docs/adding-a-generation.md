@@ -78,6 +78,118 @@ and nothing of RoF2 is built:
   arm. Where a function carries `#[expect(clippy::match_same_arms)]` for its RoF2 arms, the
   expectation fails once no arm matches Titanium's any more, so it leaves with the last one.
 
+Built since, from `EQEmu`'s public source and labelled inferred for `RoF2` (6.497), and still
+unreachable because validation refuses the generation:
+
+- The login stage: Titanium's exchange read through `RoF2`'s login server opcodes
+  (`LoginOpcodes::ROF2`), skipping the expansion list newer clients may be sent. It is tested
+  over a socket inside the crate.
+- The character list (`characters::decode` for `Rof2`) and the 488-byte world login info
+  (`world_login::rof2`). The session keeps only names from a `RoF2` list (`without_look`), since
+  the layout is not checked against the client.
+- The world stage against stock `EQEmu` (`world::rof2`, 6.499): the login info, the list, the
+  entry (`OP_EnterWorld`) and the handoff (`OP_ZoneServerInfo`) or the zone-unavailable notice.
+  Between zones it enters once the world's post-entry message arrives. It sends nothing stock
+  `EQEmu` ignores; what the `RoF2` program sends there is a read still owed.
+- The zone connection and entry (`admission::rof2`, 6.501): the entry, the zone's unasked
+  description (its short name read), the spawn request, and the ready after the zone's objects.
+  What the `RoF2` program sends during entry, and what prompts its spawn request and ready, is a
+  read still owed. The handoff between zones still refuses.
+- The player profile and own spawn (`rof2_player`, 6.502), each walked whole as the encoder
+  writes it: every count the encoder's constant, every string ended in its field, and an exact
+  end. The entry completes with the player read from them, or without either with no player
+  (the session then only records). An admitted `RoF2` session still sends nothing in the zone:
+  `EqEmuRof2` offers no feature, server filters or departures, and `Rof2::encode` refuses, so
+  every command is refused. Gems 9 to 12, appearance and the `/who` listing are not read, and
+  what the `RoF2` program reads in each field is a read still owed.
+- Its spawn records (`rof2_player::spawn`, 6.510): stock `EQEmu` sends every spawn as one
+  `OP_ZoneEntry` record, and one walker reads every branch the encoder writes (player,
+  creature, corpse, treasure chest, destructible object, and the three-texture non-player
+  races), with the packed position from the active `Spawn_Struct_Position`. `Rof2::messages`
+  makes each record a spawn, its first zone decoder. The entry keeps the first record, the
+  player's own, to itself, and any later one with the player's id, so the player is never
+  another spawn. With no feature offered, a spawn read during the entry reaches no one yet.
+  The motion deltas, animation and angle are not read, and velocity and forward input stay
+  zero.
+- Its spawns' movement and removal (`rof2_player::position` and `despawn`, 6.514): stock
+  `EQEmu` sends the server's 24-byte `PlayerPositionUpdateServer_Struct` unencoded under
+  `OP_ClientUpdate`, its five words laid out as the spawn record's position, which one table
+  reads for both; the velocity and forward input are Titanium's scales, inferred. The 5-byte
+  `OP_DeleteSpawn` gives the spawn id; its last byte is the encoder's constant. The delta
+  heading and the vehicle id are not read. `OP_MobUpdate` and `OP_NPCMoveUpdate` stay unlisted,
+  since stock `EQEmu` sends neither.
+- How its spawns look and how hurt they are (`rof2_looks`, 6.518): the appearance, through the
+  reader every generation shares with `RoF2`'s dialect (its invisibility values read as
+  Titanium's, inferred; kind 20 through the `/who` listing as everywhere); `OP_ChangeSize`, the
+  encoder's rewrite of a size appearance; the player's own hit points with the spawn id first;
+  the health percent; the wear change with its 32-bit material; the animation with the action
+  before the speed (Titanium's speed scale, inferred); and the player states, through the shared
+  reader with `RoF2`'s opcode pair. Each keeps the refusals of Titanium's reader for the same
+  values. What the `RoF2` program does with the invisibility values, the appearance kinds, the
+  elite material and hero's forge model, the size message's constants and the animation speed
+  is a read still owed. `OP_Illusion` is the casting batch's (6.522).
+- The player's own news and the combat records (`rof2_news`, 6.519): the death, level,
+  experience, food and water, coins and time of day go out unencoded, the bytes Titanium gets,
+  and Titanium's readers read them; the mana change is the server's 20 bytes with the slot that
+  Titanium's encoder drops (not read); the damage record carries a 32-bit spell id, refused past
+  16 bits, and the push at 13; the consider answer carries no hit points; the skill update ends
+  in four constants. The death record's bind zone and attack skill sit the other way round on
+  stock `EQEmu` from where both programs' structs declare them, for both generations. The mana
+  and endurance updates with their maxima, and the group and raid percents, stay unlisted.
+- Its chat and the server's own lines (`chat`'s `RoF2` reading, 6.521): the channel message is
+  its own layout, two NUL-ended names, five fixed fields, the text and a 15-byte zero tail;
+  every other line keeps Titanium's shape under `RoF2`'s numbers. Links are 56 characters,
+  passed through unchanged, with the item at Titanium's digits. Outbound chat still refuses
+  `RoF2`.
+- Its casting, stuns and illusions (`rof2_casting`, 6.522): the begin-cast record with the spell
+  in 32 bits first; the action in its 56-byte form, whose instrument modifier is a float the
+  encoder makes from the server's integer, read back as that integer, with the server's 0 to 9
+  wrapped alike and read 0; the interruption, unencoded, through Titanium's reader; the stun's
+  duration and four constants; the illusion's 336 bytes with a 16-bit race; and the face change
+  as its own message with both eye colors, where Titanium's encoder sends an illusion of race
+  -1. What the `RoF2` program does with the action's gem, slot and item-cast type, the stun's
+  constants, the illusion's bytes 70 and 71 and its constant, and the Drakkin words is a read
+  still owed.
+- Its buffs (`rof2_buffs`, 6.527): the buff update in its 100-byte form, whose fade word the
+  encoder narrows to 1 or 2 (read as Titanium's 1 and 0, inferred) and which carries no
+  counters; the icon messages, its own window and a target's, which Titanium is not sent and
+  which give `WorldEvent::BuffIcons`; and the pet's window in the icon messages' shape, read
+  into Titanium's pet buffs. The server's buff slots are `RoF2`'s own. How the `RoF2` program
+  applies the fade words, and what it does with the update's hit count, location and slot
+  data, is a read still owed.
+- Its spell book and gems (`rof2_spellbook`, 6.532): the memorize, swap and deletion messages go
+  out unencoded, the server's own structs, and Titanium's readers read them with a 720-slot book.
+  A bar refresh's slot is the server's casting slot, which Titanium's encoder renumbers, and it
+  carries the reduction Titanium's encoder drops. The profile's book and gems 9 to 12 stay the
+  profile's planned part.
+- Its mana and endurance pools (`rof2_pools`, 6.538): the pool updates with their maxima and the
+  group's and raid's percents, which the server sends SoD and later clients only, unencoded, and
+  which give events of their own, since Titanium is sent nothing like them.
+- Its doors, ground objects and weather (`rof2_world`, 6.539): the door table and the ground
+  object have encoders of their own, and Titanium's readers take the door table by record length
+  and size width; the door's move, the click and the weather go out unencoded. The door record's
+  constants, the ground object's tilts and size, and the zone-in weather are reads still owed.
+- Its rolls, assists, yells for help and effects (`rof2_socials`, 6.541): seven messages with no
+  encoder for either generation, read by Titanium's readers under `RoF2`'s numbers. Whether the
+  program reads the spell effect's last fields and plays the sound file as Titanium does is a
+  read still owed.
+- Its targets, charms, rewards, reuse timers and skill answers (`rof2_answers`, 6.544): eight
+  messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
+  numbers. Whether the program reads the pick pocket answer's skill word and the begging
+  answer's first words is a read still owed.
+- Its quest rewards, renames, new titles notice and banker's change (`rof2_notices`, 6.549):
+  four messages with no encoder for either generation, read by Titanium's readers under
+  `RoF2`'s numbers. Whether the program reads the reward's faction words and the rename's two
+  words is a read still owed.
+- Its corpse money and loot close, surname answer and titles (`rof2_loot_titles`, 6.552): five
+  messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
+  numbers, but for the Loot All marker that ends a SoD and later listing, which gives no event
+  until the loot listing is read and blocks lifting validate. How the program shows that marker
+  is a read still owed.
+- Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
+  and nothing else, so the gap log tells every other message as unlisted. A test holds the
+  rows to the stages' own opcodes in both directions.
+
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.
 So these are exhaustive matches too, and the guard test covers `ServerProtocol` as well.

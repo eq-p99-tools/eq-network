@@ -23,6 +23,12 @@ use serde::Serialize;
 /// `OP_TradeSkillCombine`, both ways.
 pub const COMBINE_OPCODE: u16 = 0x0b40;
 
+/// `EQMac`'s `OP_TradeSkillCombine`, both ways (TAKP and Quarm, 6.598).
+pub const EQMAC_COMBINE_OPCODE: u16 = 0x0541;
+
+/// The length of `EQMac`'s `Combine_Struct`; both servers drop any other.
+const EQMAC_COMBINE_LENGTH: usize = 32;
+
 /// The slot a combine names for the world container open for the player,
 /// such as a forge (`SLOT_TRADESKILL_EXPERIMENT_COMBINE`).
 pub const WORLD_CONTAINER: InventorySlot = InventorySlot(1000);
@@ -122,6 +128,43 @@ pub fn titanium_combine(container: InventorySlot) -> Result<EncodedCommand> {
     })
 }
 
+/// `EQMac`'s `OP_TradeSkillCombine` for the container in a pack slot, or
+/// for the open world container (`Combine_Struct`, 32 bytes).
+///
+/// TAKP's and Quarm's `Object::HandleCombine` read only the container's
+/// slot, a 16-bit value at +4: 1000 for the open world container, else the
+/// pack slot holding the bag. Both servers take the world object's type,
+/// the bag's type and the recipe from their own records. The other fields
+/// (world object type, skill, the items in each place, product, difficulty
+/// and container ID) are the `EQMac` program's own and are left zero here:
+/// what the program writes there is unread (row 6.598a).
+///
+/// # Errors
+/// Rejects anything other than a carried pack or the open world container.
+pub fn eqmac_combine(container: InventorySlot) -> Result<EncodedCommand> {
+    ensure!(
+        container.is_pack() || container == WORLD_CONTAINER,
+        "a combine needs a carried pack or an open world container"
+    );
+    let slot = i16::try_from(container.0)?;
+    let mut body = vec![0; EQMAC_COMBINE_LENGTH];
+    body[4..6].copy_from_slice(&slot.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: EQMAC_COMBINE_OPCODE,
+        body,
+    })
+}
+
+/// `EQMac`'s answer to a combine: always empty, as TAKP and Quarm send it to
+/// let the client transact again, after a refusal or after the recipe ran.
+///
+/// # Errors
+/// Rejects an answer with a body.
+pub fn eqmac_decode(body: &[u8]) -> Result<CombineUpdate> {
+    ensure!(body.is_empty(), "invalid EQMac combine answer length");
+    Ok(CombineUpdate::Answered)
+}
+
 /// The server's answer to a combine.
 ///
 /// # Errors
@@ -150,6 +193,23 @@ mod tests {
         for slot in [-1, 0, 21, 30, 251, 2000, 40_000] {
             assert!(titanium_combine(InventorySlot(slot)).is_err());
         }
+    }
+
+    #[test]
+    fn a_mac_combine_names_only_the_container_slot() {
+        let combine = eqmac_combine(InventorySlot(23)).unwrap();
+        assert_eq!(combine.opcode, 0x0541);
+        let mut expected = [0_u8; 32];
+        expected[4] = 23;
+        assert_eq!(combine.body, expected);
+        let world = eqmac_combine(WORLD_CONTAINER).unwrap();
+        expected[4..6].copy_from_slice(&[0xe8, 0x03]);
+        assert_eq!(world.body, expected);
+        for slot in [-1, 0, 21, 30, 251, 2000, 4000, 40_000] {
+            assert!(eqmac_combine(InventorySlot(slot)).is_err());
+        }
+        assert_eq!(eqmac_decode(&[]).unwrap(), CombineUpdate::Answered);
+        assert!(eqmac_decode(&[0]).is_err());
     }
 
     #[test]

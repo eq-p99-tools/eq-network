@@ -63,6 +63,9 @@ pub(super) enum Resource {
     CursorAndStation,
     /// Another request to pick an item up from the ground.
     GroundPickup,
+    /// A merchant's or a trader's window, whose lists come in the same
+    /// packets: one at a time.
+    Shopping,
 }
 
 /// Resources held right now, each with the reason shown to a refused command.
@@ -122,8 +125,9 @@ fn touches_cursor_or_station(command: &ClientCommand) -> bool {
 /// a decision here.
 #[allow(clippy::too_many_lines)] // Keep the exhaustive resource table together.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
-    use Resource::{Casting, GroundPickup, Inventory, Spellbook};
+    use Resource::{Casting, CursorAndStation, GroundPickup, Inventory, Shopping, Spellbook};
     match command {
+        ClientCommand::Shop { open: true, .. } => &[Shopping],
         ClientCommand::CastSpell { .. }
         | ClientCommand::UseKnightAbility { .. }
         | ClientCommand::UseDiscipline { .. } => &[Casting],
@@ -134,7 +138,17 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
             ability if ability.strikes() => &[Casting],
             _ => &[],
         },
-        ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
+        // The server copies what is worn as a bandolier save arrives, so the
+        // save waits for a cast (6.564 E2, inferred until R49-45 b) and for
+        // a move in flight, which would change what the session copies.
+        ClientCommand::UseItem(_)
+        | ClientCommand::UseBeltItem(_)
+        | ClientCommand::RangedAttack(_)
+        | ClientCommand::SaveBandolier { .. } => &[Casting, Inventory],
+        // A swap moves what the server never confirms: it waits for a
+        // cast, a station and a trader's window as well (6.566, inferred
+        // until R49-45 b).
+        ClientCommand::SwapBandolier { .. } => &[Casting, Inventory, CursorAndStation, Shopping],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
@@ -176,6 +190,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::FeignLanded { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::SendChatInAdmission { .. }
+        // The chat server's link is its own connection.
+        | ClientCommand::ChatChannel { .. }
         | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
@@ -192,6 +208,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::OfferTrade { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::MoveCoins { .. }
+        | ClientCommand::DestroyCoins { .. }
         | ClientCommand::Jump { .. }
         // Damage done holds nothing back.
         | ClientCommand::EnvironmentalDamage { .. }
@@ -202,6 +219,22 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // Stopping a cast must work during one; a yell holds nothing.
         | ClientCommand::StopCasting { .. }
         | ClientCommand::YellForHelp { .. }
+        // Nor does a shield: the server keeps its recast. Nor does asking
+        // about a discipline's reuse, which the server answers.
+        | ClientCommand::Shield { .. }
+        | ClientCommand::AskDisciplineReuse { .. }
+        // Nor do the journal's requests: the journal paces its own.
+        | ClientCommand::AcceptTask { .. }
+        | ClientCommand::DeclineTasks { .. }
+        | ClientCommand::CancelTask { .. }
+        | ClientCommand::AskTaskHistory { .. }
+        | ClientCommand::ListTaskTimers { .. }
+        // A challenge holds nothing; the duel feature paces it.
+        | ClientCommand::ChallengeDuel { .. }
+        // A report to the staff holds nothing back either.
+        | ClientCommand::SendPetition { .. }
+        | ClientCommand::ReportBug { .. }
+        | ClientCommand::SendFeedback { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::SelectTarget { .. }
@@ -211,6 +244,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AnswerResurrection { .. }
         | ClientCommand::AnswerSacrifice { .. }
         | ClientCommand::AnswerTranslocate { .. }
+        | ClientCommand::AnswerDuel { .. }
         | ClientCommand::RespondToPopup { .. }
         | ClientCommand::InspectPlayer { .. }
         | ClientCommand::SetInspectNote { .. }
@@ -219,10 +253,26 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::DeclineGroup { .. }
         | ClientCommand::Disband { .. }
         | ClientCommand::ToggleAway { .. }
+        | ClientCommand::LookForGroup { .. }
         | ClientCommand::ToggleAnonymous { .. }
         | ClientCommand::ToggleRoleplay { .. }
         | ClientCommand::ShowHelm { .. }
         | ClientCommand::Random { .. }
+        | ClientCommand::Surname { .. }
+        | ClientCommand::RequestTitles { .. }
+        | ClientCommand::SetTitle { .. }
+        | ClientCommand::TrainAlternateAdvancement { .. }
+        | ClientCommand::SetAlternateAdvancementSplit { .. }
+        // The server judges a cast in flight itself; the program's own
+        // check is read R49-39b.
+        | ClientCommand::ActivateAlternateAdvancement { .. }
+        | ClientCommand::BazaarSearch { .. }
+        | ClientCommand::BazaarWelcome { .. }
+        | ClientCommand::BrowseTrader { .. }
+        | ClientCommand::EndBrowse { .. }
+        | ClientCommand::ClearBandolier { .. }
+        | ClientCommand::SetPotionBelt { .. }
+        | ClientCommand::ClearPotionBelt { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -260,6 +310,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::AnswerListPolls { .. }
+        | ClientCommand::ChooseServerFilters { .. }
+        | ClientCommand::SetServerFilters { .. }
         | ClientCommand::SetMovementOptions { .. }
         | ClientCommand::SetBookOptions { .. }
         | ClientCommand::BoatControl { .. }
@@ -333,6 +385,14 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
         }),
         ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
+        ClientCommand::ChooseServerFilters { .. } => WorldEvent::ServerFiltersRefused {
+            session_id: None,
+            reason: reason.into(),
+        },
+        ClientCommand::SetServerFilters { session_id, .. } => WorldEvent::ServerFiltersRefused {
+            session_id: Some(*session_id),
+            reason: reason.into(),
+        },
         ClientCommand::CastSpell { .. }
         | ClientCommand::UseKnightAbility { .. }
         | ClientCommand::UseDiscipline { .. } => {
@@ -347,6 +407,12 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. } => return super::looting::rejected(command, reason),
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
+            session_id: request.session_id,
+            request_id: request.request_id,
+            error,
+            string_id: None,
+        },
+        ClientCommand::UseBeltItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
             error,
@@ -378,14 +444,17 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::OfferTrade { session_id, .. }
         | ClientCommand::AcceptTrade { session_id, .. }
         | ClientCommand::MoveCoins { session_id, .. }
+        | ClientCommand::DestroyCoins { session_id, .. }
         | ClientCommand::Consume { session_id, .. }
         | ClientCommand::ApplyPoison { session_id, .. }
+        | ClientCommand::ChatChannel { session_id, .. }
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
         | ClientCommand::AnswerResurrection { session_id, .. }
         | ClientCommand::AnswerSacrifice { session_id, .. }
         | ClientCommand::AnswerTranslocate { session_id, .. }
+        | ClientCommand::AnswerDuel { session_id, .. }
         | ClientCommand::RespondToPopup { session_id, .. }
         | ClientCommand::InspectPlayer { session_id, .. }
         | ClientCommand::SetInspectNote { session_id, .. }
@@ -394,11 +463,38 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::DeclineGroup { session_id, .. }
         | ClientCommand::Disband { session_id }
         | ClientCommand::ToggleAway { session_id }
+        | ClientCommand::LookForGroup { session_id, .. }
         | ClientCommand::ToggleAnonymous { session_id }
         | ClientCommand::ToggleRoleplay { session_id }
         | ClientCommand::ShowHelm { session_id, .. }
         | ClientCommand::Random { session_id, .. }
+        | ClientCommand::Surname { session_id, .. }
+        | ClientCommand::RequestTitles { session_id }
+        | ClientCommand::SetTitle { session_id, .. }
+        | ClientCommand::TrainAlternateAdvancement { session_id, .. }
+        | ClientCommand::ActivateAlternateAdvancement { session_id, .. }
+        | ClientCommand::SetAlternateAdvancementSplit { session_id, .. }
+        | ClientCommand::BazaarSearch { session_id, .. }
+        | ClientCommand::BazaarWelcome { session_id }
+        | ClientCommand::BrowseTrader { session_id, .. }
+        | ClientCommand::EndBrowse { session_id }
+        | ClientCommand::SaveBandolier { session_id, .. }
+        | ClientCommand::ClearBandolier { session_id, .. }
+        | ClientCommand::SwapBandolier { session_id, .. }
+        | ClientCommand::SetPotionBelt { session_id, .. }
+        | ClientCommand::ClearPotionBelt { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
+        | ClientCommand::Shield { session_id, .. }
+        | ClientCommand::AskDisciplineReuse { session_id, .. }
+        | ClientCommand::AcceptTask { session_id, .. }
+        | ClientCommand::DeclineTasks { session_id }
+        | ClientCommand::CancelTask { session_id, .. }
+        | ClientCommand::AskTaskHistory { session_id, .. }
+        | ClientCommand::ListTaskTimers { session_id, .. }
+        | ClientCommand::ChallengeDuel { session_id, .. }
+        | ClientCommand::SendPetition { session_id, .. }
+        | ClientCommand::ReportBug { session_id, .. }
+        | ClientCommand::SendFeedback { session_id, .. }
         | ClientCommand::EmoteAnimation { session_id, .. }
         | ClientCommand::Emote { session_id, .. }
         | ClientCommand::SocialEmote { session_id, .. }
@@ -530,6 +626,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             WorldEvent::ExchangeRefused { session_id, reason }
         }
         ClientCommand::MoveCoins { .. }
+        | ClientCommand::DestroyCoins { .. }
         | ClientCommand::ChangeCoins { .. }
         | ClientCommand::SplitCoins { .. }
         | ClientCommand::SetAutoSplit { .. } => WorldEvent::CoinsRefused {
@@ -558,6 +655,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             reason,
             string_id: None,
         },
+        ClientCommand::ChatChannel { .. } => WorldEvent::ChatChannelRefused { session_id, reason },
         ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused {
             session_id,
             reason,
@@ -583,6 +681,11 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             session_id,
             reason,
         },
+        ClientCommand::AnswerDuel { offer_id, .. } => WorldEvent::DuelRefused {
+            offer_id: *offer_id,
+            session_id,
+            reason,
+        },
         ClientCommand::InspectPlayer { .. } => {
             WorldEvent::PlayerInspectionRefused { session_id, reason }
         }
@@ -595,6 +698,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             string_id: None,
         },
         ClientCommand::ToggleAway { .. }
+        | ClientCommand::LookForGroup { .. }
         | ClientCommand::ToggleAnonymous { .. }
         | ClientCommand::ToggleRoleplay { .. }
         | ClientCommand::ShowHelm { .. } => WorldEvent::ListingRefused {
@@ -602,8 +706,29 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             reason,
             string_id: None,
         },
+        ClientCommand::SendPetition { .. } => WorldEvent::ReportRefused {
+            session_id,
+            report: eq_network_game::reports::ReportKind::Petition,
+            reason,
+        },
+        ClientCommand::ReportBug { .. } => WorldEvent::ReportRefused {
+            session_id,
+            report: eq_network_game::reports::ReportKind::Bug,
+            reason,
+        },
+        ClientCommand::SendFeedback { .. } => WorldEvent::ReportRefused {
+            session_id,
+            report: eq_network_game::reports::ReportKind::Feedback,
+            reason,
+        },
         ClientCommand::Random { .. }
+        | ClientCommand::Surname { .. }
+        | ClientCommand::RequestTitles { .. }
+        | ClientCommand::SetTitle { .. }
         | ClientCommand::YellForHelp { .. }
+        | ClientCommand::Shield { .. }
+        | ClientCommand::AskDisciplineReuse { .. }
+        | ClientCommand::ChallengeDuel { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
@@ -626,6 +751,31 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             arguments: Vec::new(),
         },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
+        ClientCommand::TrainAlternateAdvancement { .. }
+        | ClientCommand::ActivateAlternateAdvancement { .. }
+        | ClientCommand::SetAlternateAdvancementSplit { .. } => {
+            WorldEvent::AlternateAdvancementRefused {
+                session_id,
+                reason,
+                refusal: None,
+            }
+        }
+        ClientCommand::BazaarSearch { .. }
+        | ClientCommand::BazaarWelcome { .. }
+        | ClientCommand::BrowseTrader { .. }
+        | ClientCommand::EndBrowse { .. } => WorldEvent::BazaarRefused { session_id, reason },
+        ClientCommand::SaveBandolier { .. }
+        | ClientCommand::ClearBandolier { .. }
+        | ClientCommand::SwapBandolier { .. }
+        | ClientCommand::SetPotionBelt { .. }
+        | ClientCommand::ClearPotionBelt { .. } => {
+            WorldEvent::BandolierRefused { session_id, reason }
+        }
+        ClientCommand::AcceptTask { .. }
+        | ClientCommand::DeclineTasks { .. }
+        | ClientCommand::CancelTask { .. }
+        | ClientCommand::AskTaskHistory { .. }
+        | ClientCommand::ListTaskTimers { .. } => WorldEvent::TaskRefused { session_id, reason },
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
             session_id,
             reason,
@@ -689,6 +839,7 @@ mod tests {
         let command = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| refuse(&command, "Not available on this server", out.log));
@@ -745,6 +896,7 @@ mod tests {
         let door = ClientCommand::ClickDoor {
             session_id: 1,
             door_id: 4,
+            point: None,
             created: now,
         };
         assert!(matches!(
