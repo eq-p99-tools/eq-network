@@ -143,13 +143,39 @@ fn sent(
     assert!(outcome.events.is_empty());
 }
 
+/// The program sends a pet order without asking whether there is a pet
+/// (0x49975b, read R49-22a), and every server's handler returns in silence
+/// when there is none, so an order with no pet goes out once, on each server
+/// type, with nothing local said (6.610 G2).
+#[test]
+fn an_order_with_no_pet_goes_out_once_on_every_server() {
+    for protocol in [
+        ServerProtocol::EqEmu,
+        ServerProtocol::Project1999,
+        ServerProtocol::Takp,
+        ServerProtocol::Quarm,
+    ] {
+        let mut zone = Session::new(protocol, 5);
+        let outcome = zone.send(zone.order(PetCommand::BackOff, None));
+        assert!(outcome.result.unwrap().is_none(), "{protocol:?}");
+        assert_eq!(outcome.sent.len(), 1, "{protocol:?}");
+        assert!(
+            !outcome.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::PetRefused { .. }) | ClientEvent::Diagnostic(_)
+            )),
+            "{protocol:?} {:?}",
+            outcome.events
+        );
+    }
+}
+
 #[test]
 fn pet_ownership_changes_invalidate_orders_even_when_the_id_returns() {
     let mut zone = Session::new(ServerProtocol::EqEmu, 5);
-    refused(
-        zone.send(zone.order(PetCommand::Follow, None)),
-        "You have no pet",
-    );
+    // With no pet, an order still goes out, as the program sends it (6.610).
+    let outcome = zone.send(zone.order(PetCommand::Follow, None));
+    assert_eq!(outcome.sent, [pets::command(PetCommand::Follow, None)]);
 
     // A charm of an unseen ID does not attach itself to a later spawn.
     assert_eq!(

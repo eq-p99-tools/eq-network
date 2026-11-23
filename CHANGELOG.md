@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Pet orders and charms, as read R49-22a reads the Titanium program (6.610,
+  gap 3.5).
+  - **An order with no pet is sent** on every server type, as the program
+    sends it (0x49975b). The "You have no pet" refusal (13091, which is really
+    the program's line for targeting a pet with none) is gone. EQEmu's,
+    Quarm's (fc75fcf) and TAKP's (44afcbf) handlers return in silence. The
+    guard on a changed pet identity stays: it is ours, and it only refuses.
+  - **A Titanium charm of a race 108, 216 or 472 spawn is ignored**, as the
+    program's `OP_Charm` handler ignores it (0x453d7b), with a diagnostic.
+    New: `control::CHARM_IGNORED_RACES`. The +0x1b3 byte it also checks is
+    unread.
+
 - A Titanium door click names the item held on the cursor, as read R49-22b
   reads the program (checklist 6.537, gap 3.4).
   - Bytes 8 to 11 of `OP_ClickDoor` carry the cursor item's ID from the

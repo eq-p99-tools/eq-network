@@ -153,19 +153,20 @@ impl Feature for Pets {
         } else {
             None
         };
-        // A targeted Leader query asks another spawn. With no target, the
-        // server asks our own pet, so that case still needs its identity.
-        if order != PetCommand::Leader || target.is_none() {
-            if pet != world.own_pet {
-                return actions::refuse(command, "Your pet has changed", out.log);
-            }
-            if world.own_pet.is_none() {
-                return actions::refuse_officially(
-                    command,
-                    ("You have no pet", Some(13091)),
-                    out.log,
-                );
-            }
+        // The program sends every `/pet` order without asking whether there is
+        // a pet (eqgame.exe 0x49975b, read R49-22a), and the servers' handlers
+        // return in silence when there is none (EQEmu's, Quarm fc75fcf's and
+        // TAKP 44afcbf's `Handle_OP_PetCommands`; the Mac program is
+        // inferred the same). So an order with no pet goes out.
+        //
+        // This guard is ours, not the program's: an order made for a pet
+        // identity that has changed since (a charm broke, the pet died,
+        // another player took it) is refused, because the host or script
+        // that made it saw an earlier pet. It only ever refuses; it never
+        // sends anything the player did not ask for. A targeted Leader query
+        // asks another spawn, so it needs no identity.
+        if (order != PetCommand::Leader || target.is_none()) && pet != world.own_pet {
+            return actions::refuse(command, "Your pet has changed", out.log);
         }
         if order == PetCommand::Attack {
             let Some(id) = target else {
