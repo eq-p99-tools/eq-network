@@ -376,7 +376,7 @@ pub(super) struct Casting {
 }
 
 /// The Titanium program's item recast stamps (0x411f3d step 6, set by
-/// 0x4bac0d, read R49-34 k): seconds on its wall clock, time() at a base
+/// 0x4bac0d, read R49-34 k): seconds on its wall clock, `time()` at a base
 /// tick plus the ticks since. An item with a recast is refused with 0xec
 /// until the later of its own stamp and its recast type's.
 #[derive(Default)]
