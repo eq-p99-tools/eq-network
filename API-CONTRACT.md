@@ -695,6 +695,27 @@ prefix drains; unrelated failures still propagate. Existing receive signatures
 are unchanged. See
 [evidence and packet limits](docs/session-termination.md).
 
+## Reconnect count and queued commands
+
+With `RunOptions::reconnect` on (the default), `Client::run` and
+`run_with_commands` try at most `RunOptions::reconnect_attempts` fresh logins in
+a row, 5 by default (our bound, 6.534: no read or server source gives one),
+then return the last failure; the count starts again once a run has stayed in
+its zone for at least the reconnect delay, so a server that admits and drops at
+once is still bounded. Each `ClientEvent::Reconnecting` says which `attempt` it
+is of how many (`attempts`); the last before the run ends says `attempt ==
+attempts`. Just before each fresh login says `ConnectionState::Connecting`,
+every command still in the host's queue is dropped unread and told once as
+`ClientEvent::CommandDropped { command, reason }`, with the command's kind and
+our reason only, never its text, recipient or a character name: nothing asked
+for in the ended session acts in the next one. A command sent after that point
+is read by the new login, even one composed before the host saw
+`Reconnecting`, so hosts should send the admission-scoped forms (such as
+`SendChatInAdmission`). When the run ends instead (reconnect off, a confirmed
+rejection or the end of the count), the queue stays the host's. The eq-client
+viewer turns reconnect off; the loop runs for hosts that keep the default, such
+as headless or scripted runs and this crate's tests.
+
 ## Camp completion evidence
 
 `CampStatus::Camped` now means an actual `Message::LoggedOut` was received.

@@ -26,6 +26,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorldEvent::ResourcePercent`, each naming a `rof2_pools::Pool`. Titanium is
   sent none of the four. Coverage lists them. An admitted RoF2 session
   hands the host each and still sends and offers nothing.
+- Cap the reconnect loop and drop what was queued before it (gap 3.11,
+  checklist 6.534). With `RunOptions::reconnect` on (the default),
+  `RunOptions::reconnect_attempts` (default 5, our bound, 6.534) limits the
+  fresh logins in a row; the count starts again only after a run has stayed
+  in its zone for the reconnect delay. Just before each fresh login, every
+  command still queued is dropped unread and told as the new
+  `ClientEvent::CommandDropped` (its kind and our reason only), so a chat
+  line, a character choice or creation, or any other command from the ended
+  session cannot act in the next. Commands sent after the fresh login says
+  `Connecting` are read by it. The eq-client viewer turns reconnect off; the
+  loop runs for hosts that keep the default and in this crate's tests.
+  **Breaking:** `ClientEvent::Reconnecting` gains `attempt` and `attempts`,
+  and `ClientEvent` gains `CommandDropped`.
 - Read RoF2's spell book and gems as stock `EQEmu` sends them, labelled
   inferred for RoF2 (6.532). The new `rof2_spellbook` module reads
   `OP_MemorizeSpell` (0x217c), `OP_SwapSpell` (0x0efa) and `OP_DeleteSpell`
