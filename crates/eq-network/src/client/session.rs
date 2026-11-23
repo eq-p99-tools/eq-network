@@ -41,6 +41,7 @@ mod raids;
 mod reading;
 mod resurrection;
 mod riders;
+pub(super) mod server_filters;
 mod servers;
 mod sight;
 mod socials;
@@ -63,7 +64,7 @@ use super::{
     ConnectionState, DecodeError, Events, GapKind, GapStage, RecordEvent, RunOptions,
     ServerProtocol,
 };
-use crate::{assets::Assets, chat, transport::Application};
+use crate::{assets::Assets, transport::Application};
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::zoning;
 use servers::Shield;
@@ -200,6 +201,9 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
     /// Current character's opt-in; zone crossings retain it.
     pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
+    /// Current character's server filters; zone crossings retain them.
+    pub(in crate::client) server_filters:
+        std::cell::RefCell<eq_network_game::filters::ServerFilters>,
     /// What the riding wire keeps across zones, as the program's globals
     /// do (reads R36 §4, R36c).
     pub(in crate::client) riding: std::sync::Arc<riders::Riding>,
@@ -223,6 +227,7 @@ impl<'a> CharacterSession<'a> {
             commands,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
+            server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
         }
     }
@@ -232,6 +237,8 @@ impl<'a> CharacterSession<'a> {
             // Show the list and forget the departing character's runtime choice.
             self.config.character.clear();
             self.answer_list_polls.set(self.config.answer_list_polls);
+            self.server_filters
+                .replace(self.config.server_filters.clone());
             self.riding = std::sync::Arc::default();
         }
     }

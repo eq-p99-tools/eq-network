@@ -1,7 +1,7 @@
 //! The world server: validating the client, the character list, choosing or
 //! creating a character, and the handoff to its zone. Each client
 //! generation runs it its own way: Titanium's is here, `EQMac`'s in
-//! [`eqmac`].
+//! [`eqmac`], `RoF2`'s in [`rof2`].
 use super::{
     creation::Creating, cstr, login::Credentials, put_string, servers, servers::Shield,
     CharacterSession, ZoneDestination,
@@ -22,6 +22,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub(super) mod eqmac;
+pub(super) mod rof2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldOpcode {
@@ -451,9 +452,12 @@ fn titanium_owned(
         suggestions.tick(log)?;
         if !entered {
             let choice = match &selection {
-                Some(list) => {
-                    crate::client::selection::Selection::poll(list, context.commands, log)?
-                }
+                Some(list) => crate::client::selection::Selection::poll(
+                    list,
+                    context.commands,
+                    Some((&context.server_filters, server.wire().dialect())),
+                    log,
+                )?,
                 None => None,
             };
             match choice {
@@ -850,6 +854,7 @@ pub(super) mod tests {
             commands: None,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(false),
+            server_filters: std::cell::RefCell::default(),
             riding: std::sync::Arc::default(),
         };
         let mut received = Vec::new();

@@ -244,6 +244,12 @@ pub struct ClientConfig {
     /// delay is not native timing or evidence of server acceptance. Joining
     /// a list remains a separate player action.
     pub answer_list_polls: bool,
+    /// The server filters the character starts with: sent at every zone-in
+    /// until [`ClientCommand::SetServerFilters`] changes them for the
+    /// current character. Returning to character selection restores these.
+    /// The default is the packet each generation's client is known to send
+    /// ([`eq_network_game::filters`]).
+    pub server_filters: eq_network_game::filters::ServerFilters,
     /// The host's machine, for the weekly report the official client
     /// makes to the world (see [`eq_network_game::sysinfo`]): the saved
     /// time of the last report, and the machine as the host measures it
@@ -294,6 +300,7 @@ impl ClientConfig {
             local_only: false,
             auto_eat: eq_network_game::food::AutoEat::default(),
             answer_list_polls: false,
+            server_filters: eq_network_game::filters::ServerFilters::default(),
             sysinfo: None,
             sight_catalog: None,
             installed_zone_boundaries: None,
@@ -326,6 +333,9 @@ impl ClientConfig {
             ),
             GameDialect::Rof2 => anyhow::bail!("the RoF2 client generation cannot log in yet"),
         }
+        self.server_filters
+            .check(GameDialect::from(self.protocol))
+            .context("server filters")?;
         ensure!(
             self.character.len() < 64 && !self.character.contains('\0'),
             "character name exceeds protocol field size"
@@ -1204,6 +1214,23 @@ mod tests {
             "QUARM".parse::<ServerProtocol>().unwrap(),
             ServerProtocol::Quarm
         );
+    }
+
+    #[test]
+    fn configured_server_filters_must_fit_the_generations_packet() {
+        use eq_network_game::filters::{FilterCategory, FilterMode};
+        let mut config = ClientConfig::for_protocol(ServerProtocol::EqEmu, "u", "p", "", "");
+        assert!(config.validate().is_ok());
+        config
+            .server_filters
+            .set(FilterCategory::MeleeCrits, FilterMode::GroupOnly);
+        assert!(config.validate().is_err());
+        // EQMac has no damage-over-time word, so any mode for it is left out.
+        let mut config = ClientConfig::for_protocol(ServerProtocol::Quarm, "u", "p", "", "");
+        config
+            .server_filters
+            .set(FilterCategory::DamageOverTime, FilterMode::Show);
+        assert!(config.validate().is_ok());
     }
 
     #[test]

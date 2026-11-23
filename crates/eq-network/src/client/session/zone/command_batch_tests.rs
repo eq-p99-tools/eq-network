@@ -41,6 +41,7 @@ fn every_dequeued_move_gets_one_stamped_result_even_when_a_send_ends_the_batch()
         choices: Vec::new(),
         spell_landing_flag: None,
         answers_list_polls: false,
+        server_filters_at_once: false,
         gameplay_departures: false,
     };
     let original = Position::default();
@@ -181,6 +182,7 @@ fn a_transition_refuses_each_command_already_drained_behind_it() {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: true,
         };
         let mut world = World::new(5);
@@ -248,6 +250,7 @@ fn settlement_failure_refuses_every_move_behind_the_completed_command() {
         choices: vec![],
         spell_landing_flag: None,
         answers_list_polls: false,
+        server_filters_at_once: false,
         gameplay_departures: false,
     };
     let mut world = World::new(5);
