@@ -16,6 +16,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and its four effect readers are shared. Coverage lists the seven, the
   spell effect with Titanium's part. An admitted RoF2 session hands the
   host each and still sends and offers nothing.
+- Bound a walking strafe by the walking strafe rate (checklist 6.540).
+  `MovementMode::Strafe` carries the new `movement::Pace` (`Run`, the
+  default, or `Walk`), as a diagonal already says Walk or Run. The session
+  bounds a `Strafe(Pace::Walk)` by `StrafeCalibration::walk_units_per_second`
+  where the grant has one, and by the one strafe rate where it has none
+  (`EQMac`), so the guard only gets stricter; a running strafe and every
+  other mode keep their bounds. Each grant's span in a sample takes the
+  pace too. The wire is unchanged: the same move walking or running
+  encodes the same packet.
+  **Breaking:** `MovementMode::Strafe` is now `MovementMode::Strafe(Pace)`.
+
 - Read RoF2's doors, ground objects and weather as stock `EQEmu` sends
   them, labelled inferred for RoF2 (6.539). The new `rof2_world` module
   reads `OP_SpawnDoor` (0x7291), 100-byte records with the size widened to
