@@ -523,6 +523,21 @@ timer, not a deadline. The session does no timer arithmetic and keeps no
 timers; it publishes each as received. Points, experience and timers change
 no effect, so they bring no `LiquidHazardRevision`.
 
+Since checklist 6.548 a local TAKP session publishes `EQMac`'s AA facts the
+same way, from TAKP's layouts, keyed by the Mac AA id the client knows:
+`OP_RespondAA` 0x1542 (227 bytes: a first byte TAKP fills with the points
+spent, inferred from its use, then 226 rank bytes, id `r + 1` at `r + 1`;
+id 211's constant 3, TAKP's Fleet of Foot workaround, is passed through) as
+`Update::MacRanks`; the profile's AA array (nonzero ids only, the value as
+sent, which TAKP makes the rank times 16) as `Update::MacSelections` and its
+`aapoints`, `expAA` and `perAA` as `Update::MacPoints`; `OP_AAExpUpdate`
+0x2342 (8 bytes) as `Update::MacProgress`; and the server's 12-byte
+`OP_AAAction` 0x1442, keyed by the Mac AA id, as `Update::MacTimer`. `EQMac`
+servers send no definitions, so no Mac fact enters the environmental sums.
+Quarm shares the decoding, assumed as TAKP, but isn't offered it until its
+own attended row; remote TAKP waits for the local row. An unreadable Mac
+packet withdraws as its Titanium kind does, and a timer withdraws nothing.
+
 Malformed packets withdraw their affected observation. An unreadable
 profile withdraws its points with its selections (`Update::Points(None)`),
 unreadable experience withdraws the last (`Update::Progress(None)`), and an
@@ -534,7 +549,8 @@ whole AA view until replacement facts arrive. These withdrawals never supply
 an empty selection. The local effect-list bound is 256 records per definition;
 staging and definition retention are separately bounded at 4096. Exceeding a
 bound withholds observations. This feature sends no packets, offers no AA
-commands, and is absent from P99, EQMac and remote EQEmu feature sets.
+commands, and is absent from P99, Quarm, RoF2, remote EQEmu and remote TAKP
+feature sets.
 
 [EQEmu Titanium AA layouts](https://github.com/EQEmu/EQEmu/blob/f5ec714c8835b2afd2be1812bb9033ff70a17a64/common/patches/titanium_structs.h#L3229-L3261)
 [EQEmu AA encoders](https://github.com/EQEmu/EQEmu/blob/f5ec714c8835b2afd2be1812bb9033ff70a17a64/common/patches/titanium.cpp#L1749-L1816)

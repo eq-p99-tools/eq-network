@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read `EQMac`'s alternate advancement on local TAKP, read only (6.548):
+  `OP_RespondAA` (0x1542) by Mac AA id, the profile's AA array and points,
+  `OP_AAExpUpdate` (0x2342) and the server's reuse timers on `OP_AAAction`
+  (0x1442), from TAKP's layouts. The first byte of the ranks is labelled
+  the points spent and id 211's constant 3 is passed through, both
+  inferred from TAKP's use. Quarm shares the decoding, assumed as TAKP, and
+  isn't offered it until an attended Quarm row; remote TAKP waits for the
+  local row. `EQMac` servers send no definitions, so nothing new enters the
+  environmental sums.
+
+  **Breaking** (for the client repin): `alternate_advancement::Update` gains
+  `MacRanks(Option<MacRanks>)`, `MacSelections(Option<Vec<MacRank>>)`,
+  `MacPoints(Option<MacPoints>)`, `MacProgress(Option<MacProgress>)` and
+  `MacTimer(MacTimer)`, with those structs.
+
 - Read the rest of Titanium's alternate advancement, read only (6.547):
   every `OP_SendAATable` header field (`Rank` gains `hotkey_sid`,
   `hotkey_sid2`, `title_sid`, `desc_sid`, `cost`, `prereq_skill`,

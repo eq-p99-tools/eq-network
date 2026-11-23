@@ -256,6 +256,13 @@ const TITANIUM_PROFILE: &[Part] = &[
     Part("leadership", Reason::Planned(Step::AlternateAdvancement)),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
 ];
+/// What the session leaves unread of `EQMac`'s AA packets (6.548): it reads
+/// them on a local TAKP session only, so on Quarm (decoded "assumed as
+/// TAKP") and remote TAKP they are still dropped until their rows.
+const EQMAC_AA: &[Part] = &[Part(
+    "all of it on Quarm and on a remote TAKP session",
+    Reason::Planned(Step::AlternateAdvancement),
+)];
 /// What the session leaves unread of `EQMac`'s profile.
 const EQMAC_PROFILE: &[Part] = &[
     Part(
@@ -263,7 +270,7 @@ const EQMAC_PROFILE: &[Part] = &[
         Reason::Planned(Step::EqMacWorld),
     ),
     Part(
-        "alternate advancement",
+        "alternate advancement on Quarm and on a remote TAKP session",
         Reason::Planned(Step::AlternateAdvancement),
     ),
 ];

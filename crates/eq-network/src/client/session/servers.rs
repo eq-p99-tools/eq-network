@@ -1777,6 +1777,17 @@ impl ServerType for Takp {
         offer(shared::reading())
     }
 
+    /// TAKP's AA ranks, points, experience and timers (checklist 6.548),
+    /// local only until a local TAKP row passes. Quarm shares the decoding
+    /// "assumed as TAKP" but isn't offered it until its own attended row.
+    fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
+        if setup.local_only {
+            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+        } else {
+            None
+        }
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::Takp)
     }
@@ -2031,15 +2042,16 @@ mod tests {
     }
 
     #[test]
-    fn environmental_aa_observations_are_only_enabled_for_local_eqemu() {
+    fn aa_observations_are_only_enabled_for_local_eqemu_and_local_takp() {
         let mut setup = Setup::new("Tester", AutoEat::default());
         assert!(EqEmu.environmental_aa(&setup).is_none());
+        assert!(Takp.environmental_aa(&setup).is_none());
         setup.local_only = true;
         assert!(EqEmu.environmental_aa(&setup).is_some());
+        assert!(Takp.environmental_aa(&setup).is_some());
         for protocol in [
             ServerProtocol::Project1999,
             ServerProtocol::Quarm,
-            ServerProtocol::Takp,
             ServerProtocol::EqEmuRof2,
         ] {
             assert!(server_type(protocol).environmental_aa(&setup).is_none());
