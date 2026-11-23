@@ -621,8 +621,8 @@ impl Casting {
             // item cast's end among them, clears it with no line (read
             // R49-21e). A Bard's memorized spell is taken as a song ([I],
             // 6.442), another spell as not.
-            let sung = spell == u32::MAX || song.spell == spell || class_spell || !bard;
-            return sung.then_some(song);
+            let ends_a_song = spell == u32::MAX || song.spell == spell || class_spell || !bard;
+            return ends_a_song.then_some(song);
         }
         None
     }
