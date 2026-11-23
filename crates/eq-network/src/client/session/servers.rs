@@ -1287,6 +1287,9 @@ impl ServerType for EqEmu {
                 ground_drop: setup.local_only,
                 splitting: true,
                 banker_change: true,
+                // `Client::OPMoveCoin`'s slot -1 (checklist 6.512); other
+                // server types list it after their own live check.
+                destroying_coins: true,
                 ..Allowances::STANDARD
             },
             setup,
@@ -1587,6 +1590,7 @@ impl ServerType for Quarm {
                 meals: true,
                 splitting: false,
                 banker_change: false,
+                destroying_coins: false,
             },
             setup,
         ))
@@ -2571,6 +2575,27 @@ mod tests {
         ] {
             assert!(
                 !offers(server_type(protocol)).contains(&Capability::Surnaming),
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_eqemu_lists_destroying_coins() {
+        // `EQEmu`'s `Client::OPMoveCoin` takes slot -1 as destroyed, read
+        // from its source (6.512). P99's server source isn't open, so it
+        // waits for an attended check; TAKP's encoder is built but its server
+        // type waits for its own live check, Quarm's source wasn't read, and
+        // RoF2's send is inferred (6.489).
+        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::DestroyingCoins));
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::DestroyingCoins),
                 "{protocol:?}"
             );
         }

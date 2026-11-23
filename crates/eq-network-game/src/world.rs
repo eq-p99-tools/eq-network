@@ -663,12 +663,15 @@ pub enum Capability {
     /// Asking for a last name: `/surname`
     /// ([`crate::command::GameCommand::Surname`]).
     Surnaming,
+    /// Destroying coins from the cursor
+    /// ([`crate::command::GameCommand::DestroyCoins`]).
+    DestroyingCoins,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 72] = [
+    pub const ALL: [Self; 73] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -741,6 +744,7 @@ impl Capability {
         Self::ServerFiltersAtOnce,
         Self::Dueling,
         Self::Surnaming,
+        Self::DestroyingCoins,
     ];
 }
 
@@ -2547,6 +2551,7 @@ mod tests {
             Capability::ServerFiltersAtOnce => 69,
             Capability::Dueling => 70,
             Capability::Surnaming => 71,
+            Capability::DestroyingCoins => 72,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

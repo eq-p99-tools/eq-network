@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Destroy coins on the cursor (gap 3.x, checklist 6.512).
+  `GameCommand::DestroyCoins` sends `OP_MoveCoin` from the cursor to slot -1
+  with the same kind both sides (Titanium 0x7657, `EQMac` 0x2d41), as stock
+  `EQEmu`'s and TAKP's `Client::OPMoveCoin` read it: taken from the source,
+  added nowhere. That the Titanium program sends it this way is inferred
+  until read R49-11. It names one kind and exactly what the cursor holds of
+  it, or it is refused on `CoinsRefused`; the coins leave the cursor at once
+  (`Wallet::destroy`) and `CoinsElsewhere` reports it. Only stock `EQEmu`
+  offers the new `Capability::DestroyingCoins`: P99 waits for an attended
+  check, TAKP and Quarm for their own, and RoF2 sends nothing yet.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request` and
+  `Capability` (`Capability::ALL` holds 73), and `money::CoinDestroy`.
 - Ask for a last name with `/surname` (gap 3.6, checklist 6.507).
   `GameCommand::Surname` sends `OP_Surname`'s 100-byte record (Titanium
   0x4668, `EQMac` 0xc441) with the surname as typed, under the new

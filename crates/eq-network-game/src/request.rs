@@ -15,7 +15,7 @@ use crate::{
     hazards::{self, Hazard},
     inventory::{self, InventorySlot, MoveQuantity},
     listing::{self, Anonymity},
-    money::CoinTransfer,
+    money::{CoinDestroy, CoinTransfer},
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
@@ -433,6 +433,8 @@ pub enum Request {
     DropCursor,
     /// Move coins between places, or change them into another coin.
     MoveCoins(CoinTransfer),
+    /// Destroy coins from the cursor.
+    DestroyCoins(CoinDestroy),
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -677,6 +679,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DestroyCursor => inventory::titanium_destroy(),
         Request::DropCursor => inventory::titanium_ground_drop(),
         Request::MoveCoins(transfer) => transfer.encode()?,
+        Request::DestroyCoins(destroy) => destroy.encode()?,
         Request::Consume {
             slot,
             meal,
@@ -773,6 +776,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Scribe { slot, spell_id } => spells::eqmac_scribe(*slot, *spell_id),
         Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
+        Request::DestroyCoins(destroy) => destroy.encode_eqmac(),
         Request::BledOut { level } => crate::quarm::bled_out(sender.spawn(), *level),
         Request::AnswerSacrifice { offer, accept } => {
             Ok(confirmations::eqmac_sacrifice_answer(offer, *accept))
