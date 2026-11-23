@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's spell book and gems as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.532). The new `rof2_spellbook` module reads
+  `OP_MemorizeSpell` (0x217c), `OP_SwapSpell` (0x0efa) and `OP_DeleteSpell`
+  (0x3358), which have no RoF2 encoder, through Titanium's readers, now the
+  named `spells::memorized`, `book_swap` and `book_deletion`, with RoF2's
+  720-slot book where Titanium's is 400. A bar refresh carries the server's
+  casting slot and reduction. Coverage lists the three. An admitted RoF2
+  session hands the host each and still sends and offers nothing.
+
 - Measure a Titanium door click from the point clicked on the door
   (checklist 6.530, read R16b and R16e). `GameCommand::ClickDoor` gains
   `point: Option<Position>`, where the host's click ray hit the door's

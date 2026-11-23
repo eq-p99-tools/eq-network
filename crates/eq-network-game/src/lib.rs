@@ -127,6 +127,7 @@ pub mod rof2_casting;
 pub mod rof2_looks;
 pub mod rof2_news;
 pub mod rof2_player;
+pub mod rof2_spellbook;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.

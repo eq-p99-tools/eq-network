@@ -833,6 +833,7 @@ impl Script {
             .chain(rof2_chat())
             .chain(rof2_casting())
             .chain(rof2_buffs())
+            .chain(rof2_spellbook())
         {
             script.packet(opcode, body);
         }
@@ -1053,6 +1054,21 @@ fn rof2_buffs() -> Vec<(u16, Vec<u8>)> {
         (0x3377, icons(4321, 0, u32::MAX, 0)),
         (0x4f4b, icons(77, 1, 2345, 5)),
         (0x5882, icons(312, 1, 3456, 0)),
+    ]
+}
+
+/// A memorize, a spell bar refresh, a swap and a deletion past Titanium's
+/// book (6.532), as `RoF2` messages.
+fn rof2_spellbook() -> Vec<(u16, Vec<u8>)> {
+    let words = |values: [u32; 4]| values.map(u32::to_le_bytes).concat();
+    vec![
+        (0x217c, words([2, 1234, 1, 0])),
+        (0x217c, words([11, 1234, 3, 1500])),
+        (0x0efa, [12u32, 650].map(u32::to_le_bytes).concat()),
+        (
+            0x3358,
+            [&650u16.to_le_bytes()[..], &[0, 0, 1, 0, 0, 0]].concat(),
+        ),
     ]
 }
 
@@ -1442,6 +1458,46 @@ fn an_admitted_rof2_session_hands_the_host_its_buffs() {
         ["list", "duration", "fade", "emptied", "target", "pet"]
     );
     for opcode in ["0x659c", "0x3377", "0x4f4b", "0x5882"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_spell_book_and_gems() {
+    use eq_network_game::spells::SpellUpdate;
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let book: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: 1234,
+                mode: 1,
+            }) => Some("memorized"),
+            WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot: 11,
+                reduction_ms: 1500,
+                ..
+            }) => Some("bar"),
+            WorldEvent::Spell(SpellUpdate::BookSwap { from: 12, to: 650 }) => Some("swap"),
+            WorldEvent::Spell(SpellUpdate::BookDeletion {
+                slot: 650,
+                success: true,
+            }) => Some("deleted"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(book, ["memorized", "bar", "swap", "deleted"]);
+    // The session's spell book is Titanium's and `EQMac`'s alone: an
+    // admitted RoF2 session keeps no book and answers nothing (6.532).
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, WorldEvent::SpellBook(_) | WorldEvent::BookAction(_))));
+    for opcode in ["0x217c", "0x0efa", "0x3358"] {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"

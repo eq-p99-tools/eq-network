@@ -157,6 +157,11 @@ unreachable because validation refuses the generation:
   into Titanium's pet buffs. The server's buff slots are `RoF2`'s own. How the `RoF2` program
   applies the fade words, and what it does with the update's hit count, location and slot
   data, is a read still owed.
+- Its spell book and gems (`rof2_spellbook`, 6.532): the memorize, swap and deletion messages go
+  out unencoded, the server's own structs, and Titanium's readers read them with a 720-slot book.
+  A bar refresh's slot is the server's casting slot, which Titanium's encoder renumbers, and it
+  carries the reduction Titanium's encoder drops. The profile's book and gems 9 to 12 stay the
+  profile's planned part.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.
