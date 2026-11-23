@@ -12,7 +12,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with `InspectPlayer`'s rules (a visible player or the player's own spawn,
   under 20 units, one outstanding request per player), and its answer comes
   back as `WorldEvent::PlayerInspection`. EQEmu and Project 1999 offer it, as
-  they list `PlayerInspection`; TAKP and Quarm do not. Additive.
+  they list `PlayerInspection`; TAKP and Quarm do not. **Breaking:** a new
+  `GameCommand` variant, so exhaustive matches add its arm.
 - `Capability::BardRefreshTimers` (checklist 6.642): where the Titanium
   program's gem timers for a Bard apply (read R49-21 c). A refresh of a
   Bard's own gem (`OP_MemorizeSpell` kind 3) sets the program's wait before
