@@ -122,6 +122,7 @@ pub mod resurrection;
 /// What a quest or a task gives the player.
 pub mod rewards;
 /// `RoF2`'s player profile and own spawn, as stock `EQEmu` writes them.
+pub mod rof2_looks;
 pub mod rof2_player;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;

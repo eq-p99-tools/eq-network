@@ -6,7 +6,7 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510).
+//! (6.510, 6.514, 6.518).
 
 use super::{
     sent, Part,
@@ -51,6 +51,12 @@ const SPAWN: &[Part] = &[
 /// What the zone decoder leaves unread of a position update (6.514).
 const POSITION: &[Part] = &[Part("the delta heading and the vehicle id", Planned(Rof2))];
 
+/// What the zone decoder leaves unread of a wear change (6.518).
+const WEAR_CHANGE: &[Part] = &[Part(
+    "the elite material, the hero's forge model and two unknown words",
+    Planned(Rof2),
+)];
+
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
 /// client; nothing for one no stage reads yet.
 pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
@@ -88,6 +94,20 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         // either), so the gap log tells one if it ever comes.
         0x7dfc => sent("OP_ClientUpdate", ROF2, Partly(&[Zone], POSITION)),
         0x7280 => sent("OP_DeleteSpawn", ROF2, Read(&[Zone])),
+        // How they look and how hurt they are (6.518). `OP_ChangeSize` is
+        // `ENCODE(OP_SpawnAppearance)`'s rewrite of a size appearance; its
+        // last eight bytes are not a part, since the encoder always writes
+        // 0 and 1.0 there. `OP_Illusion`, `OP_ManaChange`, `OP_Death`,
+        // `OP_Damage` and `OP_Consider` stay unlisted, so the gap log tells
+        // them.
+        0x0971 => sent("OP_SpawnAppearance", ROF2, Read(&[Zone])),
+        0x4707 => sent("OP_ChangeSize", ROF2, Read(&[Zone])),
+        0x2828 => sent("OP_HPUpdate", ROF2, Read(&[Zone])),
+        0x37b1 => sent("OP_MobHealth", ROF2, Read(&[Zone])),
+        0x7994 => sent("OP_WearChange", ROF2, Partly(&[Zone], WEAR_CHANGE)),
+        0x7177 => sent("OP_Animation", ROF2, Read(&[Zone])),
+        0x559a => sent("OP_PlayerStateAdd", ROF2, Read(&[Zone])),
+        0x2d25 => sent("OP_PlayerStateRemove", ROF2, Read(&[Zone])),
         _ => return None,
     })
 }
