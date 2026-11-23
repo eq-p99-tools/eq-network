@@ -6,11 +6,12 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519).
+//! (6.510, 6.514, 6.518, 6.519), and the chat rows from the chat parser
+//! (6.521).
 
 use super::{
     sent, Part,
-    Reader::{Admission, Login, World, Zone},
+    Reader::{Admission, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned},
     ServerMessage,
@@ -141,6 +142,20 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x6f15 => sent("OP_Damage", ROF2, Partly(&[Zone], DAMAGE)),
         0x742b => sent("OP_Consider", ROF2, Read(&[Zone])),
         0x004c => sent("OP_SkillUpdate", ROF2, Read(&[Zone])),
+        // Its chat and the server's own lines (6.521). The channel
+        // message's two words and the byte the encoder writes as 0, and its
+        // 15-byte zero tail, are not parts: they carry nothing from the
+        // server. The others keep Titanium's shape; the guild's message of
+        // the day has no encoder for either generation.
+        0x0c22 => sent("OP_MOTD", ROF2, Read(&[Chat])),
+        0x2b2d => sent("OP_ChannelMessage", ROF2, Read(&[Chat])),
+        0x373b => sent("OP_Emote", ROF2, Read(&[Chat])),
+        0x0083 => sent("OP_SpecialMesg", ROF2, Read(&[Chat])),
+        0x1024 => sent("OP_FormattedMessage", ROF2, Read(&[Chat])),
+        0x213f => sent("OP_SimpleMessage", ROF2, Read(&[Chat])),
+        0x3e13 => sent("OP_GuildMOTD", ROF2, Read(&[Chat])),
+        0x4f1f => sent("OP_GetGuildMOTDReply", ROF2, Read(&[Chat])),
+        0x43af => sent("OP_ColoredText", ROF2, Read(&[Chat])),
         _ => return None,
     })
 }
@@ -159,6 +174,7 @@ mod tests {
             .chain(world::rof2::READS)
             .chain(admission::ROF2_READS)
             .chain(eq_network_game::message::ROF2_READS)
+            .chain(eq_network_game::chat::ROF2_READS)
             .collect();
         let listed: BTreeSet<u16> = (0..=u16::MAX)
             .filter(|opcode| {

@@ -827,7 +827,7 @@ impl Script {
                 },
             ),
         );
-        for (opcode, body) in rof2_looks_and_news() {
+        for (opcode, body) in rof2_looks_and_news().into_iter().chain(rof2_chat()) {
             script.packet(opcode, body);
         }
         script.packet(DESPAWN_OPCODE, despawn_body(77));
@@ -928,6 +928,50 @@ fn rof2_looks_and_news() -> Vec<(u16, Vec<u8>)> {
     looks.into_iter().chain(news).collect()
 }
 
+/// Chat and the server's own lines as `RoF2` messages (6.521): a say, a
+/// tell with a 56-character link, a guard's special message, a formatted
+/// and a simple line.
+fn rof2_chat() -> Vec<(u16, Vec<u8>)> {
+    let channel = |sender: &[u8], target: &[u8], channel: u32, text: &[u8]| {
+        let mut body = [sender, b"\0", target, b"\0"].concat();
+        for word in [0u32, 0, channel, 0] {
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+        body.push(0);
+        body.extend_from_slice(&100u32.to_le_bytes());
+        body.extend_from_slice(text);
+        body.push(0);
+        body.extend_from_slice(&[0; 15]);
+        body
+    };
+    let mut link = b"\x1201A2B3".to_vec();
+    link.resize(57, b'0');
+    link.extend_from_slice(b"Short Sword\x12");
+    let mut special = vec![1, 0, 0];
+    special.extend_from_slice(&256u32.to_le_bytes());
+    special.extend_from_slice(&4321u32.to_le_bytes());
+    special.extend_from_slice(b"Guard\0");
+    special.extend_from_slice(&[0; 12]);
+    special.extend_from_slice(b"Move along\0");
+    let mut formatted = [0u32, 1032, 15].map(u32::to_le_bytes).concat();
+    formatted.extend_from_slice(b"Guard\0\0");
+    vec![
+        (0x2b2d, channel(b"Other", b"", 8, b"well met")),
+        (
+            0x2b2d,
+            channel(
+                b"Other",
+                b"Example",
+                7,
+                &[b"see ".as_slice(), &link].concat(),
+            ),
+        ),
+        (0x0083, special),
+        (0x1024, formatted),
+        (0x213f, [338u32, 13, 0].map(u32::to_le_bytes).concat()),
+    ]
+}
+
 /// The session's idle time after the entry: longer than any position
 /// update or timer a feature would wake for in the first seconds.
 const IDLE: Duration = Duration::from_millis(1500);
@@ -937,7 +981,12 @@ const IDLE: Duration = Duration::from_millis(1500);
 fn rof2_session(
     player: bool,
     commands: Option<(&mpsc::Sender<ClientCommand>, &Receiver<ClientCommand>)>,
-) -> (Vec<u16>, Vec<String>, Vec<WorldEvent>) {
+) -> (
+    Vec<u16>,
+    Vec<String>,
+    Vec<WorldEvent>,
+    Vec<serde_json::Value>,
+) {
     let mut config = config();
     config.protocol = ServerProtocol::EqEmuRof2;
     let identity = ClientIdentity::new("example-host", "example-user");
@@ -953,9 +1002,11 @@ fn rof2_session(
     let mut script = Script::rof2(player, &stop, IDLE);
     let mut diagnostics = Vec::new();
     let mut events = Vec::new();
+    let mut records = Vec::new();
     let mut handler = |event| {
         match event {
             ClientEvent::Diagnostic(line) => diagnostics.push(line),
+            ClientEvent::Record(record) => records.push(serde_json::to_value(record).unwrap()),
             ClientEvent::World(event) => {
                 if let (WorldEvent::Entered { session_id, .. }, Some((sender, _))) =
                     (&event, commands)
@@ -987,12 +1038,12 @@ fn rof2_session(
     drop(log);
     assert!(matches!(exit, ZoneExit::Stopped));
     assert_eq!(script.filters.len(), 0);
-    (script.sent, diagnostics, events)
+    (script.sent, diagnostics, events, records)
 }
 
 #[test]
 fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_generations_layout() {
-    let (sent, diagnostics, events) = rof2_session(true, None);
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
     // The entry, the spawn request and the ready, and nothing in the zone
     // through the idle time.
     assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
@@ -1092,7 +1143,7 @@ fn an_admitted_rof2_session_sends_nothing_past_its_entry_and_reads_no_other_gene
 
 #[test]
 fn an_admitted_rof2_session_hands_the_host_each_look_and_health_message() {
-    let (sent, _, events) = rof2_session(true, None);
+    let (sent, _, events, _) = rof2_session(true, None);
     assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
     // Each look and health message reaches the host as one event (6.518).
     let looks: Vec<String> = events
@@ -1139,7 +1190,7 @@ fn an_admitted_rof2_session_hands_the_host_each_look_and_health_message() {
 
 #[test]
 fn an_admitted_rof2_session_hands_the_host_its_news_and_combat_and_dies_in_place() {
-    let (sent, diagnostics, events) = rof2_session(true, None);
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
     // Nothing is sent in answer, the death included: no feature is offered
     // and the handoff still refuses, so no zone change starts.
     assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
@@ -1196,8 +1247,40 @@ fn an_admitted_rof2_session_hands_the_host_its_news_and_combat_and_dies_in_place
 }
 
 #[test]
+fn an_admitted_rof2_session_records_its_chat_and_the_servers_lines() {
+    let (sent, diagnostics, _, records) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let chat: Vec<(String, String, String)> = records
+        .iter()
+        .map(|record| {
+            let field = |name: &str| record[name].as_str().unwrap_or_default().to_owned();
+            (field("channel_name"), field("sender"), field("text"))
+        })
+        .collect();
+    assert_eq!(
+        chat,
+        [
+            ("say".into(), "Other".into(), "well met".into()),
+            ("tell".into(), "Other".into(), "see Short Sword".into()),
+            ("system".into(), "Guard".into(), "Move along".into()),
+            ("system".into(), String::new(), String::new()),
+            ("system".into(), String::new(), String::new()),
+        ]
+    );
+    assert_eq!(records[1]["item_links"][0]["item_id"], 0x1a2b3);
+    assert_eq!(records[3]["string_id"], 1032);
+    assert_eq!(records[4]["string_id"], 338);
+    for opcode in ["0x2b2d", "0x0083", "0x1024", "0x213f"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
 fn a_rof2_session_without_its_profile_only_records() {
-    let (sent, diagnostics, events) = rof2_session(false, None);
+    let (sent, diagnostics, events, _) = rof2_session(false, None);
     assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
     assert!(!events
         .iter()
@@ -1216,7 +1299,7 @@ fn a_rof2_session_with_a_player_at_the_controls_refuses_rather_than_sends() {
     sender
         .send(ClientCommand::SendChat(OutboundChat::Say("Hail".into())))
         .unwrap();
-    let (sent, diagnostics, events) = rof2_session(true, Some((&sender, &receiver)));
+    let (sent, diagnostics, events, _) = rof2_session(true, Some((&sender, &receiver)));
     // No command was sent: only the entry went out, through the idle time.
     assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
     for command in ["SendChat", "Camp", "SetPosture"] {
