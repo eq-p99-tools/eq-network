@@ -1540,6 +1540,23 @@ after an answer, `Interrupted` on zoning, death or logout, a newer
 challenge, the duel's start or the challenger's refusal. A stale answer is
 refused with `WorldEvent::DuelRefused` and sends nothing.
 
+Challenge another player with `GameCommand::ChallengeDuel`, naming their
+spawn in `target` (Titanium's `/duel` at the target). The session sends it
+only at a player spawn in its spawn list other than the player, with one
+challenge out at a time and at least five seconds between two; anything
+else is refused with `WorldEvent::SocialRefused` and sends nothing.
+`EQEmu` looks the one challenged up without checking they exist, so a
+host must never reach the wire another way. The challenge is remembered
+until the server's `OP_DuelAccept` starts the duel, the other client turns
+it down, the one challenged leaves the zone, the player zones, or sixty
+seconds pass, since `EQEmu` tells a decline only in a line of text. While
+it is remembered, the record from the one challenged that `EQEmu` sends
+before the duel starts is not a question: no `DuelOffer` comes for it and
+nothing is sent. Both bounds and every refusal line are this crate's,
+pending a read of the program (checklist 6.492b). The server says its own
+line when the other player is considering another duel or the player has
+already accepted one.
+
 ## Surnames
 
 Where the server type takes `/surname` (`Capability::Surnaming`: stock

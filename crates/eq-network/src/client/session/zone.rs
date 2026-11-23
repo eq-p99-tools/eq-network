@@ -935,7 +935,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 120;
+    const KINDS: usize = 121;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1045,6 +1045,7 @@ mod tests {
             ClientCommand::SendPetition { .. } => 117,
             ClientCommand::ReportBug { .. } => 118,
             ClientCommand::SendFeedback { .. } => 119,
+            ClientCommand::ChallengeDuel { .. } => 120,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1522,6 +1523,11 @@ mod tests {
                     sequence: 1,
                 },
                 accept: true,
+            },
+            ClientCommand::ChallengeDuel {
+                session_id,
+                target: 2,
+                created: Instant::now(),
             },
             ClientCommand::DropInvisibility {
                 session_id,

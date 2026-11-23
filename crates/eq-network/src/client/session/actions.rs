@@ -202,6 +202,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // Stopping a cast must work during one; a yell holds nothing.
         | ClientCommand::StopCasting { .. }
         | ClientCommand::YellForHelp { .. }
+        // A challenge holds nothing; the duel feature paces it.
+        | ClientCommand::ChallengeDuel { .. }
         // A report to the staff holds nothing back either.
         | ClientCommand::SendPetition { .. }
         | ClientCommand::ReportBug { .. }
@@ -417,6 +419,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Random { session_id, .. }
         | ClientCommand::Surname { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
+        | ClientCommand::ChallengeDuel { session_id, .. }
         | ClientCommand::SendPetition { session_id, .. }
         | ClientCommand::ReportBug { session_id, .. }
         | ClientCommand::SendFeedback { session_id, .. }
@@ -646,6 +649,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::Random { .. }
         | ClientCommand::Surname { .. }
         | ClientCommand::YellForHelp { .. }
+        | ClientCommand::ChallengeDuel { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
