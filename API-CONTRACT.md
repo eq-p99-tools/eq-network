@@ -1504,6 +1504,8 @@ Quarm and TAKP offer `Rolling`, `Assisting` and `Splitting` the same way
   - One split is in flight at a time; another asked before the answer is
     refused. The purse settles only if nothing else moved it during the
     wait, and is otherwise unknown.
+  - What the `EQMac` program's purse shows after a split that made change is
+    unread (open row 6.585d).
 
 Quarm and TAKP offer `Corpses` the same way (6.591), from Quarm fc75fcf and TAKP
 44afcbf.
@@ -1522,8 +1524,6 @@ Quarm and TAKP offer `Corpses` the same way (6.591), from Quarm fc75fcf and TAKP
   wire): one byte drops all corpses, and the 152-byte record drops one. TAKP
   refuses it.
 - **Refusals.** The local refusals of a consent cite no string numbers here.
-  - What the `EQMac` program's purse shows after a split that made change is
-    unread (open row 6.585d).
 
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
