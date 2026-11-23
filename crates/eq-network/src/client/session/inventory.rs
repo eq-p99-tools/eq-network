@@ -146,6 +146,36 @@ fn purse_uncertain(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     Ok(())
 }
 
+/// A practice's cost TAKP or Quarm took without a word (6.597).
+fn eqmac_practice_cost(rules: MoveRules, message: &Message) -> Option<u64> {
+    match message {
+        Message::Event(WorldEvent::Training(TrainingUpdate::Trained { cost, .. }))
+            if *cost > 0 && matches!(rules, MoveRules::Takp | MoveRules::Quarm) =>
+        {
+            Some(*cost)
+        }
+        _ => None,
+    }
+}
+
+/// TAKP and Quarm take a practice's cost with `Client::TakeMoneyFromPP`,
+/// copper first and without a word to the client, as for a split: the purse
+/// becomes what the server keeps ([`eq_network_game::split::eqmac_take`]),
+/// or uncertain when the purse the session holds could not have paid
+/// (6.597, T1).
+fn eqmac_practice_paid(cost: u64, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    let Some(purse) = world.coins.0.purse else {
+        return Ok(());
+    };
+    match eq_network_game::split::eqmac_take(purse, cost) {
+        Some(kept) => {
+            world.coins.0.purse = Some(kept);
+            tell_coins(world, true, out)
+        }
+        None => purse_uncertain(world, out),
+    }
+}
+
 /// A paid training request or unresolved outcome leaves potentially spent coins
 /// unavailable until the server supplies a fresh balance. Free practices do not.
 fn training_cost_uncertain(message: &Message) -> bool {
@@ -1389,6 +1419,10 @@ impl Feature for Belongings {
             purse_uncertain(world, out)?;
         }
         let known_coins = match message {
+            _ if let Some(cost) = eqmac_practice_cost(self.rules, message) => {
+                eqmac_practice_paid(cost, world, out)?;
+                false
+            }
             Message::Event(WorldEvent::Merchant(update)) => {
                 let known = self.trades.coins_current(update);
                 let coin_bearing = matches!(
@@ -4166,5 +4200,43 @@ mod tests {
         );
         assert_eq!(world.coins.purse, Some(changed.purse));
         assert!(!belongings.sharing.changing());
+    }
+
+    #[test]
+    fn a_mac_practice_takes_coins_as_the_server_does_or_leaves_the_purse_unknown() {
+        let (_, mut world) = admitted();
+        // 799 copper from 1 platinum, 2 gold and 5 copper: copper first, then
+        // silver (none), then gold, whose rest comes back as change.
+        world.coins.0.purse = Some(Coins {
+            platinum: 1,
+            gold: 2,
+            copper: 5,
+            ..Coins::default()
+        });
+        let paid = testing::run(|out| eqmac_practice_paid(799, &mut world, out));
+        paid.result.unwrap();
+        assert_eq!(
+            world.coins.0.purse,
+            eq_network_game::split::eqmac_take(
+                Coins {
+                    platinum: 1,
+                    gold: 2,
+                    copper: 5,
+                    ..Coins::default()
+                },
+                799
+            )
+        );
+        assert!(matches!(
+            paid.events[..],
+            [ClientEvent::World(WorldEvent::Coins(_))]
+        ));
+        let short = testing::run(|out| eqmac_practice_paid(100_000, &mut world, out));
+        short.result.unwrap();
+        assert_eq!(world.coins.0.purse, None);
+        assert!(matches!(
+            short.events[..],
+            [ClientEvent::World(WorldEvent::PurseUncertain { .. })]
+        ));
     }
 }

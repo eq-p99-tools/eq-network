@@ -2,6 +2,9 @@
 //! `EQEmu` retains its existing skill and balance projection. P99 permits one
 //! opening per trainer and one unresolved practice per admission. Received
 //! skill values remain authoritative without establishing a practice spend.
+//! TAKP and Quarm follow `EQEmu`'s projection with the guildmaster's price
+//! scale, and hold languages until the `EQMac` program's rule is read
+//! (6.597).
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -43,6 +46,9 @@ pub(super) struct Training {
     highest_level: u8,
     /// P99 follows native admission and requires new balance evidence after a spend.
     p99: bool,
+    /// TAKP and Quarm: `EQEmu`'s projection, priced by the guildmaster's
+    /// scale, with languages held (6.597).
+    eqmac: bool,
     /// Each trainer ID can receive one opening request in this P99 admission.
     requested_trainers: BTreeSet<u16>,
     /// `EQEmu` replies carry no request/incarnation token. Retiring an
@@ -73,12 +79,35 @@ struct Practice {
     skill_rise_reported: bool,
 }
 
+/// The value TAKP and Quarm keep for a skill the player has not trained
+/// (254) or cannot have (255): `Client::OPGMTrainSkill` takes 254 as a new
+/// skill once its level is reached, and prices a new skill at nothing.
+const EQMAC_UNTRAINED: u32 = 254;
+
 impl Training {
     /// P99 uses native admission fields and keeps skill and point authority separate.
     pub(super) fn project1999() -> Self {
         Self {
             p99: true,
             ..Self::default()
+        }
+    }
+
+    /// TAKP and Quarm (6.597).
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether a received value raised a skill from `from`: on TAKP and
+    /// Quarm an untrained skill's 254 falls to its first trained value.
+    fn raised(&self, from: u32, value: u32) -> bool {
+        if self.eqmac && from >= EQMAC_UNTRAINED {
+            value < EQMAC_UNTRAINED
+        } else {
+            value > from
         }
     }
 
@@ -196,6 +225,9 @@ impl Training {
                 );
             }
         }
+        if self.eqmac && matches!(subject, TrainingSubject::Language(_)) {
+            return Err("Language training is unavailable on this server until checked.");
+        }
         // Recheck the live trainer for the new bank as well as the received offer.
         if matches!(subject, TrainingSubject::Language(_)) {
             Self::eligible(trainer, world)?;
@@ -238,10 +270,19 @@ impl Training {
             }
             None => 0,
         };
-        if value >= cap {
+        // TAKP's and Quarm's untrained skill is a new one, priced at nothing.
+        let priced = if self.eqmac && value >= EQMAC_UNTRAINED {
+            0
+        } else {
+            value
+        };
+        if priced >= cap {
             return Err("You cannot be trained any further in that skill.");
         }
-        let cost = training::practice_cost(value);
+        let cost = match offer.price_scale {
+            Some(scale) if self.eqmac => training::eqmac_practice_cost(priced, scale),
+            _ => training::practice_cost(priced),
+        };
         let owed: u64 = self.pending.iter().map(|practice| practice.cost).sum();
         if self.p99 && cost > 0 && world.coins.purse.is_none() {
             return Err("Your purse balance is unknown.");
@@ -590,9 +631,12 @@ impl Feature for Training {
                 } else {
                     reply.offer.clone()
                 };
+                // TAKP and Quarm flag every language; the `EQMac` program's
+                // own rule is unread, so none is offered (6.597a).
                 offer.language_caps = (0..training::LANGUAGES)
                     .map(|language| {
-                        if reply.language_flags[usize::from(language)] != 0
+                        if !self.eqmac
+                            && reply.language_flags[usize::from(language)] != 0
                             && world.player.as_ref().is_some_and(|player| {
                                 training::titanium_language_trainable(
                                     language,
@@ -629,7 +673,7 @@ impl Feature for Training {
         let Some(practice) = self.pending.remove(index) else {
             return;
         };
-        if *value > practice.from {
+        if self.raised(practice.from, *value) {
             *message = Message::Event(WorldEvent::Training(TrainingUpdate::Trained {
                 skill: practice.skill,
                 value: *value,
@@ -776,6 +820,7 @@ mod tests {
                 trainer,
                 caps,
                 language_caps: Vec::new(),
+                price_scale: None,
             },
         )))
     }
@@ -1730,5 +1775,186 @@ mod tests {
         let outcome = testing::run(|out| training.observe(&level(12, 11), &mut world, out));
         assert!(outcome.events.is_empty());
         assert_eq!(training.points, Some(13));
+    }
+
+    /// The warrior on TAKP or Quarm: kick at 50, tracking (skill 53)
+    /// untrained at 254.
+    fn mac_warrior() -> (Training, World) {
+        let (_, mut world) = warrior();
+        let player = world.player.corrected().unwrap();
+        let skills = player.skills.as_mut().unwrap();
+        skills[30] = 50;
+        skills[53] = 254;
+        let mut training = Training::eqmac();
+        testing::run(|out| training.admitted(&mut world, out))
+            .result
+            .unwrap();
+        (training, world)
+    }
+
+    /// TAKP's and Quarm's answer: kick to 200 and tracking to 100, at the
+    /// price scale `scale`, every language flagged.
+    fn mac_reply(trainer: u16, scale: f32) -> Message {
+        let mut body = training::eqmac_open(trainer, 7).body;
+        body[4 + 30 * 2..4 + 30 * 2 + 2].copy_from_slice(&200u16.to_le_bytes());
+        body[4 + 53 * 2..4 + 53 * 2 + 2].copy_from_slice(&100u16.to_le_bytes());
+        body[204..208].copy_from_slice(&scale.to_le_bytes());
+        body[208] = 1;
+        body[209..241].fill(201);
+        eq_network_game::message::eqmac(training::EQMAC_OFFER_OPCODE, &body).remove(0)
+    }
+
+    fn mac_handle(
+        training: &mut Training,
+        world: &mut World,
+        request: TrainingRequest,
+    ) -> testing::Outcome<Result<()>> {
+        testing::run_on(&super::super::wire::EqMac, |out| {
+            training.handle(&ask(request), world, out)
+        })
+    }
+
+    fn mac_open(training: &mut Training, world: &mut World) {
+        let opened = mac_handle(training, world, TrainingRequest::Open { trainer: 42 });
+        opened.result.unwrap();
+        assert_eq!(opened.sent, [training::eqmac_open(42, 7)]);
+        let (offered, _) = hear(training, world, mac_reply(42, 1.25));
+        let Message::Event(WorldEvent::Training(TrainingUpdate::Offered(offer))) = offered else {
+            panic!("expected the offer, got {offered:?}");
+        };
+        assert_eq!(offer.cap(30), 200);
+        assert_eq!(offer.price_scale.map(training::PriceScale::get), Some(1.25));
+        assert_eq!(
+            offer.language_caps,
+            [0; training::LANGUAGES as usize],
+            "languages held (6.597a)"
+        );
+    }
+
+    #[test]
+    fn a_mac_practice_is_priced_by_the_guildmaster_s_scale() {
+        let (mut training, mut world) = mac_warrior();
+        mac_open(&mut training, &mut world);
+        let kick = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Skill(30),
+        };
+        let sent = mac_handle(&mut training, &mut world, kick);
+        sent.result.unwrap();
+        assert_eq!(
+            sent.sent,
+            [training::eqmac_practice(42, 7, TrainingSubject::Skill(30)).unwrap()]
+        );
+        // 40^3 * 1.25 * 0.0099999998, cut: 799 copper.
+        let (trained, events) = hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 30,
+                value: 51,
+            }),
+        );
+        assert!(
+            matches!(
+                trained,
+                Message::Event(WorldEvent::Training(TrainingUpdate::Trained {
+                    skill: 30,
+                    value: 51,
+                    cost: 799
+                }))
+            ),
+            "{trained:?}"
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PracticePoints(2)))));
+    }
+
+    #[test]
+    fn a_mac_untrained_skill_is_free_and_rises_from_254() {
+        let (mut training, mut world) = mac_warrior();
+        mac_open(&mut training, &mut world);
+        let tracking = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Skill(53),
+        };
+        mac_handle(&mut training, &mut world, tracking)
+            .result
+            .unwrap();
+        let (trained, _) = hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 53,
+                value: 10,
+            }),
+        );
+        assert!(
+            matches!(
+                trained,
+                Message::Event(WorldEvent::Training(TrainingUpdate::Trained {
+                    skill: 53,
+                    value: 10,
+                    cost: 0
+                }))
+            ),
+            "{trained:?}"
+        );
+        // A refusal repeats the value and spends nothing.
+        mac_handle(&mut training, &mut world, tracking)
+            .result
+            .unwrap();
+        let unchanged = Message::Event(WorldEvent::Skill {
+            skill_id: 53,
+            value: 254,
+        });
+        let (heard, events) = hear(&mut training, &mut world, unchanged);
+        assert!(
+            matches!(
+                heard,
+                Message::Event(WorldEvent::Skill {
+                    skill_id: 53,
+                    value: 254
+                })
+            ),
+            "{heard:?}"
+        );
+        assert!(
+            training.pending.is_empty(),
+            "the refusal closed the practice"
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PracticePoints(_)))));
+    }
+
+    #[test]
+    fn mac_languages_are_held_until_read() {
+        let (mut training, mut world) = mac_warrior();
+        world.player.corrected().unwrap().level = 20;
+        mac_open(&mut training, &mut world);
+        let held = mac_handle(
+            &mut training,
+            &mut world,
+            TrainingRequest::PracticeAt {
+                trainer: 42,
+                subject: TrainingSubject::Language(5),
+            },
+        );
+        held.result.unwrap();
+        assert_eq!(held.sent, []);
+        assert_eq!(
+            refusals(&held.events),
+            ["Language training is unavailable on this server until checked."]
+        );
+    }
+
+    #[test]
+    fn leaving_mac_training_sends_the_four_byte_goodbye() {
+        let (mut training, mut world) = mac_warrior();
+        mac_open(&mut training, &mut world);
+        let left = mac_handle(&mut training, &mut world, TrainingRequest::End);
+        left.result.unwrap();
+        assert_eq!(left.sent, [training::eqmac_end(42, 7)]);
     }
 }

@@ -33,6 +33,9 @@ pub enum Message {
     TrainingReply(crate::training::TrainingReply),
     /// A correlated P99 assist selection for the session's target owner.
     AssistSelection(u16),
+    /// A skill's new value for a spawn (`EQMac`'s silent update), which is
+    /// the player's own only when the spawn is theirs.
+    SpawnSkill(crate::training::SpawnSkill),
     /// A decoded resurrection that still needs admission and consent checks.
     Resurrection(crate::resurrection::ResurrectionOffer),
     /// TAKP's completion of an accepted resurrection: its kept offer with
@@ -621,6 +624,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             .chain([described(crate::zones::eqmac_description(body))])
             .collect(),
         _ if let Some(message) = eqmac_people(opcode, body) => vec![message],
+        _ if let Some(message) = eqmac_training(opcode, body) => vec![message],
         crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
@@ -687,6 +691,20 @@ fn eqmac_people(opcode: u16, body: &[u8]) -> Option<Message> {
                 |error| unreadable(Part::World, &error),
                 Message::ResurrectionCompleted,
             ),
+        _ => return None,
+    })
+}
+
+/// A guildmaster's answer and a skill's silent update on TAKP and Quarm
+/// (6.597); None for other messages.
+fn eqmac_training(opcode: u16, body: &[u8]) -> Option<Message> {
+    Some(match opcode {
+        crate::training::EQMAC_OFFER_OPCODE => crate::training::eqmac_reply(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            Message::TrainingReply,
+        ),
+        crate::training::EQMAC_SKILL_OPCODE => crate::training::eqmac_skill(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::SpawnSkill),
         _ => return None,
     })
 }

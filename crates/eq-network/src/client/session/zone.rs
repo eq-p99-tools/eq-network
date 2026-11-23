@@ -124,6 +124,7 @@ impl Features {
 
     /// Lets every feature explain a message its own action caused.
     fn explain(&mut self, message: &mut Message, world: &World) {
+        own_skill(message, world);
         for feature in &mut self.provided {
             feature.explain(message, world);
         }
@@ -646,6 +647,32 @@ fn run_connected(
             }
         }
     }
+}
+
+/// `EQMac`'s silent skill update is the player's own skill news when it
+/// names their spawn. TAKP and Quarm send it only to the player it names
+/// (`Client::SetSkill`), so any other is rejected.
+fn own_skill(message: &mut Message, world: &World) {
+    let Message::SpawnSkill(update) = message else {
+        return;
+    };
+    *message = if world
+        .own_spawn
+        .is_some_and(|own| own != 0 && own == update.spawn_id)
+    {
+        Message::Event(WorldEvent::Skill {
+            skill_id: update.skill_id,
+            value: update.value,
+        })
+    } else {
+        Message::Unreadable {
+            part: Part::World,
+            error: format!(
+                "a silent skill update for spawn {}, not the player's",
+                update.spawn_id
+            ),
+        }
+    };
 }
 
 /// A listener can repeat the entry position only until the zone supersedes it.
@@ -3266,6 +3293,7 @@ mod tests {
                 Capability::Who,
                 Capability::Corpses,
                 Capability::Pets,
+                Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
                 Capability::Grouping,
@@ -3308,6 +3336,7 @@ mod tests {
                 Capability::Who,
                 Capability::Corpses,
                 Capability::Pets,
+                Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
                 Capability::Grouping,
@@ -3580,6 +3609,41 @@ mod tests {
         });
         malformed.result.unwrap();
         assert_eq!(malformed.sent, []);
+    }
+
+    #[test]
+    fn a_mac_silent_skill_update_is_the_player_s_only_for_their_spawn() {
+        use eq_network_game::training::{SpawnSkill, EQMAC_SKILL_OPCODE};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut own = eq_network_game::message::eqmac(
+            EQMAC_SKILL_OPCODE,
+            &[7, 0, 0, 0, 30, 0, 0, 0, 51, 0, 0, 0],
+        )
+        .remove(0);
+        assert!(matches!(
+            own,
+            Message::SpawnSkill(SpawnSkill {
+                spawn_id: 7,
+                skill_id: 30,
+                value: 51
+            })
+        ));
+        own_skill(&mut own, &world);
+        assert!(matches!(
+            own,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 30,
+                value: 51
+            })
+        ));
+        let mut other = Message::SpawnSkill(SpawnSkill {
+            spawn_id: 8,
+            skill_id: 30,
+            value: 51,
+        });
+        own_skill(&mut other, &world);
+        assert!(matches!(other, Message::Unreadable { .. }));
     }
 }
 
