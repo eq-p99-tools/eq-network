@@ -128,7 +128,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 50] = [
+pub const ROF2_READS: [u16; 58] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -179,6 +179,14 @@ pub const ROF2_READS: [u16; 50] = [
     crate::rof2_socials::CAMERA_EFFECT_OPCODE,
     crate::rof2_socials::PLAY_MP3_OPCODE,
     crate::rof2_socials::SPELL_EFFECT_OPCODE,
+    crate::rof2_answers::TARGET_OPCODE,
+    crate::rof2_answers::TARGET_OF_TARGET_OPCODE,
+    crate::rof2_answers::CHARM_OPCODE,
+    crate::rof2_answers::CASH_REWARD_OPCODE,
+    crate::rof2_answers::LINKED_REUSE_OPCODE,
+    crate::rof2_answers::BEGGING_OPCODE,
+    crate::rof2_answers::PICK_POCKET_OPCODE,
+    crate::rof2_answers::BIND_WOUND_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
@@ -186,9 +194,10 @@ pub const ROF2_READS: [u16; 50] = [
 /// are (6.518), the player's own news and the combat records (6.519), and
 /// casting, stuns and illusions (6.522), buffs (6.527), the spell book and
 /// gems (6.532), the mana and endurance pools (6.538), doors, ground objects
-/// and the weather (6.539), and rolls, assists, yells and effects (6.541)
-/// are read yet; a body a reader refuses is unreadable, told by its opcode
-/// and length only.
+/// and the weather (6.539), rolls, assists, yells and effects (6.541), and
+/// targets, charms, rewards, reuse and skill answers (6.544) are read yet;
+/// a body a reader refuses is unreadable, told by its opcode and length
+/// only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -227,6 +236,7 @@ fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
         .or_else(|| one(crate::rof2_pools::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_world::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_socials::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_answers::read(opcode, body), Part::World))
         .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
         .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
 }
