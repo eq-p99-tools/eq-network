@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A Titanium door click names the item held on the cursor (checklist 6.537,
+  gap 3.4): bytes 8 to 11 of `OP_ClickDoor` carry the server's item ID of the
+  cursor item, from the session's own inventory, or -1 with nothing there or
+  the inventory not loaded. Inferred from reads R14 and R16e until the click
+  builder is read; byte 1 (3) and `picklockskill` (0) are unchanged and unread.
+  Stock `EQEmu` reads none of it, so keyed doors behave as before there.
+  `EQMac` still refuses a click with an item on the cursor; RoF2 sends -1.
+  **Breaking:** `doors::titanium_click` takes `held: Option<u32>`, and
+  `Request::ClickDoor` becomes `Request::ClickDoor { door_id, held }`.
+
 - Measure a Titanium door click from the point clicked on the door
   (checklist 6.530, read R16b and R16e). `GameCommand::ClickDoor` gains
   `point: Option<Position>`, where the host's click ray hit the door's

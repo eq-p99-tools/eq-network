@@ -128,7 +128,7 @@ impl Doors {
         position: Position,
     ) -> Result<EncodedCommand> {
         self.check_click(id, player_id, position, crate::reach::TITANIUM.doors)?;
-        Ok(titanium_click(id, player_id))
+        Ok(titanium_click(id, player_id, None))
     }
 
     /// Checks a click on a door against the current door table and the
@@ -303,16 +303,23 @@ fn distance(from: Position, to: Position) -> f32 {
     (to.x - from.x).hypot(to.y - from.y).hypot(to.z - from.z)
 }
 
-/// Titanium's `OP_ClickDoor` for the player using a door, already checked.
+/// Titanium's `OP_ClickDoor` for the player using a door, already checked,
+/// with the server's item ID of what the cursor holds, if any (6.537).
 #[must_use]
-pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
+pub fn titanium_click(id: u8, player_id: u16, held: Option<u32>) -> EncodedCommand {
     let mut body = vec![0; 16];
     body[0] = id;
-    // The official client sends 3 here and -1 as the held item for an
-    // ordinary open or close (what the 3 means is unknown, and a click
-    // holding a key is unrecorded).
+    // The official client sends 3 here for an ordinary open or close; what
+    // the 3 means, and whether it differs with an item held, is unread.
     body[1] = 3;
-    body[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    // Bytes 4 to 7 (EQEmu's `picklockskill`) stay zero: unread.
+    // The held item's ID, or -1 with nothing held, as recorded for an
+    // ordinary click. That a click holding an item carries the item's ID is
+    // inferred (eqgame.exe 0x4906c5 takes an item argument; a type 57
+    // door's contact click carries the cursor item) until the click
+    // builder is read. Stock EQEmu reads none of it: it takes the key from
+    // its own copy of the inventory.
+    body[8..12].copy_from_slice(&held.unwrap_or(u32::MAX).to_le_bytes());
     body[12..14].copy_from_slice(&player_id.to_le_bytes());
     EncodedCommand {
         opcode: CLICK_OPCODE,

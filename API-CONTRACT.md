@@ -205,6 +205,26 @@ door's origin where it stands now, is refused in our own words with no string
 today's: 3-D to the door's origin where it stands now, within 20, which is
 stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule.
 
+## The item held in a door click
+
+A Titanium door click names what the player holds on the cursor (checklist
+6.537): `Request::ClickDoor { door_id, held }` and
+`doors::titanium_click(id, player_id, held)` put the server's item ID of the
+cursor item in bytes 8 to 11, or -1 with nothing there, as recorded for an
+ordinary click. The session takes the item from its own tracked inventory, never
+from the host: no item on the cursor, or an inventory not yet loaded or made
+stale, sends -1, and a stack or an item with charges is named by its ID alone.
+The click never moves, drops or gives the item, and the ID appears in no event
+or diagnostic the host hears. That a held item's ID goes there is inferred
+(0x4906c5 takes an item argument; a type 57 door's contact click carries the
+cursor item; read R14, R16e) until the click builder is read; byte 1 stays 3 and
+bytes 4 to 7 (`EQEmu`'s `picklockskill`) stay zero, both unread. Stock `EQEmu`
+reads none of these: it takes the key from its own copy of the inventory and the
+key ring, and answers with its own lines and `OP_MoveDoor`. `EQMac`'s program
+asks for a clear cursor first, so its session still refuses a click with an
+item there, and its encoder refuses a `held` item. RoF2 sends -1 until its
+click is read.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:

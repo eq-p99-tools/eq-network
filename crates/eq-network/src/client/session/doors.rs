@@ -216,8 +216,34 @@ impl Doors {
                 ensure!(hinge.settled(), "door is moving");
             }
         }
-        Ok(Request::ClickDoor(*door_id))
+        let held = match self.dialect {
+            // The cursor item from the session's own inventory, never from
+            // the host; none until the inventory is loaded (6.537).
+            GameDialect::Titanium => cursor_item(world),
+            // Its click is not read; today's value until it is.
+            GameDialect::Rof2 => None,
+            // The cursor is clear, checked above.
+            GameDialect::EqMac => None,
+        };
+        Ok(Request::ClickDoor {
+            door_id: *door_id,
+            held,
+        })
     }
+}
+
+/// The server's item ID of what the player holds on the cursor, by the
+/// session's tracked inventory; none with nothing there or the inventory not
+/// loaded. A stack or an item with charges is named by its ID alone.
+fn cursor_item(world: &World) -> Option<u32> {
+    let inventory = &world.inventory;
+    if !inventory.received() || inventory.stale() {
+        return None;
+    }
+    inventory
+        .items()
+        .get(&InventorySlot::CURSOR)
+        .map(|item| item.details.id)
 }
 
 impl Feature for Doors {
@@ -649,7 +675,10 @@ mod tests {
             doors
                 .click(&click, &world, eq_network_game::reach::EQMAC.doors)
                 .unwrap(),
-            Request::ClickDoor(1)
+            Request::ClickDoor {
+                door_id: 1,
+                held: None
+            }
         );
     }
 
@@ -703,6 +732,89 @@ mod tests {
                 ..
             })]
         ));
+    }
+
+    /// A Titanium click names the item on the session's own cursor, a
+    /// stack or charged item by its ID alone, and -1 with nothing there or
+    /// the inventory not loaded; it never moves the item (6.537). `RoF2` keeps
+    /// today's -1 until its click is read.
+    #[test]
+    fn a_titanium_click_names_the_cursor_item_from_the_sessions_inventory() {
+        use eq_network_game::inventory::{Inventory, InventoryUpdate};
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![titanium_door(1, 0, 0)]));
+        // Made after the door table changes, so never stale.
+        let click = || ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            point: None,
+            created: Instant::now(),
+        };
+        let mut key = testing::item(InventorySlot::CURSOR.0);
+        key.details.id = 0x0B1E_55ED;
+        let mut stack = key.clone();
+        stack.stack_count = Some(20);
+        stack.charges = 5;
+        let elsewhere = testing::item(23);
+        let loaded = |items: Vec<eq_network_game::inventory::InventoryItem>| {
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(items));
+            inventory
+        };
+        let mut stale = loaded(vec![key.clone()]);
+        stale.apply(InventoryUpdate::Invalidated);
+        for (inventory, held) in [
+            (Inventory::default(), u32::MAX),
+            (stale, u32::MAX),
+            (loaded(Vec::new()), u32::MAX),
+            (loaded(vec![elsewhere]), u32::MAX),
+            (loaded(vec![key]), 0x0B1E_55ED),
+            (loaded(vec![stack]), 0x0B1E_55ED),
+        ] {
+            let mut doors = Doors::default();
+            let mut world = World::new(5);
+            doors
+                .admit(&Message::Event(spawn.clone()), &mut world)
+                .unwrap();
+            world.player.admit(testing::player(7));
+            world.inventory = inventory.into();
+            let before = world.inventory.items().clone();
+            let outcome = testing::run(|out| doors.handle(&click(), &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.sent,
+                [eq_network_game::doors::titanium_click(
+                    1,
+                    7,
+                    Some(held).filter(|id| *id != u32::MAX)
+                )]
+            );
+            assert_eq!(&outcome.sent[0].body[8..12], &held.to_le_bytes());
+            assert_eq!(world.inventory.items(), &before, "the cursor is untouched");
+            // The ID is in the packet only, never in what the host hears.
+            let heard = format!("{:?}", outcome.events);
+            for told in [held.to_string(), format!("{held:x}")] {
+                assert!(held == u32::MAX || !heard.contains(&told), "{heard}");
+            }
+        }
+        let mut doors = Doors {
+            dialect: GameDialect::Rof2,
+            ..Doors::default()
+        };
+        let mut world = World::new(5);
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        world.player.admit(testing::player(7));
+        let mut key = testing::item(InventorySlot::CURSOR.0);
+        key.details.id = 0x0B1E_55ED;
+        world.inventory = loaded(vec![key]).into();
+        assert_eq!(
+            doors
+                .click(&click(), &world, eq_network_game::reach::TITANIUM.doors)
+                .unwrap(),
+            Request::ClickDoor {
+                door_id: 1,
+                held: None
+            }
+        );
     }
 
     #[test]
