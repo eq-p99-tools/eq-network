@@ -5,6 +5,28 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reports to the staff, as read R49-23 reads the Titanium program (6.511).
+  - **Titanium feedback is sent** (`OP_Feedback` 0x5306, 1148 bytes): the
+    name, an empty field, the place and rounded heading, and the text at
+    120. Stock `EQEmu` now lists `Capability::SendingFeedback`; it has no
+    handler and drops the packet, as it drops the program's own. Breaking:
+    `GameCommand::SendFeedback` has a new `place` field, and
+    `reports::feedback` takes it.
+  - **New `reports::petition_form`**: whether the generation's program takes
+    `/petition` as a window or as text, from the world's petition-window
+    byte on Titanium.
+  - **A Titanium bug report's text holds at most 1024 bytes**, as the
+    program sends (was 2049, the field's size).
+  - The fields the program fills from what this library lacks are named and
+    stay zero; the system information always stays empty.
+- Every Titanium save on zoning (`OP_SaveOnZoneReq` 0x1540) carries a place,
+  a heading and its checksum, as read R49-36b shows the program fills every
+  one, not only a boat transfer's (row 6.145). Off a boat the place is where
+  the accepted zone request goes, with the request's heading, as 11 recorded
+  official saves hold it; the heading at +0x11 is cut toward zero to a 32-bit
+  integer, and a reason 6 transfer's saves 0xffffffff (all three
+  capture-derived). The unidentified fields stay zero, and EQMac's save is unchanged.
+  See docs/boat-riding.md, "The save before leaving".
 - The Titanium buff slot finder's steps 4 and 6 and the effect-327 top, as
   read R49-22e reads 0x414071 (checklist 6.612).
   - **Breaking:** `buffs::placement::Finder` is now
