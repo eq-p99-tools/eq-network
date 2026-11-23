@@ -1213,6 +1213,7 @@ mod tests {
             ClientCommand::SendChatInAdmission {
                 session_id,
                 message: OutboundChat::Say("Hail".into()),
+                tongue: eq_network_game::chat::Tongue::COMMON,
             },
             ClientCommand::DepopLocalNpc {
                 session_id,
