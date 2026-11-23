@@ -309,18 +309,24 @@ fn save_on_leaving(pending: &zoning::ZoneOffer, world: &mut World) -> Option<zon
             let pose = world.carriers.pose(report.sample(), Instant::now())?;
             Some((name, carrier_local(pose, position?)))
         });
-    if let Some((name, local)) = aboard {
-        world.riding.depart_at(Some(local.z));
-        return Some(zoning::Save {
+    let save = if let Some((name, local)) = aboard {
+        zoning::Save {
             position: Some(local),
             vehicle: Some(name),
-        });
-    }
-    world.forget_vehicle();
-    Some(zoning::Save {
-        position: Some(pending.position),
-        vehicle: None,
-    })
+        }
+    } else {
+        world.forget_vehicle();
+        zoning::Save {
+            position: Some(pending.position),
+            vehicle: None,
+        }
+    };
+    // The record's third field keeps the z this save carries (read
+    // R49-22f, 6.613).
+    world
+        .riding
+        .saved(save.position.map_or(0.0, |position| position.z));
+    Some(save)
 }
 
 /// Sends a request and says so: zoning's few packets are worth reading back
@@ -1419,7 +1425,7 @@ mod tests {
         assert_eq!(save.vehicle.as_deref(), Some("SirensBane00"));
         let local = save.position.unwrap();
         // The restore in the next zone keeps this z (read R36c).
-        assert_eq!(world.riding.departure_z(), Some(local.z));
+        assert_eq!(world.riding.saved_z(), Some(local.z));
         for (got, want) in [
             (local.x, deck.x),
             (local.y, deck.y),
@@ -1436,7 +1442,8 @@ mod tests {
         let mut world = aboard();
         assert_eq!(save_on_leaving(&going(0, there), &mut world), ordinary);
         assert_eq!(world.vehicle, None);
-        assert_eq!(world.riding.departure_z(), None);
+        // The save's z, the destination's, is the record's third field now.
+        assert_eq!(world.riding.saved_z(), Some(there.z));
         // So does a boat transfer once the boat is no longer found.
         let mut world = aboard();
         world.vehicle = Some("Stormbreaker".into());
@@ -1445,15 +1452,18 @@ mod tests {
             ordinary
         );
         assert_eq!(world.vehicle, None);
-        // Carried on from the arrival wait: no save, and the name kept.
+        // Carried on from the arrival wait: no save, the name kept, and
+        // the last save's z unchanged.
         let mut world = aboard();
         world.vehicle = Some("Stormbreaker".into());
+        world.riding.saved(6.0);
         world.carried_from = super::super::riders::CarriedFrom::Wait;
         assert_eq!(
             save_on_leaving(&going(riders::ZONE_REASON, there), &mut world),
             None
         );
         assert_eq!(world.vehicle.as_deref(), Some("Stormbreaker"));
+        assert_eq!(world.riding.saved_z(), Some(6.0));
         assert_eq!(
             world.carried_from,
             super::super::riders::CarriedFrom::Elsewhere

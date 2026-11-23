@@ -195,7 +195,7 @@ fn a_profile_without_a_vehicle_arrives_as_ever() {
         let mut world = admitted_at(out, here);
         // Even with a departure z kept, an ordinary admission decodes as
         // ever: the loader's quirk applies only to a restore aboard.
-        world.riding.depart_at(Some(-7.5));
+        world.riding.saved(-7.5);
         let mut riders = Riders::default();
         riders
             .admit(&Message::VehicleName(None), &mut world)
@@ -235,7 +235,7 @@ const PROFILE: Position = Position {
 
 fn aboard(out: &mut Out<'_, '_>, riders: &mut Riders) -> (World, CarrierSample) {
     let mut world = admitted_at(out, PROFILE);
-    world.riding.depart_at(Some(DECK.z));
+    world.riding.saved(DECK.z);
     world.safe_point = Some(Position {
         x: -5.0,
         y: 6.0,
@@ -575,16 +575,18 @@ fn the_restore_keeps_the_profiles_y_and_z_and_the_departures_z() {
 }
 
 #[test]
-fn the_departure_z_is_kept_by_a_boat_save_and_forgotten_with_the_boat() {
+fn the_saved_z_outlives_the_boat_until_the_next_save() {
     let riding = Riding::default();
-    riding.depart_at(Some(4.0));
-    assert_eq!(riding.departure_z(), Some(4.0));
+    assert_eq!(riding.saved_z(), None);
+    riding.saved(4.0);
+    assert_eq!(riding.saved_z(), Some(4.0));
     let mut world = World::new(5);
     world.riding = Arc::new(riding);
     world.vehicle = Some(BOAT.into());
+    // Leaving the boat doesn't write the record's third field (R49-22f).
     world.forget_vehicle();
     assert_eq!(
-        (world.vehicle.as_deref(), world.riding.departure_z()),
-        (None, None)
+        (world.vehicle.as_deref(), world.riding.saved_z()),
+        (None, Some(4.0))
     );
 }

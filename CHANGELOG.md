@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A rider's restore aboard keeps the z of the last save sent, whatever kind
+  (read R49-22f, checklist 6.613). Every save writes the program's record's
+  third field, which its profile loader never writes, so an ordinary
+  transfer's save now sets it too (the destination's z, from that save's
+  place), and leaving the boat no longer forgets it.
+  Labelled departures: no leave-game or periodic save is sent yet (6.614,
+  6.615), resurrection's write is not copied, and the value is kept per
+  session. Unreachable on stock `EQEmu`, whose profile names no vehicle.
+
 - Reports to the staff, as read R49-23 reads the Titanium program (6.511).
   - **Titanium feedback is sent** (`OP_Feedback` 0x5306, 1148 bytes): the
     name, an empty field, the place and rounded heading, and the text at
