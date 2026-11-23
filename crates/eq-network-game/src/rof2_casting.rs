@@ -121,8 +121,8 @@ fn instrument_modifier(value: f32) -> Result<u32> {
 /// bits at 33, the spell level and the effect flag, then a 0 gem byte, the
 /// 12-byte inventory slot it fills with constants, and a 0 item-cast type.
 ///
-/// The modifier is read back as the server's integer
-/// ([`instrument_modifier`]), so [`SpellEffect::instrument_modifier`] keeps
+/// The modifier is read back as the server's integer (see
+/// `instrument_modifier` below), so [`SpellEffect::instrument_modifier`] keeps
 /// the server's number on both generations, except that the server's 0 to
 /// 9 all read 0. The spell is the server's 16-bit number widened.
 /// Otherwise it gives what Titanium's reader gives for the same values: a
