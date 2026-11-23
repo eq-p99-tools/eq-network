@@ -2086,8 +2086,9 @@ own `WorldEvent::LastName`, not from the answer. `EQMac`'s request and
 answer (100 bytes) are listed by TAKP and Quarm (6.604 E5), and `EQMac`'s
 `OP_GMLastName` gives `WorldEvent::LastName` too. There the session also
 refuses first what the servers' comments say the `EQMac` program refuses
-(inferred, never more than the server does): a character with a surname, one
-under level 20, and a surname over 19 characters. A surname stays for
+(inferred, never more than the server does): a character under level 20,
+and a surname over 19 characters. A character who already has a surname is
+the server's to refuse, with its own line. A surname stays for
 good, or for days, so a host sends it only on the player's own typed word.
 
 ## Titles

@@ -23,8 +23,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     their database but keep it in the live profile until the next load. The
     move was already built and is now offered.
   - **Surname.** The 100-byte request. The session first refuses, as the
-    servers' comments say the program does (inferred): a character with a
-    surname, under level 20, or a surname over 19 characters.
+    servers' comments say the program does (inferred): a character under
+    level 20, or a surname over 19 characters. A surname already held is
+    the server's to refuse.
   - **Reports.** A petition is the text and a NUL. A bug report is now the
     1131-byte short record (it was 3340), with only the reporter and the
     text; the servers fill in the place and target. Quarm runs with
