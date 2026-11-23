@@ -1796,6 +1796,44 @@ program's title window is read (R49-14). `EQMac` and RoF2 build neither
 request: `EQMac` has no titles, and RoF2's numbers are owed (inferred for
 RoF2, 6.489).
 
+## Bazaar search
+
+Stock `EQEmu` on Titanium has a Bazaar; P99's era has none, and TAKP's,
+Quarm's and RoF2's searches are other records. `Capability::BazaarSearching`
+is built and tested from `EQEmu`'s source and offered by no server type
+until its local live row passes (6.550a). No buy, browse or trader mode is
+sent: a later buy must send the listed price exactly, since stock `EQEmu`
+charges the price the client sends.
+
+`GameCommand::BazaarSearch { criteria }` sends `OP_BazaarSearch` (0x1ee9)
+action 7 as `BazaarSearch_Struct`, 108 bytes. Each `BazaarCriteria` field
+left `None` is sent as the value the server takes as open: all ones for
+the class, race, stat, slot and item type, 0 for a price, 1 and 100 for the
+levels (what the official client sends for an open criterion is owed to
+read R49-42a). The trader is a spawn id, 0 for all. The name is at most 63
+bytes of printable ASCII; prices are whole platinum from 1 (the server
+counts them in thousands of copper); levels are 1 to 100; each least must
+not pass its most. `GameCommand::BazaarWelcome` sends action 9, padded to
+20 bytes (inferred). Each is refused with `WorldEvent::BazaarRefused` and
+nothing is sent outside the Bazaar (zone 151; `EQEmu` searches only the
+player's own zone and instance, so elsewhere it finds nothing, and where
+the original lets a player search is owed to R49-42), while another is in
+flight (until its answer, a zone change, a new admission or 10 s), within
+2 s of the last (ours, inferred), or when the criteria are out of bounds.
+
+The server's answers come as `WorldEvent::Bazaar`: `Results` with each
+`BazaarListing` (the trader's spawn, item id, serial number, name and the
+count the server adds as `"Name(count)"`, `None` where the field cut it
+off, the price in copper and the searched stat), then `SearchDone`, which
+alone answers a search that found nothing; and `Welcome { traders, items }`.
+The host names traders from its own spawn list. Results that are not whole
+96-byte rows, more than 1000 rows, a row of another action or of a spawn past
+16 bits, and an action no server is known to send are gaps; an answer
+nobody asked for is withheld and a gap too. The bazaar's and traders'
+gaps keep no sample, only opcode and length. The parcel delivery costs
+`EQEmu` sends after results (action 29) are read and dropped: only RoF and
+later have parcels.
+
 ## Task journal
 
 Stock `EQEmu` sessions (Titanium) read the task journal the zone sends
