@@ -366,7 +366,8 @@ fn a_twisted_next_song_is_the_one_playing() {
         bard.casting.song,
         Some(Song {
             spell: 203,
-            item: false
+            item: false,
+            awaiting_start: false,
         })
     );
     stopped_with_no_cast_held(&mut bard);
@@ -453,7 +454,8 @@ fn an_items_song_not_of_the_class_stops_here_only() {
         bard.casting.song,
         Some(Song {
             spell: 999,
-            item: true
+            item: true,
+            awaiting_start: false,
         })
     );
     nothing_sent(
@@ -515,7 +517,8 @@ fn another_casters_start_or_another_spells_keeps_the_song() {
         bard.casting.song,
         Some(Song {
             spell: 202,
-            item: false
+            item: false,
+            awaiting_start: false,
         })
     );
     stopped_with_no_cast_held(&mut bard);
@@ -527,7 +530,8 @@ fn another_casters_start_or_another_spells_keeps_the_song() {
         bard.casting.song,
         Some(Song {
             spell: 202,
-            item: false
+            item: false,
+            awaiting_start: false,
         })
     );
 }
@@ -627,7 +631,28 @@ fn an_items_song_is_left_to_its_records_cast_time() {
         bard.casting.song,
         Some(Song {
             spell: 202,
-            item: true
+            item: true,
+            awaiting_start: false,
         })
     );
+}
+
+#[test]
+fn only_the_gem_casts_own_start_decides_its_song() {
+    // A gem song kept at 3,000 ms, then a later own start of the same
+    // spell at 0 ms (an item's click of it, say) leaves the song, and the
+    // stop still goes out (reviewer F1).
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    bard.hear(began_in(7, 202, 0));
+    bard.hear(refreshed(0, 202));
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 202,
+            item: false,
+            awaiting_start: false,
+        })
+    );
+    stopped_with_no_cast_held(&mut bard);
 }

@@ -336,6 +336,9 @@ impl CastGuard {
 struct Song {
     spell: u32,
     item: bool,
+    /// A gem's song whose own cast start has not come yet: only that first
+    /// start decides it (6.542).
+    awaiting_start: bool,
 }
 
 /// The longest cast the program does not keep as a song: a cast is the
@@ -485,13 +488,19 @@ impl Casting {
     /// (`EQEmu`'s base time, `Mob::DoCastSpell`), keeps a gem's song only over
     /// 100 ms, as 0x411f3d keeps a cast (read R16). Until it comes, a gem
     /// cast is taken as a song; with none, it stays one. Whether 0x411f3d
-    /// reads the base or the focused time is unread (R49-21a, 6.442). An
-    /// item's song was decided by its record's own cast time.
+    /// reads the base or the focused time is unread (R49-21a, 6.442). Only
+    /// the first own start of that spell after the gem's send decides; a
+    /// later one, such as an item's click of the same spell, changes
+    /// nothing. An item's song was decided by its record's own cast time.
     fn song_begun(&mut self, spell: u32, duration_ms: u32) {
-        if self
-            .song
-            .is_some_and(|song| !song.item && song.spell == spell && duration_ms <= SONG_CAST_MS)
-        {
+        let Some(song) = self.song.as_mut() else {
+            return;
+        };
+        if song.item || song.spell != spell || !song.awaiting_start {
+            return;
+        }
+        song.awaiting_start = false;
+        if duration_ms <= SONG_CAST_MS {
             self.song = None;
         }
     }
@@ -537,6 +546,7 @@ impl Casting {
                     self.song = Some(Song {
                         spell: *spell_id,
                         item: false,
+                        awaiting_start: true,
                     });
                     return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
@@ -596,6 +606,7 @@ impl Casting {
                     self.song = Some(Song {
                         spell: spell_id,
                         item: true,
+                        awaiting_start: false,
                     });
                 }
                 self.submitted(spell_id, Source::Item, world, out)?;
