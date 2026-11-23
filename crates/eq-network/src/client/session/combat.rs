@@ -59,11 +59,17 @@ pub(super) struct Combat {
 }
 
 impl Combat {
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub(super) fn new(protocol: ServerProtocol) -> Self {
         use ranged::SkillAdmission;
         Self {
             attack_notice: match GameDialect::from(protocol) {
                 GameDialect::Titanium => false,
+                // Titanium's, inferred for RoF2 (6.489).
+                GameDialect::Rof2 => false,
                 GameDialect::EqMac => true,
             },
             shots: match protocol {
@@ -71,7 +77,8 @@ impl Combat {
                 ServerProtocol::Project1999 => {
                     Some(ranged::Shots::new(SkillAdmission::ReportedRank))
                 }
-                ServerProtocol::Quarm | ServerProtocol::Takp => None,
+                // RoF2's server type offers no features yet.
+                ServerProtocol::Quarm | ServerProtocol::Takp | ServerProtocol::EqEmuRof2 => None,
             },
         }
     }

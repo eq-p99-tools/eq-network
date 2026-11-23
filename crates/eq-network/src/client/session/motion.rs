@@ -1046,7 +1046,9 @@ impl Feature for Motion {
                         self.swimming
                             && match out.wire.dialect() {
                                 eq_network_game::GameDialect::Titanium => true,
-                                eq_network_game::GameDialect::EqMac => false,
+                                // RoF2's water is not read yet.
+                                eq_network_game::GameDialect::EqMac
+                                | eq_network_game::GameDialect::Rof2 => false,
                             },
                     )
                     .with_gate(out.wire.update_gate())

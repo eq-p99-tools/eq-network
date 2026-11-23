@@ -39,7 +39,11 @@ pub fn scale_instrument_effect(
         (crate::GameDialect::Titanium, 11..=45) => {
             i64::try_from(i128::from(magnitude) * i128::from(modifier) / 10).ok()
         }
-        (crate::GameDialect::Titanium | crate::GameDialect::EqMac, _) => None,
+        // RoF2's modifiers are not read yet.
+        (
+            crate::GameDialect::Titanium | crate::GameDialect::EqMac | crate::GameDialect::Rof2,
+            _,
+        ) => None,
     }
 }
 

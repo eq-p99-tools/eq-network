@@ -21,6 +21,10 @@ impl Feature for Reading {
         matches!(command, ClientCommand::ReadItem { .. })
     }
 
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn handle(
         &mut self,
         command: &ClientCommand,
@@ -48,6 +52,8 @@ impl Feature for Reading {
             let slot = selection.slot();
             let reads_anywhere = match out.wire.dialect() {
                 eq_network_game::GameDialect::Titanium => false,
+                // Titanium's, inferred for RoF2 (6.489).
+                eq_network_game::GameDialect::Rof2 => false,
                 eq_network_game::GameDialect::EqMac => true,
             };
             ensure!(

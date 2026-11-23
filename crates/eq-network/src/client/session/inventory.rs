@@ -402,6 +402,10 @@ pub(super) fn change(
 
 /// Retires the closed exchange's escrow. The server supplies any returned
 /// items and the new purse through ordinary inventory and coin updates.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(super) fn close_exchange(
     world: &mut World,
     returning: bool,
@@ -411,6 +415,8 @@ pub(super) fn close_exchange(
     let offered = std::mem::take(&mut world.coins.0.offered);
     let returned_purse_unknown = match out.wire.dialect() {
         eq_network_game::GameDialect::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_network_game::GameDialect::Rof2 => true,
         eq_network_game::GameDialect::EqMac => false,
     };
     if returning && !given.is_empty() && returned_purse_unknown {

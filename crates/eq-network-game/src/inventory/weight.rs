@@ -187,6 +187,10 @@ impl Inventory {
     /// # Errors
     /// Rejects missing/stale state, malformed cursor groups or bags, and
     /// unbounded affecting history.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub fn carried_weight_tenths(
         &self,
         generation: crate::GameDialect,
@@ -208,6 +212,8 @@ impl Inventory {
                 .ground_drop_weight_tenths(coins)
                 .filter(|_| match generation {
                     GameDialect::Titanium => true,
+                    // Titanium's, inferred for RoF2 (6.489).
+                    GameDialect::Rof2 => true,
                     GameDialect::EqMac => false,
                 })
                 .ok_or(WeightUnavailable::Inventory);
@@ -255,6 +261,10 @@ impl Inventory {
     }
 }
 
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn total(
     items: &BTreeMap<InventorySlot, &InventoryItem>,
     generation: crate::GameDialect,
@@ -279,6 +289,10 @@ fn total(
                 crate::GameDialect::Titanium => {
                     weight += raw - raw * u64::from(bag.rules.bag_weight_reduction) / 100;
                 }
+                // Titanium's, inferred for RoF2 (6.489).
+                crate::GameDialect::Rof2 => {
+                    weight += raw - raw * u64::from(bag.rules.bag_weight_reduction) / 100;
+                }
                 crate::GameDialect::EqMac => *contents.entry(parent).or_default() += raw,
             }
         }
@@ -296,6 +310,8 @@ fn total(
             .max()
             .unwrap_or(0),
         crate::GameDialect::Titanium => 0,
+        // Titanium's, inferred for RoF2 (6.489).
+        crate::GameDialect::Rof2 => 0,
     };
     if reduction > 100 {
         return Err(WeightUnavailable::Container);

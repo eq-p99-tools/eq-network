@@ -54,6 +54,8 @@ impl Quotes {
     pub const fn of(dialect: crate::GameDialect) -> Self {
         match dialect {
             crate::GameDialect::Titanium => Self::WithRate,
+            // Titanium's, inferred for RoF2 (6.489).
+            crate::GameDialect::Rof2 => Self::of(crate::GameDialect::Titanium),
             crate::GameDialect::EqMac => Self::BeforeRate,
         }
     }

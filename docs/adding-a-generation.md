@@ -42,22 +42,41 @@ server's rules, not copy them.
 1. **The variant.** Add it to `GameDialect`, then follow the compiler through every `match` in
    eq-network-game and eq-network. Each accessor on `GameDialect` answers from a program read,
    or as absent, or as labelled inferred (see above).
-2. **The wire.** Implement `Wire` for the generation (`wire.rs`). Every method has a default that
+2. **The wire.** Implement `Wire` for the generation (`wire.rs`). Every stage has a default that
    reads nothing or refuses ("this client generation cannot log in yet"). So a generation can be
    built one stage at a time: login, world, zone connection, admission, then messages, chat,
-   coverage and encoding.
+   coverage and encoding. The generation's reach, how it closes a trade window and how it numbers
+   the player's own updates have no default: it states its own.
 3. **Opcodes and codecs.** A coverage table next to `coverage/titanium.rs` and `coverage/eqmac.rs`
    (what the session does with each message the generation's servers send). A message decoder
    next to `message::titanium` and `message::eqmac_with`, and a request encoder next to
    `request::titanium` and `request::eqmac`. Opcodes stay in the generation's own modules.
 4. **Login and world.** Next to `login::titanium` and `login::eqmac::login`, and next to
    `world::titanium`, with admission next to `TitaniumAdmission` and `EqMacAdmission`.
-5. **The server type.** A `ServerProtocol` variant (with its `FromStr` name, `default_endpoint`
-   and generation in `From<ServerProtocol> for GameDialect`) and a `ServerType` implementation
+5. **The server type.** A `ServerProtocol` variant (with `default_endpoint`, its generation in
+   `From<ServerProtocol> for GameDialect`, and a `FromStr` name once it can log in) and a
+   `ServerType` implementation
    whose `wire()` returns the new wire. It offers no features until each one is checked on a live
    server of that type, as every server type starts. Server-software rules are shared, as above.
+   `ServerType::item_rules()` keeps its default: it only says how the shared `EQMac` inventory
+   records are read, and is inert for any other generation's wire.
 6. **eq-client.** Repin, then follow the compiler there too. See eq-client's ARCHITECTURE.md,
    "Client generations".
+
+## RoF2 status: placeholder
+
+`GameDialect::Rof2` and `ServerProtocol::EqEmuRof2` exist so every decision above has an answer,
+and nothing of RoF2 is built:
+
+- `ClientConfig` validation refuses `EqEmuRof2`, so no session starts and nothing is sent. The
+  variant has no `FromStr` name, so no setting can choose it.
+- The `Rof2` wire keeps every refusing default. `EqEmuRof2` offers no features and copies no
+  `EqEmu` rule.
+- Every packet layout refuses it ("not built for RoF2 yet"). Program rules without a read are
+  `None`, or Titanium's value on an arm of its own commented `inferred for RoF2 (6.489)`.
+  Recording checklist item 6.489 is the list of those reads: grep the token. A read replaces one
+  arm. Where a function carries `#[expect(clippy::match_same_arms)]` for its RoF2 arms, the
+  expectation fails once no arm matches Titanium's any more, so it leaves with the last one.
 
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.

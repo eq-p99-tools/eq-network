@@ -95,6 +95,11 @@ pub enum ServerProtocol {
     /// A stock TAKP (`EQMacEmu`) server speaking the Windows TAKP/EQMac
     /// protocol, without Quarm's own rules (for example a local test server).
     Takp,
+    /// A stock `EQEmu` server played with the `RoF2` client. A placeholder:
+    /// a configuration naming it is refused before anything is sent, its
+    /// generation's wire refuses every stage, and it offers no features. It
+    /// has no name to choose it by ([`FromStr`] refuses it).
+    EqEmuRof2,
 }
 
 impl ServerProtocol {
@@ -106,6 +111,9 @@ impl ServerProtocol {
             Self::Quarm => ("loginserver.takproject.net", 6000),
             Self::EqEmu => ("127.0.0.1", 5998),
             Self::Takp => ("127.0.0.1", 6000),
+            // Stock `EQEmu`'s login server listens here for clients newer
+            // than Titanium (its default `login.json`).
+            Self::EqEmuRof2 => ("127.0.0.1", 5999),
         }
     }
 
@@ -115,7 +123,7 @@ impl ServerProtocol {
     #[must_use]
     pub const fn is_stock(self) -> bool {
         match self {
-            Self::EqEmu | Self::Takp => true,
+            Self::EqEmu | Self::EqEmuRof2 | Self::Takp => true,
             Self::Project1999 | Self::Quarm => false,
         }
     }
@@ -126,6 +134,7 @@ impl From<ServerProtocol> for GameDialect {
         match protocol {
             ServerProtocol::Project1999 | ServerProtocol::EqEmu => Self::Titanium,
             ServerProtocol::Quarm | ServerProtocol::Takp => Self::EqMac,
+            ServerProtocol::EqEmuRof2 => Self::Rof2,
         }
     }
 }
@@ -305,12 +314,14 @@ impl ClientConfig {
         }
         ensure!(self.port != 0, "login port must be nonzero");
         // EQMac's login packs both into 20-byte fields (`login/eqmac.rs`).
+        // A generation with no login is refused here, before any socket opens.
         match GameDialect::from(self.protocol) {
             GameDialect::Titanium => {}
             GameDialect::EqMac => ensure!(
                 self.credentials.account().len() < 20 && self.credentials.password().len() < 20,
                 "EQMac login fields must fit in 19 bytes"
             ),
+            GameDialect::Rof2 => anyhow::bail!("the RoF2 client generation cannot log in yet"),
         }
         ensure!(
             self.character.len() < 64 && !self.character.contains('\0'),
@@ -1127,6 +1138,66 @@ mod tests {
         assert_eq!(
             "QUARM".parse::<ServerProtocol>().unwrap(),
             ServerProtocol::Quarm
+        );
+    }
+
+    #[test]
+    fn the_rof2_placeholder_has_no_name_to_choose_it_by() {
+        let rof2 = ServerProtocol::EqEmuRof2;
+        for name in [
+            "eqemu-rof2",
+            "eqemu_rof2",
+            "eq_emu_rof2",
+            "EqEmuRof2",
+            "rof2",
+        ] {
+            let refused = name.parse::<ServerProtocol>().unwrap_err();
+            assert!(
+                refused.to_string().starts_with("unknown server protocol"),
+                "{name}: {refused}"
+            );
+        }
+        // Its serde name only round-trips what the crate itself writes.
+        let written = serde_json::to_string(&rof2).unwrap();
+        assert_eq!(written, r#""eq_emu_rof2""#);
+        assert_eq!(
+            serde_json::from_str::<ServerProtocol>(&written).unwrap(),
+            rof2
+        );
+        assert!(serde_json::from_str::<ServerProtocol>(r#""eqemu_rof2""#).is_err());
+        assert_eq!(GameDialect::from(rof2), GameDialect::Rof2);
+        assert_eq!(rof2.default_endpoint(), ("127.0.0.1", 5999));
+        assert!(rof2.is_stock());
+    }
+
+    #[test]
+    fn a_rof2_configuration_is_refused_before_anything_is_sent() {
+        let server = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let port = server.local_addr().unwrap().port();
+        let configured = |protocol| {
+            let mut config =
+                ClientConfig::for_protocol(protocol, "ACCOUNT", "PASSWORD", "Server", "");
+            config.host = "127.0.0.1".into();
+            config.port = port;
+            Client::new(config, ClientIdentity::new("host", "user"))
+        };
+        assert!(configured(ServerProtocol::EqEmu).is_ok());
+        let refused = configured(ServerProtocol::EqEmuRof2).err().unwrap();
+        assert_eq!(
+            refused.to_string(),
+            "the RoF2 client generation cannot log in yet"
+        );
+        let mut datagram = [0; 512];
+        let received = server.recv_from(&mut datagram).unwrap_err();
+        assert!(
+            matches!(
+                received.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ),
+            "{received}"
         );
     }
 
