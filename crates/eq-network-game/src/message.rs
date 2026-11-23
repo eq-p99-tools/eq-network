@@ -21,6 +21,10 @@ pub enum Message {
     /// reaches the host as chat; this tells the session the query was
     /// answered.
     WhoUnmatched,
+    /// TAKP or Quarm refused the player's split, with string 12328 or 13112
+    /// ([`crate::split::eqmac_refused`]); the additions that follow give the
+    /// coins back. The line itself still reaches the host as chat.
+    SplitRefused,
     /// Read-only Titanium AA facts, scoped and published by the server feature.
     AlternateAdvancement(crate::alternate_advancement::Update),
     /// News the host hears about too.
@@ -612,6 +616,16 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             .into_iter()
             .chain([described(crate::zones::eqmac_description(body))])
             .collect(),
+        crate::socials::EQMAC_ROLL_OPCODE => vec![crate::socials::roll(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |roll| Message::Event(WorldEvent::Roll(roll)),
+        )],
+        crate::socials::EQMAC_ASSIST_OPCODE => {
+            vec![crate::socials::eqmac_assist_answer(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                |answer| Message::Event(WorldEvent::Assisted(answer)),
+            )]
+        }
         crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
@@ -634,6 +648,9 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
         }
         crate::who::eqmac::FORMATTED_OPCODE if crate::who::eqmac::unmatched(opcode, body) => {
             vec![Message::WhoUnmatched]
+        }
+        crate::who::eqmac::FORMATTED_OPCODE if crate::split::eqmac_refused(opcode, body) => {
+            vec![Message::SplitRefused]
         }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
@@ -701,6 +718,10 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
     messages.push(crate::quarm::profile_nourishment(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |value| Message::Event(WorldEvent::Nourishment(value)),
+    ));
+    messages.push(crate::quarm::profile_auto_split(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |on| Message::Event(WorldEvent::AutoSplit(on)),
     ));
     match crate::quarm::bind_point(body) {
         // The move home after death takes the whole point; the client is
@@ -1432,12 +1453,17 @@ mod tests {
             ]
         ));
         // A profile that cannot be read leaves the spells, the coins, the
-        // bind point and the group unknown.
+        // nourishment, the automatic splitting, the bind point, the group
+        // and the AA unknown.
         assert!(matches!(
             eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
             [
                 Message::Unreadable {
                     part: Part::Spells,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
                     ..
                 },
                 Message::Unreadable {
@@ -1467,6 +1493,51 @@ mod tests {
                     None
                 )),
             ]
+        ));
+    }
+
+    #[test]
+    fn eqmac_rolls_assists_and_split_refusals_are_read() {
+        // A die rolled near the player, and the server's answer to an assist
+        // (6.585); a malformed one is a gap, never a crash.
+        let mut rolled = [0; 76];
+        rolled[0..4].copy_from_slice(&1u32.to_le_bytes());
+        rolled[4..8].copy_from_slice(&6u32.to_le_bytes());
+        rolled[8..12].copy_from_slice(&4u32.to_le_bytes());
+        rolled[12..18].copy_from_slice(b"Roller");
+        assert!(matches!(
+            &eqmac(crate::socials::EQMAC_ROLL_OPCODE, &rolled)[..],
+            [Message::Event(WorldEvent::Roll(roll))]
+                if roll.low == 1 && roll.high == 6 && roll.result == 4 && roll.name == "Roller"
+        ));
+        assert!(matches!(
+            &eqmac(crate::socials::EQMAC_ASSIST_OPCODE, &[0x34, 0x12])[..],
+            [Message::Event(WorldEvent::Assisted(
+                crate::socials::Assisted {
+                    target: Some(0x1234)
+                }
+            ))]
+        ));
+        for (opcode, body) in [
+            (crate::socials::EQMAC_ROLL_OPCODE, &rolled[..75]),
+            (crate::socials::EQMAC_ASSIST_OPCODE, &[0x34, 0x12, 0, 0][..]),
+        ] {
+            assert!(matches!(
+                eqmac(opcode, body)[..],
+                [Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }]
+            ));
+        }
+        // A split refused, as the line's number says; the line itself goes
+        // as chat.
+        let mut refused = vec![0, 0];
+        refused.extend_from_slice(&12328u16.to_le_bytes());
+        refused.extend_from_slice(&[0; 8]);
+        assert!(matches!(
+            eqmac(crate::who::eqmac::FORMATTED_OPCODE, &refused)[..],
+            [Message::SplitRefused]
         ));
     }
 

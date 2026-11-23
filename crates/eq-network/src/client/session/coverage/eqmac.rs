@@ -17,7 +17,7 @@ use super::{
 #[allow(clippy::too_many_lines, reason = "one row per message")]
 pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
-        0x0042 => sent("OP_Assist", EQMAC, unasked(EqMacWorld)),
+        0x0042 => sent("OP_Assist", EQMAC, Read(&[Zone])),
         0x0180 => sent("OP_EnterWorld", EQMAC, Read(&[World])),
         // The login server's error, which TAKP's login names OP_ClientError;
         // the zone's OP_ClientError is another message (0x4148).
@@ -56,7 +56,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1442 => sent("OP_AAAction", EQMAC, Partly(&[Zone], EQMAC_AA)),
         0x1540 => sent("OP_Emote", EQMAC, Read(&[Chat])),
         0x1542 => sent("OP_RespondAA", EQMAC, Partly(&[Zone], EQMAC_AA)),
-        0x1640 => sent("OP_RandomReply", EQMAC, planned(EqMacWorld)),
+        0x1640 => sent("OP_RandomReply", EQMAC, Read(&[Zone])),
         0x1642 => sent_private("OP_TraderShop", EQMAC, planned(Bazaar)),
         0x1741 => sent("OP_GuildInvite", EQMAC, Partly(&[Zone], INVITE)),
         0x1842 => sent_private("OP_BecomeTrader", EQMAC, planned(Bazaar)),

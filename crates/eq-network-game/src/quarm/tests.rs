@@ -166,6 +166,12 @@ fn the_profile_lists_the_players_group_without_its_leader() {
     assert_eq!(profile_group(&hex::decode(PROFILE).unwrap()).unwrap(), None);
     assert!(profile_group(&[0; 4]).is_err());
 }
+
+#[test]
+fn the_synthetic_profile_shares_no_looted_coins() {
+    assert!(!profile_auto_split(&hex::decode(PROFILE).unwrap()).unwrap());
+    assert!(profile_auto_split(&[0; 4]).is_err());
+}
 const PROFILE: &str = "ae05f5a6083907c71a8fa0b9df18601d2fadb4d6b80a3099d83162b5c95015d3bd8bd662ad969f16538260e8249c5a9d1c78803e51a3f8d3d48f5ca3fb28b2bff7a48403366d5c880b3422059ae86574971744def74907496b270882";
 const SPAWNS: &str = "28e67b5d096069468c09009a236b6b8bace06fcd5ad543cb0f2173178769ee91ddec0b81713d9ef952c724020b109b20e8bbf4f4b5b2e79e";
 
@@ -654,6 +660,7 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
             Message::Event(WorldEvent::Coins(carried)),
             Message::Event(WorldEvent::CoinsElsewhere { cursor, bank, .. }),
             Message::Event(WorldEvent::Nourishment(_)),
+            Message::Event(WorldEvent::AutoSplit(false)),
             Message::Bind(bind),
             Message::Event(WorldEvent::BoundIn { zone_id }),
             Message::AlternateAdvancement(crate::alternate_advancement::Update::MacSelections(

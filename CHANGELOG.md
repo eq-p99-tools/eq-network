@@ -5,6 +5,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Rolling`, `Assisting` and `Splitting` on Quarm and TAKP (6.585), each
+  from its own handlers (Quarm fc75fcf, TAKP 44afcbf).
+  - New functions: `socials::{eqmac_random, eqmac_assist}`,
+    `split::{eqmac_split, eqmac_auto_split, eqmac_take, eqmac_refused}` and
+    `quarm::profile_auto_split`.
+  - Rolls and assists are read into the existing `WorldEvent::Roll` and
+    `WorldEvent::Assisted`; an assist answer names the player's own spawn when
+    the server does.
+  - Rolls take ends of 0 to 32000, in order. One assist is in flight at a
+    time.
+  - After a split, the purse is known only when the server's give-back or its
+    take plus the share proves it.
+  - Emotes and yells stay unoffered there.
+  - Source-derived, not live.
+
+  **Breaking** (for exhaustive matches): `message::Message` gains
+  `SplitRefused`.
+
 - Offer `/who all` and friends on Quarm and TAKP (6.583), each from its own
   handlers (Quarm fc75fcf, TAKP 44afcbf): `who::eqmac::{request, decode,
   unmatched}` for the 140-byte request and the 16-bit answer, and

@@ -38,11 +38,20 @@ struct PendingAssist {
     superseded: bool,
 }
 
+/// How long an assist on TAKP or Quarm waits for its answer before another
+/// may go. Both servers always answer, untagged (6.585, ours: the `EQMac`
+/// program's own pace is unread, 6.585c).
+const EQMAC_ASSIST_WAIT: Duration = Duration::from_secs(5);
+
 /// Rolls, emotes, assists and yells.
 #[derive(Default)]
 pub(super) struct Socials {
     project1999: bool,
     assist: Option<PendingAssist>,
+    /// TAKP and Quarm: rolls and assists only.
+    eqmac: bool,
+    /// There, when the last assist went, while it is unanswered.
+    eqmac_assist: Option<Instant>,
 }
 
 impl Socials {
@@ -52,11 +61,31 @@ impl Socials {
             ..Self::default()
         }
     }
+
+    /// TAKP and Quarm, each from its own `Handle_OP_RandomReq` and
+    /// `Handle_OP_Assist` (Quarm fc75fcf, TAKP 44afcbf; 6.585): rolls, with
+    /// P99's ends of 0 to 32000 in order (ours: the `EQMac` program's limit
+    /// is unread, 6.585b), and one assist at a time. Emotes and yells wait
+    /// for their own reads.
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether rolls take P99's ends, in order.
+    const fn bounded_rolls(&self) -> bool {
+        self.project1999 || self.eqmac
+    }
 }
 
 impl Feature for Socials {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
+        if self.eqmac {
+            return vec![Capability::Rolling, Capability::Assisting];
+        }
         vec![
             Capability::Rolling,
             Capability::Emoting,
@@ -66,6 +95,12 @@ impl Feature for Socials {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
+        if self.eqmac {
+            return matches!(
+                command,
+                ClientCommand::Random { .. } | ClientCommand::Assist { .. }
+            );
+        }
         matches!(
             command,
             ClientCommand::Random { .. }
@@ -78,6 +113,12 @@ impl Feature for Socials {
     }
 
     fn explain(&mut self, message: &mut Message, world: &World) {
+        if self.eqmac {
+            if matches!(message, Message::Event(WorldEvent::Assisted(_))) {
+                self.eqmac_assist = None;
+            }
+            return;
+        }
         if !self.project1999 {
             return;
         }
@@ -119,7 +160,7 @@ impl Feature for Socials {
         match command {
             ClientCommand::Random { low, high, .. } => {
                 let (mut low, mut high) = (*low, *high);
-                if self.project1999 {
+                if self.bounded_rolls() {
                     if low.max(high) > P99_ROLL_MAX {
                         return actions::refuse(
                             command,
@@ -177,6 +218,9 @@ impl Feature for Socials {
                         out.log,
                     );
                 }
+                if self.eqmac {
+                    return self.eqmac_assist(command, *spawn_id, out);
+                }
                 if !self.project1999 {
                     return out.request(&Request::Assist(*spawn_id));
                 }
@@ -231,6 +275,25 @@ fn animate(animation: u8, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Socials {
+    /// Asks TAKP or Quarm to assist, one assist at a time until its answer
+    /// or [`EQMAC_ASSIST_WAIT`].
+    fn eqmac_assist(
+        &mut self,
+        command: &ClientCommand,
+        spawn_id: u16,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self
+            .eqmac_assist
+            .is_some_and(|sent| sent.elapsed() < EQMAC_ASSIST_WAIT)
+        {
+            return actions::refuse(command, "Wait for the previous assist reply.", out.log);
+        }
+        out.request(&Request::Assist(spawn_id))?;
+        self.eqmac_assist = Some(Instant::now());
+        Ok(())
+    }
+
     /// A social emote's own line is the client's to print, so nothing is
     /// echoed; its text goes as the program built it.
     fn social_emote(
@@ -693,6 +756,72 @@ mod tests {
         assert!(matches!(answer, Message::Withheld));
         let next = testing::run(|out| feature.handle(&command, &mut world, out));
         assert_eq!(next.sent, [socials::assist(8)]);
+    }
+
+    #[test]
+    fn eqmac_socials_roll_and_assist_only_in_the_mac_packets() {
+        use crate::world::Capability;
+        let wire = &super::super::wire::EqMac;
+        let mut feature = Socials::eqmac();
+        assert_eq!(
+            feature.capabilities(),
+            [Capability::Rolling, Capability::Assisting]
+        );
+        let emote = ClientCommand::Emote {
+            session_id: 5,
+            text: "waves.".into(),
+        };
+        assert!(!feature.owns(&emote));
+        assert!(!feature.owns(&ClientCommand::SocialEmote {
+            session_id: 5,
+            text: " nudges ".into(),
+        }));
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let roll = |low, high| ClientCommand::Random {
+            session_id: 5,
+            low,
+            high,
+        };
+        let run = |feature: &mut Socials, command: &ClientCommand, world: &mut World| {
+            let outcome = testing::run_on(wire, |out| feature.handle(command, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        // Ends in order, at most 32000 (ours, 6.585b).
+        assert_eq!(
+            run(&mut feature, &roll(6, 1), &mut world).sent,
+            [socials::eqmac_random(1, 6)]
+        );
+        assert_eq!(run(&mut feature, &roll(0, 32_001), &mut world).sent, []);
+        let assist = |spawn_id| ClientCommand::Assist {
+            session_id: 5,
+            spawn_id,
+        };
+        assert_eq!(
+            run(&mut feature, &assist(300), &mut world).sent,
+            [socials::eqmac_assist(300)]
+        );
+        // One at a time until the answer.
+        assert_eq!(run(&mut feature, &assist(301), &mut world).sent, []);
+        // The server names the player's own spawn: it passes on as named.
+        let mut answer =
+            Message::Event(WorldEvent::Assisted(socials::Assisted { target: Some(7) }));
+        feature.explain(&mut answer, &world);
+        assert!(matches!(
+            answer,
+            Message::Event(WorldEvent::Assisted(socials::Assisted { target: Some(7) }))
+        ));
+        assert_eq!(
+            run(&mut feature, &assist(301), &mut world).sent,
+            [socials::eqmac_assist(301)]
+        );
+        // Or the wait runs out.
+        feature.eqmac_assist = Instant::now().checked_sub(EQMAC_ASSIST_WAIT);
+        assert_eq!(run(&mut feature, &assist(302), &mut world).sent.len(), 1);
+        // Never oneself.
+        feature.eqmac_assist = None;
+        assert_eq!(run(&mut feature, &assist(7), &mut world).sent, []);
     }
 
     #[test]

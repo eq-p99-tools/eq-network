@@ -3267,6 +3267,8 @@ mod tests {
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::Translocate,
                 Capability::Jumping,
@@ -3274,6 +3276,7 @@ mod tests {
                 Capability::Meals,
                 Capability::GameplayDepartures,
                 Capability::FriendsWho,
+                Capability::Splitting,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters,
                 Capability::BazaarSearching
@@ -3302,6 +3305,8 @@ mod tests {
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
@@ -3310,6 +3315,7 @@ mod tests {
                 Capability::Meals,
                 Capability::GameplayDepartures,
                 Capability::FriendsWho,
+                Capability::Splitting,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters,
                 Capability::BazaarSearching

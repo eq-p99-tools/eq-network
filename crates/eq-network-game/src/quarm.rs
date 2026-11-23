@@ -662,6 +662,14 @@ pub fn profile_nourishment(body: &[u8]) -> Result<crate::food::Nourishment> {
     crate::food::eqmac_profile(&unpack(body, true)?)
 }
 
+/// Whether the validated `EQMac` profile shares looted coins (`/autosplit`).
+///
+/// # Errors
+/// Rejects malformed compression or a truncated profile.
+pub fn profile_auto_split(body: &[u8]) -> Result<bool> {
+    crate::split::eqmac_profile(&unpack(body, true)?)
+}
+
 /// The separate, uncompressed own-character zone-entry projection.
 #[derive(Clone, Debug)]
 pub struct OwnSpawn {
