@@ -103,6 +103,13 @@ list and runs each step on the player's own gem refresh as `StopSong` then
 the next gem's `CastSpell`; the session adds no command for it. The stop
 ends the song, so the press that follows casts.
 
+`Capability::BardRefreshTimers` says where the Titanium program's gem
+timers for a Bard apply (read R49-21 c): a refresh of the Bard's own gem
+starts no wait before the next spell, where anyone else's starts the
+spell's recovery. It comes with the Titanium song rules (P99 and stock
+`EQEmu`); the Mac-era program is unread, so TAKP and Quarm don't offer it.
+The host keeps the timers.
+
 ## Server filters
 
 `ClientConfig::server_filters` is the set a character starts with; the

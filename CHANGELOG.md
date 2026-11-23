@@ -5,6 +5,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Capability::BardRefreshTimers` (checklist 6.642): where the Titanium
+  program's gem timers for a Bard apply (read R49-21 c). A refresh of a
+  Bard's own gem (`OP_MemorizeSpell` kind 3) sets the program's wait before
+  the next spell to now, where anyone else's adds the spell's recovery. It
+  comes with the Titanium song rules, on P99 and stock `EQEmu`; not the
+  Mac-era server types, whose program is unread. The host keeps the timers;
+  nothing is sent for it. **Breaking:** a new `Capability` variant.
 - **Breaking:** A same-zone zone line places the player locally on stock
   EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
   program's 0x48aaa6 sends one position record and lands the player itself,
