@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep a late scribe answer's hold until its cursor removal (6.526). A
+  scribe that timed out and then got its late book confirmation, after the
+  player moved the scroll, lost its receipt to any other inventory update,
+  so the cursor removal that followed applied as a plain removal. The
+  receipt now passes updates that leave the cursor alone, so that removal
+  still marks the inventory stale. Anything else naming the cursor, a
+  snapshot, an invalidation or 5 s since the confirmation ends it; a
+  cursor removal 5 s or more after the confirmation is now a plain removal.
 - Tell the player's bind zone (checklist 6.524). `world::titanium_bind_zone`
   reads the primary bind's zone from Titanium's profile (`binds[5]` at byte
   24, 20-byte records, as `EQEmu`'s `titanium_structs.h` lays them out), and
