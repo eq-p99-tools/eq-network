@@ -293,9 +293,26 @@ pub struct InventoryItem {
     pub charges: i32,
     /// Number of usable container slots, zero for non-containers.
     pub bag_slots: u8,
+    /// The id of the augment in each of a common item's sockets, or `None`
+    /// for an empty one. Titanium serializes them as the item's children
+    /// (`EQEmu`'s `GetAugment` is `GetItem` on a common item); `EQMac` has
+    /// none.
+    pub augments: [Option<u32>; AUGMENT_SOCKETS],
 }
 
+/// Titanium's augment sockets on an item (`EQEmu`'s
+/// `invaug::SOCKET_COUNT` for Titanium).
+pub const AUGMENT_SOCKETS: usize = 5;
+
 impl InventoryItem {
+    /// Whether any socket holds an augment. What the augments add (weight,
+    /// stats, effects) is not summed yet, so anything derived from this
+    /// item reads as unknown (6.570 G2).
+    #[must_use]
+    pub fn augmented(&self) -> bool {
+        self.augments.iter().any(Option::is_some)
+    }
+
     /// Build a Titanium chat link from the metadata retained with this record.
     ///
     /// # Errors
@@ -657,10 +674,16 @@ impl Inventory {
     /// Unversioned partial slot updates cannot retire it; a full snapshot or
     /// existing policy-driven settlement starts a new contribution baseline.
     /// False does not confirm inventory placement or establish carried weight.
-    /// Callers must still require a received, non-stale inventory.
+    /// Callers must still require a received, non-stale inventory. An
+    /// augmented item worn now is uncertain too, since what its augments add
+    /// is not summed.
     #[must_use]
     pub fn equipment_stats_uncertain(&self) -> bool {
-        !self.equipment_uncertainty.is_empty()
+        // An augment's stats and effects are not summed yet (6.570 G2).
+        self.items
+            .iter()
+            .any(|(slot, item)| slot.is_equipment() && item.augmented())
+            || !self.equipment_uncertainty.is_empty()
             || !self.station_equipment_uncertainty.is_empty()
             || self
                 .bandage_stock_uncertain

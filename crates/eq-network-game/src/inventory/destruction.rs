@@ -127,6 +127,7 @@ mod tests {
             stack_count: Some(7),
             charges: 7,
             bag_slots: 0,
+            augments: Default::default(),
             rules: ItemPlacement {
                 stack_size: 20,
                 ..Default::default()

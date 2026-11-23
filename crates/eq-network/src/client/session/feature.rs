@@ -666,6 +666,7 @@ pub(super) mod testing {
             stack_count: None,
             charges: 0,
             bag_slots: 0,
+            augments: Default::default(),
             details: eq_network_game::items::ItemDetails {
                 base_held_model: None,
                 equipment: None,

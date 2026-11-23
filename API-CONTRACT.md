@@ -1010,6 +1010,24 @@ never establishes carried weight, receipt or server acceptance. It must be used
 with a received, non-stale model whose complete history was recorded from its
 baseline; cloning preserves that history, endpoint reconstruction does not.
 
+## Augments
+
+Titanium serializes a common item's augment sockets as the item's children
+(`EQEmu`'s `GetAugment` is `GetItem` on a common item; 5 sockets), on a
+worn or carried item and two deep on an item in a bag. The reader keeps
+each socket's augment id in `InventoryItem::augments` and places no
+augment in the inventory (6.570); before, any augmented item made the
+whole inventory unreadable. A child of a common record is read as an
+augment even where the record claims room (ours, 6.570 G1: only a bag has
+contents in `EQEmu`). An augment past socket 4, an augment with children,
+or a child of any other non-bag class is still unreadable. An augmented
+record carries no link hash. **What augments add is not summed yet, so
+anything derived from an augmented item reads as unknown, never as less**:
+`Inventory::carried_weight_tenths` is `Err(WeightUnavailable::Augments)`
+while any counted item is augmented (the Titanium program adds augments'
+weight), and `equipment_stats_uncertain()` is true while any worn item is.
+`EQMac` has no augments.
+
 ## Ordered host inventory projections
 
 `InventoryMove::sequence` optionally names a monotonically increasing local
@@ -1918,10 +1936,10 @@ moves read, a return that would reach the cursor (ours: `EQEmu` pushes it
 there), an empty set, or nothing to swap; and while stunned, dead,
 trading, at a merchant, with a world container or a trader's window open,
 casting, or within 250 ms of the last bandolier send (inferred until read
-R49-45 b). The session does not read augment ids, so it refuses whatever
-could meet `EQEmu`'s augment match: a worn or bagged item with children
-is an unreadable record (the inventory goes stale), and a pack item that
-is not a bag but has room or contents is refused. **On `EQEmu` the server
+R49-45 b). `EQEmu`'s `HasItem` also matches an augment socketed in an
+item, so a set naming an id in any worn or carried item's
+`InventoryItem::augments` is refused, and so is a pack item that is not a
+bag but has room or contents (6.570 G3). **On `EQEmu` the server
 confirms no move, so the slots of any item move, the player's own or a
 swap's, keep projected custody after they settle until the server next
 sends them; a swap is refused after any item move until then.** Regaining

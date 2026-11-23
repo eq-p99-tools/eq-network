@@ -60,6 +60,7 @@ fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
         stack_count: count,
         charges: 3,
         bag_slots: bag,
+        augments: Default::default(),
         rules: ItemPlacement {
             stack_size: 20,
             size: 1,

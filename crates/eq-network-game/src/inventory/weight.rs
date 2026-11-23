@@ -18,6 +18,9 @@ pub enum WeightUnavailable {
     Prediction,
     /// Orphaned contents or an invalid container reduction.
     Container,
+    /// A counted item carries augments, whose weight the Titanium program
+    /// adds and this sum does not yet (6.570 G2).
+    Augments,
 }
 
 /// Carried weight evidence retained independently of cursor placement.
@@ -166,7 +169,9 @@ impl Inventory {
     /// bag's reduction with the bag itself in full, coins at 1/40 each less
     /// the best purse in a general slot, held to 32,766. It also takes off
     /// a weight-reduction effect (221), which this sum does not, so the
-    /// client reads heavier, the slower side. The `EQMac` program's sum
+    /// client reads heavier, the slower side. It adds augments' weight,
+    /// which this sum does not yet, so an augmented item counted here makes
+    /// the weight unknown ([`WeightUnavailable::Augments`], 6.570 G2). The `EQMac` program's sum
     /// (0x4bbb78) is the same but for the effect and augments: a stack once,
     /// each bag content at the bag's reduction in floating point (the exact
     /// value this tenths sum reaches by reducing the bag's aggregate), coins
@@ -273,6 +278,14 @@ fn total(
     let mut weight = 0;
     let mut contents: BTreeMap<InventorySlot, u64> = BTreeMap::new();
     for (&slot, item) in items {
+        let counted = slot.is_equipment()
+            || slot.is_pack()
+            || slot == InventorySlot::CURSOR
+            || slot.is_carried()
+            || slot.is_in_cursor_bag();
+        if counted && item.augmented() {
+            return Err(WeightUnavailable::Augments);
+        }
         if slot.is_equipment() || slot.is_pack() || slot == InventorySlot::CURSOR {
             if item.bag_slots > 0 && item.rules.bag_weight_reduction > 100 {
                 return Err(WeightUnavailable::Container);
@@ -337,6 +350,7 @@ mod tests {
             stack_count: None,
             charges: 0,
             bag_slots: 0,
+            augments: Default::default(),
             details: ItemDetails {
                 base_held_model: None,
                 equipment: Some(EquipmentRules::default()),

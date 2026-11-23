@@ -441,6 +441,7 @@ fn item_at_for(
         },
         charges: if stackable { 0 } else { charges },
         bag_slots,
+        augments: Default::default(),
     })
 }
 

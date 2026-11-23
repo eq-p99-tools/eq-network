@@ -14,6 +14,7 @@ fn item(slot: InventorySlot) -> InventoryItem {
         stack_count: None,
         charges: 0,
         bag_slots: 0,
+        augments: Default::default(),
         details: ItemDetails {
             base_held_model: None,
             equipment: None,

@@ -301,14 +301,20 @@ mod tests {
     }
 
     #[test]
-    fn titanium_inventory_rejects_a_serialized_child_on_an_ordinary_item() {
+    fn titanium_inventory_reads_a_serialized_child_on_an_ordinary_item_as_its_augment() {
+        // A common item's children are its augment sockets (6.570).
         let parent = serialized("17", "255", "0");
         let root = parent.strip_suffix("||||||||||\0").unwrap();
         let child = serialized("18", "0", "0");
         let child = child.trim_end_matches('\0').replace('"', "\\\"");
         let snapshot = format!("{root}|\"{child}\"|||||||||\0");
-        let error = crate::inventory::decode(0x5394, snapshot.as_bytes()).unwrap_err();
-        assert_eq!(error.to_string(), "item outside container capacity");
+        let Some(InventoryUpdate::Snapshot(items)) =
+            crate::inventory::decode(0x5394, snapshot.as_bytes()).unwrap()
+        else {
+            panic!("snapshot");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].augments, [Some(42), None, None, None, None]);
     }
 
     #[test]
