@@ -943,7 +943,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 125;
+    const KINDS: usize = 127;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1012,6 +1012,8 @@ mod tests {
             ClientCommand::MoveCoins { .. } => 32,
             ClientCommand::DestroyCoins { .. } => 122,
             ClientCommand::Shield { .. } => 124,
+            ClientCommand::RequestTitles { .. } => 125,
+            ClientCommand::SetTitle { .. } => 126,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1601,6 +1603,12 @@ mod tests {
             ClientCommand::Surname {
                 session_id,
                 surname: "Exemplum".into(),
+            },
+            ClientCommand::RequestTitles { session_id },
+            ClientCommand::SetTitle {
+                session_id,
+                title_id: 7,
+                suffix: false,
             },
             ClientCommand::Emote {
                 session_id,
@@ -3452,6 +3460,9 @@ mod ability_tests;
 
 #[cfg(test)]
 mod quarm_inventory_tests;
+
+#[cfg(test)]
+mod belongings_motion_tests;
 
 #[cfg(test)]
 mod item_move_tests;

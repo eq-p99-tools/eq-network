@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 /// Time between sends of the same kind. Twice `EQEmu`'s 250 ms receiver
 /// interval and an inferred local pacing limit on P99 (6.404).
-const SETTLING: Duration = Duration::from_millis(500);
+pub(super) const SETTLING: Duration = Duration::from_millis(500);
 
 /// Away, anonymous and roleplaying, as the player turns them.
 #[derive(Default)]

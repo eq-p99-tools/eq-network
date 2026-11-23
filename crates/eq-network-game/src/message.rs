@@ -128,7 +128,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 11] = [
+pub const ROF2_READS: [u16; 21] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -140,12 +140,23 @@ pub const ROF2_READS: [u16; 11] = [
     crate::rof2_looks::ANIMATION_OPCODE,
     crate::rof2_looks::STATES_ADDED_OPCODE,
     crate::rof2_looks::STATES_REMOVED_OPCODE,
+    crate::rof2_news::DEATH_OPCODE,
+    crate::rof2_news::LEVEL_OPCODE,
+    crate::rof2_news::EXPERIENCE_OPCODE,
+    crate::rof2_news::STAMINA_OPCODE,
+    crate::rof2_news::MONEY_OPCODE,
+    crate::rof2_news::TIME_OPCODE,
+    crate::rof2_news::MANA_OPCODE,
+    crate::rof2_news::DAMAGE_OPCODE,
+    crate::rof2_news::CONSIDER_OPCODE,
+    crate::rof2_news::SKILL_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
-/// spawns' movement and removal (6.514), and how they look and how hurt
-/// they are (6.518) are read yet; a body a reader refuses is unreadable,
-/// told by its opcode and length only.
+/// spawns' movement and removal (6.514), how they look and how hurt they
+/// are (6.518), and the player's own news and the combat records (6.519)
+/// are read yet; a body a reader refuses is unreadable, told by its opcode
+/// and length only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -157,9 +168,13 @@ pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
             .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
         crate::rof2_player::DESPAWN_OPCODE => vec![crate::rof2_player::despawn(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
-        _ => match crate::rof2_looks::read(opcode, body) {
-            Ok(event) => event.map(Message::Event).into_iter().collect(),
+        _ => match crate::rof2_news::read(opcode, body) {
+            Ok(Some(events)) => events.into_iter().map(Message::Event).collect(),
             Err(error) => vec![unreadable(Part::World, &error)],
+            Ok(None) => match crate::rof2_looks::read(opcode, body) {
+                Ok(event) => event.map(Message::Event).into_iter().collect(),
+                Err(error) => vec![unreadable(Part::World, &error)],
+            },
         },
     }
 }

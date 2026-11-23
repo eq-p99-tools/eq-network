@@ -681,12 +681,16 @@ pub enum Capability {
     /// A Warrior's `/shield` of another player
     /// ([`crate::command::GameCommand::Shield`]).
     Shielding,
+    /// Asking which titles the player may choose, and choosing one or a
+    /// suffix ([`crate::command::GameCommand::RequestTitles`],
+    /// [`crate::command::GameCommand::SetTitle`]).
+    Titling,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 79] = [
+    pub const ALL: [Self; 80] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -766,6 +770,7 @@ impl Capability {
         Self::DestroyingCoins,
         Self::LookingForGroup,
         Self::Shielding,
+        Self::Titling,
     ];
 }
 
@@ -1296,6 +1301,10 @@ pub enum WorldEvent {
         /// The new last name; empty when it was taken away.
         last_name: String,
     },
+    /// The titles the player may choose, as the server listed them in
+    /// answer to [`crate::command::GameCommand::RequestTitles`]
+    /// ([`crate::names::title_list`]).
+    TitleList(Vec<crate::names::TitleChoice>),
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
@@ -2167,17 +2176,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
-        0x6d44 => {
-            ensure!(body.len() == 12, "invalid level update length");
-            let current = u8::try_from(word(body, 0))?;
-            let previous = u8::try_from(word(body, 4))?;
-            ensure!(current != 0 && previous != 0, "invalid zero level");
-            WorldEvent::Level {
-                current,
-                previous,
-                experience: word(body, 8).min(330),
-            }
-        }
+        0x6d44 => level_update(body)?,
         0x6a93 => {
             ensure!(body.len() == 8, "invalid skill update length");
             WorldEvent::Skill {
@@ -2258,12 +2257,38 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 crate::abilities::titanium_answer(opcode, body)?.map(WorldEvent::AskAnswered)
             );
         }
-        0x5ecd => {
-            ensure!(body.len() >= 8, "truncated experience update");
-            WorldEvent::Experience(word(body, 0).min(330))
-        }
+        0x5ecd => experience_update(body)?,
         _ => return Ok(None),
     }))
+}
+
+/// Decodes `LevelUpdate_Struct` (12 bytes): the new level, the old one and
+/// the experience, the same bytes on every generation stock `EQEmu` sends
+/// it unencoded (Titanium and `RoF2`).
+///
+/// # Errors
+/// Rejects any length but 12, and a level that is zero or past 255.
+pub(crate) fn level_update(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 12, "invalid level update length");
+    let current = u8::try_from(word(body, 0))?;
+    let previous = u8::try_from(word(body, 4))?;
+    ensure!(current != 0 && previous != 0, "invalid zero level");
+    Ok(WorldEvent::Level {
+        current,
+        previous,
+        experience: word(body, 8).min(330),
+    })
+}
+
+/// Decodes `ExpUpdate_Struct`: the experience within the level, on the
+/// 0 to 330 scale, the same bytes on every generation stock `EQEmu` sends
+/// it unencoded (Titanium and `RoF2`).
+///
+/// # Errors
+/// Rejects a body shorter than 8 bytes.
+pub(crate) fn experience_update(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() >= 8, "truncated experience update");
+    Ok(WorldEvent::Experience(word(body, 0).min(330)))
 }
 
 /// How spawns look and their names, effects, popups and marquees, stuns
@@ -2388,7 +2413,7 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// `OP_MoneyUpdate`: carried coins after a purchase, sale or loot.
-fn money_update(body: &[u8]) -> Result<Coins> {
+pub(crate) fn money_update(body: &[u8]) -> Result<Coins> {
     ensure!(body.len() == 16, "invalid money update length");
     let coin = |offset: usize| u32::try_from(word(body, offset).cast_signed());
     Ok(Coins {
@@ -2612,6 +2637,7 @@ mod tests {
             Capability::DestroyingCoins => 76,
             Capability::LookingForGroup => 77,
             Capability::Shielding => 78,
+            Capability::Titling => 79,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
