@@ -66,6 +66,14 @@ pub enum Message {
     Bind(zoning::BindPoint),
     /// Ability-slot reuse received in a Titanium knight profile.
     KnightRefresh(std::time::Duration),
+    /// A Titanium task journal message, which the session's journal
+    /// checks against the entries it holds before the host hears of it.
+    Journal {
+        /// What it says.
+        news: crate::tasks::News,
+        /// Its body's length, for a gap that tells of it without its words.
+        length: usize,
+    },
     /// The server logging the character out.
     LoggedOut,
     /// A Titanium system notice identifying an invalid tradeskill recipe.
@@ -361,18 +369,36 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
         }
-        _ => match inventory::decode(opcode, body) {
-            Ok(Some(update)) => Message::Event(WorldEvent::Inventory(update)),
-            Err(error) => unreadable(Part::Inventory, &error),
-            Ok(None) => match crate::world::titanium_update(opcode, body) {
-                Ok(Some(event)) => Message::Event(event),
-                Ok(None) => return messages,
-                Err(error) => unreadable(Part::World, &error),
-            },
+        _ => match titanium_other(opcode, body) {
+            Some(message) => message,
+            None => return messages,
         },
     };
     messages.push(message);
     messages
+}
+
+/// What a Titanium packet no other reader took says: the task journal, the
+/// inventory, or the rest of the world; None when nothing reads it.
+fn titanium_other(opcode: u16, body: &[u8]) -> Option<Message> {
+    if let Some(news) = crate::tasks::titanium(opcode, body) {
+        return Some(news.map_or_else(
+            |error| unreadable(Part::World, &error),
+            |news| Message::Journal {
+                news,
+                length: body.len(),
+            },
+        ));
+    }
+    match inventory::decode(opcode, body) {
+        Ok(Some(update)) => Some(Message::Event(WorldEvent::Inventory(update))),
+        Err(error) => Some(unreadable(Part::Inventory, &error)),
+        Ok(None) => match crate::world::titanium_update(opcode, body) {
+            Ok(Some(event)) => Some(Message::Event(event)),
+            Ok(None) => None,
+            Err(error) => Some(unreadable(Part::World, &error)),
+        },
+    }
 }
 
 fn titanium_aa_message(opcode: u16, body: &[u8], messages: &mut Vec<Message>) -> Message {

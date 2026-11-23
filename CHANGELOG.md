@@ -14,6 +14,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Titanium's events, with Titanium's refusals. The rename's names reach the
   host in the event only. Coverage rows for all four; `OP_Sound` and
   `OP_MobRename` share Titanium's parts. Validate still refuses RoF2.
+- Read the task journal stock `EQEmu` sends a Titanium player (gap list
+  section 5, checklist 6.546), from source and not yet checked live. The
+  new `tasks` module reads `OP_TaskDescription` (0x5ef7), `OP_TaskActivity`
+  (0x682d), `OP_TaskActivityComplete` (0x54eb), `OP_CompletedTasks`
+  (0x76a2) and the server's `OP_CancelTask` (0x3ba8), refusing a record
+  whole rather than cutting it. A session journal, offered by stock
+  `EQEmu` only, keeps the task and 19 quests per admission and tells the
+  host five new events for its ignore arms: `WorldEvent::TaskDescribed`,
+  `TaskStepUpdated`, `TaskConcluded`, `TaskRemoved` and `CompletedTasks`.
+  A step for no entry of its task is told as a gap. The five coverage rows
+  are read, the description's crystal parts and three step words partly;
+  their gaps keep no sample, since the bodies carry the server's task
+  text (new `sent_private` coverage rows). P99, TAKP, Quarm and RoF2 keep
+  no journal; RoF2's coverage is unchanged. Nothing is sent yet.
+  **Breaking:** `Message::Journal` and the five `WorldEvent` variants.
 - Read the rest of Titanium's alternate advancement, read only (6.547):
   every `OP_SendAATable` header field (`Rank` gains `hotkey_sid`,
   `hotkey_sid2`, `title_sid`, `desc_sid`, `cost`, `prereq_skill`,
