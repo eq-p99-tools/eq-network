@@ -18,6 +18,13 @@
 //!
 //! No rule here tests a race or a server: every carrier the floor sweep
 //! links counts (R36 E), and the wire is the Titanium program's.
+//!
+//! The Mac-era program names the boat in its frame routine instead (TAKP
+//! 0x4c131d, read 9a; 6.618): `OP_BoardBoat` (the program's 0x41bb, 0xbb41
+//! in this crate's order) reliable on the first frame aboard, and an empty
+//! `OP_LeaveBoat` (0x41bc, 0xbc41 here) unreliable after two frames off.
+//! That cadence is built for [`Riders::for_generation`], and no Mac-era
+//! server type offers riding until its arrival is read.
 use super::{
     feature::{Feature, Out, World},
     transfers::Transfers,
@@ -31,6 +38,7 @@ use eq_network_game::{
     request::Request,
     world::{Capability, Position, WorldEvent},
     zoning::ZoneOffer,
+    GameDialect,
 };
 use std::{
     sync::{
@@ -42,7 +50,8 @@ use std::{
 
 /// The character tick that names the boat underfoot (0x422198).
 const TICK: Duration = Duration::from_secs(1);
-/// Unlinked ticks in a row before the boat is forgotten.
+/// Unlinked ticks in a row before the boat is forgotten; on the Mac era,
+/// unlinked frames (0x4c131d's counter past 1).
 const UNLINKED_TICKS: u8 = 2;
 /// How long the program waits for the server to carry the player on
 /// (0x4a8afa); the session holds a placement aboard no longer.
@@ -145,6 +154,8 @@ impl Riding {
 /// The riding wire's state in one zone session.
 #[derive(Default)]
 pub(super) struct Riders {
+    /// Whose program's boarding cadence the session keeps.
+    dialect: GameDialect,
     /// When the next character tick runs.
     next_tick: Option<Instant>,
     /// Unlinked ticks in a row.
@@ -157,6 +168,18 @@ pub(super) struct Riders {
 }
 
 impl Riders {
+    /// The riding wire as `dialect`'s program keeps it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no Mac-era server type offers riding yet (6.618)")
+    )]
+    pub(super) fn for_generation(dialect: GameDialect) -> Self {
+        Self {
+            dialect,
+            ..Self::default()
+        }
+    }
+
     fn publish(arrival: Arrival, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         out.log.send(ClientEvent::World(WorldEvent::Arrival {
             session_id: world.session_id,
@@ -328,14 +351,41 @@ impl Riders {
         Ok(())
     }
 
-    /// The character tick: name the boat underfoot, or forget it.
-    fn name_the_boat(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let boat = world
+    /// The name of the boat the last accepted sample stands on.
+    fn boat_underfoot(world: &World) -> Option<String> {
+        world
             .body
             .carrier_support()
             .and_then(|sample| world.spawns.get(sample.spawn_id))
             .map(|spawn| spawn.name.clone())
-            .filter(|name| !name.is_empty());
+            .filter(|name| !name.is_empty())
+    }
+
+    /// The Mac-era frame's check (TAKP 0x4c131d, read 9a; 6.618): the
+    /// first time the player stands on a boat it sends `OP_BoardBoat`,
+    /// reliable; once two frames in a row have had no boat underfoot, an
+    /// empty `OP_LeaveBoat`, unreliable. The session sees the host's link
+    /// once per accepted sample, so samples stand in for the program's
+    /// frames (inferred, 6.618): two samples, at least 100 ms apart, is the
+    /// slower side.
+    fn check_the_frame(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(name) = Self::boat_underfoot(world) {
+            world.vehicle = Some(name.clone());
+            if !world.riding.aboard.swap(true, Ordering::Relaxed) {
+                out.request(&Request::BoardBoat(name))?;
+            }
+        } else if world.body.unlinked_samples() >= UNLINKED_TICKS {
+            world.forget_vehicle();
+            if world.riding.aboard.swap(false, Ordering::Relaxed) {
+                out.request_unreliable(&Request::LeaveBoat)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The character tick: name the boat underfoot, or forget it.
+    fn name_the_boat(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let boat = Self::boat_underfoot(world);
         if let Some(name) = boat {
             self.unlinked = 0;
             world.vehicle = Some(name.clone());
@@ -410,6 +460,10 @@ impl Feature for Riders {
         // No frames run while the arrival is held, nor in a transfer.
         if world.arrival.is_some() || !world.ready() || world.lifecycle.blocks_motion() {
             return Ok(());
+        }
+        match self.dialect {
+            GameDialect::Titanium | GameDialect::Rof2 => {}
+            GameDialect::EqMac => return Self::check_the_frame(world, out),
         }
         match self.next_tick {
             Some(next) if now < next => return Ok(()),
