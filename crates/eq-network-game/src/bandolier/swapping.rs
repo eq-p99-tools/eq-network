@@ -37,11 +37,13 @@ const SMALL_THROWING: u8 = 19;
 /// The whole inventory after the swap to `set`, as stock `EQEmu` leaves
 /// it, for an [`crate::inventory::InventoryUpdate::Prediction`].
 ///
-/// An item with augments never reaches the session's inventory: its
-/// Titanium record is unreadable (its sockets come as children of an item
-/// that is not a bag), which leaves the inventory stale, and a stale
-/// inventory is refused here. So `HasItem`'s augment match, which would
-/// leave a weapon slot as it is, cannot be met.
+/// `HasItem` also matches an augment socketed in an item, and then the
+/// weapon slot stays as it is; the session does not read augment ids. A
+/// worn or bagged item with children is an unreadable record, which leaves
+/// the inventory stale, and a stale inventory is refused here. A pack item
+/// that is not a bag but has room or contents (the reader keeps children
+/// a common record's capacity allows, which may be its augments) is
+/// refused too, so that match cannot be met.
 ///
 /// # Errors
 /// Refuses, in words for the player, an inventory that is not known
@@ -68,6 +70,16 @@ pub fn swap(set: &BandolierSet, inventory: &Inventory) -> Result<Vec<InventoryIt
         .collect();
     if items.contains_key(&InventorySlot::CURSOR.0) {
         return Err("Put down what you hold before swapping sets.");
+    }
+    for slot in PACKS {
+        let Some(item) = items.get(&slot) else {
+            continue;
+        };
+        let first = InventorySlot(slot).child(0).ok_or(UNKNOWN)?.0;
+        if !is_bag(item)? && (item.bag_slots > 0 || items.range(first..first + 10).next().is_some())
+        {
+            return Err(UNKNOWN);
+        }
     }
     if set.items.iter().all(Option::is_none)
         && WEAPON_SLOTS.iter().all(|slot| !items.contains_key(&slot.0))

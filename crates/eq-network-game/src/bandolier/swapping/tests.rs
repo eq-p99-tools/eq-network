@@ -253,3 +253,40 @@ fn what_cannot_be_followed_exactly_is_refused() {
     unknown.rules.titanium_item_class = None;
     assert!(swap(&empty, &inventory(vec![unknown, sword()])).is_err());
 }
+
+#[test]
+fn a_pack_item_that_is_not_a_bag_but_holds_room_or_contents_is_refused() {
+    let sword = || item(13, 1);
+    let empty = set([None, None, None, None]);
+    // A common item with capacity, as the reader keeps it.
+    let mut roomy = item(22, 2);
+    roomy.bag_slots = 1;
+    assert_eq!(swap(&empty, &inventory(vec![roomy, sword()])), Err(UNKNOWN));
+    // A common item with a child, which may be an augment.
+    assert_eq!(
+        swap(&empty, &inventory(vec![item(22, 2), item(251, 3), sword()])),
+        Err(UNKNOWN)
+    );
+    // A real bag with contents goes.
+    assert!(swap(
+        &empty,
+        &inventory(vec![bag(22, 2, 4, 0), item(251, 3), sword()])
+    )
+    .is_ok());
+}
+
+#[test]
+fn a_swap_still_waits_after_its_moves_settle() {
+    // EQEmu confirms no move, so settled slots keep projected custody
+    // until the server sends them again.
+    let before = inventory(vec![item(13, 1)]);
+    let after = swap(&set([None, None, None, None]), &before).unwrap();
+    let mut settled = before;
+    settled.apply(InventoryUpdate::Prediction(after));
+    settled.apply(InventoryUpdate::Settled);
+    assert!(!settled.predicted());
+    assert_eq!(
+        swap(&set([Some(1), None, None, None]), &settled),
+        Err("Wait until your inventory is known to swap sets.")
+    );
+}

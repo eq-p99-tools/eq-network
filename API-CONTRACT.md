@@ -1918,11 +1918,15 @@ moves read, a return that would reach the cursor (ours: `EQEmu` pushes it
 there), an empty set, or nothing to swap; and while stunned, dead,
 trading, at a merchant, with a world container or a trader's window open,
 casting, or within 250 ms of the last bandolier send (inferred until read
-R49-45 b). An item with augments makes its record unreadable today, which
-leaves the inventory stale, so a swap never meets `EQEmu`'s augment
-match. Because the server confirms no move, the slots a swap moved stay
-of unknown custody until the server next sends them, and a second swap or
-a save waits until then.
+R49-45 b). The session does not read augment ids, so it refuses whatever
+could meet `EQEmu`'s augment match: a worn or bagged item with children
+is an unreadable record (the inventory goes stale), and a pack item that
+is not a bag but has room or contents is refused. **On `EQEmu` the server
+confirms no move, so the slots of any item move, the player's own or a
+swap's, keep projected custody after they settle until the server next
+sends them; a swap is refused after any item move until then.** Regaining
+that custody is a gate for offering the swap, beside its live rows and
+read R49-45 d.
 
 ## Bazaar search
 
