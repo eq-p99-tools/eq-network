@@ -1877,6 +1877,20 @@ impl ServerType for EqEmuRof2 {
     fn wire(&self) -> &'static dyn Wire {
         &Rof2
     }
+
+    /// Stock `EQEmu` saves the 512-unit heading itself
+    /// ([`eq_network_game::world::profile_heading`]), and the `RoF2` encoder
+    /// writes it as saved (`rof2.cpp`, `ENCODE(OP_PlayerProfile)`; inferred,
+    /// 6.502).
+    fn profile_turn(&self) -> f32 {
+        512.0
+    }
+
+    /// Nothing the player does moves or memorizes yet, so there is nothing
+    /// to depart from.
+    fn offers_gameplay_departures(&self) -> bool {
+        false
+    }
 }
 
 /// The server type of a server protocol.
@@ -2004,6 +2018,8 @@ mod tests {
         assert!(!rof2.consider_npcs_by_level());
         assert!(rof2.protect(&[0; 464]).unwrap().is_none());
         assert!(!rof2.start_choice());
+        assert!(!rof2.offers_gameplay_departures());
+        assert!((rof2.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(rof2.creation().is_none());
         assert!(rof2.deletion().is_none());
         assert_eq!(rof2.spell_landing_flag(), None);

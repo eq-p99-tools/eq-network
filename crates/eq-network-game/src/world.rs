@@ -96,8 +96,9 @@ pub struct PlayerState {
     /// room for 32 (`common/patches/mac.cpp`). Skill updates for skill
     /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
     pub languages: Option<Vec<u8>>,
-    /// The disciplines the player knows, by spell ID, in the list's 100
-    /// slots, 0 for an empty one, when decoded: Titanium's profile, which
+    /// The disciplines the player knows, by spell ID, in the list's slots
+    /// (100, and `RoF2`'s 300), 0 for an empty one, when decoded: Titanium's
+    /// profile, which
     /// `EQEmu` leaves empty until its list follows for a player who knows
     /// any ([`WorldEvent::Disciplines`]). The `EQMac` profile lists none.
     pub disciplines: Option<Vec<u32>>,

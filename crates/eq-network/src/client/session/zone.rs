@@ -27,6 +27,8 @@ struct Features {
     /// says.
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
+    /// The server type's client generation.
+    dialect: eq_network_game::GameDialect,
     /// Whether the server type takes a server filter change mid-zone.
     server_filters_at_once: bool,
     /// Whether the server type offers the explicit gameplay departures
@@ -69,6 +71,7 @@ impl Features {
             choices,
             spell_landing_flag: server.spell_landing_flag(),
             answers_list_polls: server.answers_list_polls(),
+            dialect: server.wire().dialect(),
             server_filters_at_once: server.server_filters_at_once(),
             gameplay_departures: server.offers_gameplay_departures(),
         }
@@ -89,8 +92,16 @@ impl Features {
         if self.gameplay_departures {
             capabilities.push(crate::world::Capability::GameplayDepartures);
         }
-        // Every server type keeps the filters for its zone-ins.
-        capabilities.push(crate::world::Capability::ServerFilters);
+        // Every server type whose generation has a filter packet keeps the
+        // filters for its zone-ins.
+        match self.dialect {
+            eq_network_game::GameDialect::Titanium | eq_network_game::GameDialect::EqMac => {
+                capabilities.push(crate::world::Capability::ServerFilters);
+            }
+            // RoF2's filter packet is not built, and its entry sends none
+            // (6.502).
+            eq_network_game::GameDialect::Rof2 => (),
+        }
         if self.server_filters_at_once {
             capabilities.push(crate::world::Capability::ServerFiltersAtOnce);
         }
@@ -2313,6 +2324,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
             server_filters_at_once: false,
             gameplay_departures: false,
         };
@@ -2370,6 +2382,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
             server_filters_at_once: false,
             gameplay_departures: false,
         };
@@ -2453,6 +2466,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
             server_filters_at_once: false,
             gameplay_departures: false,
         };
@@ -2580,6 +2594,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
             server_filters_at_once: false,
             gameplay_departures: false,
         };
@@ -2747,6 +2762,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
             server_filters_at_once: false,
             gameplay_departures: false,
         };
