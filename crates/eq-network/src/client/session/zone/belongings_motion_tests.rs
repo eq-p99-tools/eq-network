@@ -163,6 +163,7 @@ fn move_and_jump(features: &mut Features, world: &mut World, protocol: ServerPro
                 position,
                 created: Instant::now(),
                 support: None,
+                vertical_speed: None,
             }),
             world,
             out,
