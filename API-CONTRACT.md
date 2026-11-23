@@ -1564,6 +1564,21 @@ identity and caller stamp without accepting old motion or reasserting policy
 on every render frame.
 
 
+## Looking for a group
+
+Where the server type takes `/lfg` (`Capability::LookingForGroup`: stock
+`EQEmu` so far, from its source and not yet checked live), send
+`GameCommand::LookForGroup` with `on: Some(true)` or `Some(false)` to set
+the flag, or `None` to turn it over. The session sends Titanium's 80-byte
+`OP_LFGCommand` with only the flag set; no level range or comment. `EQEmu`
+tells every other client and never the sender, so the session keeps the
+player's flag itself: from the admission's spawn record, then each change it
+sent, or the server's own word for the player's spawn. A change is told with
+`WorldEvent::ListingSet { change: ListingChange::Looking(on) }`; asking for
+the state the player is already in sends again but tells nothing. Two
+changes are at least 500 ms apart; a refusal is
+`WorldEvent::ListingRefused` and sends nothing (checklist 6.515).
+
 ## Duel challenges
 
 Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
