@@ -14,7 +14,7 @@
 //! index of the choice its Options row shows (0x4966ee). Word 0 is an
 //! ini-only switch that defaults to 0 and is sent as 0 here. The client
 //! sends the packet at zone-in and again on every change in its Options
-//! window (0x53cc29 to 0x53cd7d), so [`sent_on_every_change`] holds for
+//! window (0x53cc29 to 0x53cd7d), so [`sent_on_every_change`](crate::filters::sent_on_every_change) holds for
 //! Titanium. `ServerFilters::default()` is that table's defaults. The `EQMac`
 //! client's side is unread: its kinds keep the values the servers read, and
 //! its default is the packet this library sent before, byte for byte.
