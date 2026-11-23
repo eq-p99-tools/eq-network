@@ -596,10 +596,29 @@ const PICK_POCKET_ANSWER_LENGTH: usize = 84;
 /// # Errors
 /// Rejects a body too short for its fields, and another opcode.
 pub fn titanium_answer(opcode: u16, body: &[u8]) -> anyhow::Result<Option<AskAnswer>> {
-    let (ability, length) = match opcode {
-        BEGGING_OPCODE => (Ability::Begging, BEGGING_ANSWER_LENGTH),
-        PICK_POCKET_OPCODE => (Ability::PickPockets, PICK_POCKET_ANSWER_LENGTH),
+    let ability = match opcode {
+        BEGGING_OPCODE => Ability::Begging,
+        PICK_POCKET_OPCODE => Ability::PickPockets,
         _ => anyhow::bail!("opcode {opcode:#06x} answers no ask"),
+    };
+    ask_answer(ability, body)
+}
+
+/// Reads the server's answer to a beg or a pick, as [`titanium_answer`]
+/// describes it, for the ability it answers. Stock `EQEmu` sends both with
+/// no encoder for Titanium or `RoF2` (`Client::Handle_OP_Begging`,
+/// `Client::SendPickPocketResponse`), so both generations get these bytes.
+/// The 20 and 84 bytes are floors, not exact lengths, on both: a longer
+/// body reads.
+///
+/// # Errors
+/// Rejects a body too short for its fields, and an ability that asks
+/// nothing of the server this way.
+pub(crate) fn ask_answer(ability: Ability, body: &[u8]) -> anyhow::Result<Option<AskAnswer>> {
+    let length = match ability {
+        Ability::Begging => BEGGING_ANSWER_LENGTH,
+        Ability::PickPockets => PICK_POCKET_ANSWER_LENGTH,
+        _ => anyhow::bail!("{ability:?} answers no ask"),
     };
     anyhow::ensure!(
         body.len() >= length,

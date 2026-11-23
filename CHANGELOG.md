@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's targets, charms, cash rewards, linked reuse timers and the
+  answers to begging, pick pocketing and bandaging as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.544). The new `rof2_answers` module
+  reads `OP_TargetCommand` (0x58e2), `OP_TargetHoTT` (0x0272), `OP_Charm`
+  (0x5d92), `OP_CashReward` (0x5f7a), `OP_LinkedReuse` (0x1619),
+  `OP_Begging` (0x6703), `OP_PickPocket` (0x39e8) and `OP_Bind_Wound`
+  (0x0386), which have no encoder for either generation, through
+  Titanium's readers into Titanium's events. Titanium's begging and pick
+  pocket reader is now the named `abilities::ask_answer`, taking the
+  ability, and its bandage reader `bind_wound::answer`. Coverage lists the
+  eight. An admitted RoF2 session hands the host each and still sends and
+  offers nothing.
 - Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
   sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`
   module reads `OP_RandomReply` (0x106b), `OP_Assist` (0x4478),
