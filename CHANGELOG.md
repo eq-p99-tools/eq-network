@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Resurrection` and `Sacrifice` on Quarm and TAKP (6.596), from their
+  own handlers (Quarm fc75fcf, TAKP 44afcbf).
+  - New: `resurrection::{EQMAC_OFFER_OPCODE, EQMAC_ANSWER_OPCODE,
+    EQMAC_COMPLETE_OPCODE, eqmac_offer, eqmac_answer, eqmac_completion}`,
+    `ResurrectionOffer::eqmac_move` and `Message::ResurrectionCompleted`.
+  - The Mac answer is the 228-byte offer byte for byte, with only the choice
+    set. A Mac question stays open an hour before the session declines it.
+  - TAKP's completion moves the player only for the offer this admission
+    accepted, at the same zone and place; any other is recorded as a gap.
+  - Source-derived, not live.
+
 - Offer `Pets` on Quarm and TAKP (6.595), from their own handlers (Quarm
   fc75fcf, TAKP 44afcbf).
   - New: `pets::{EQMAC_COMMAND_OPCODE, eqmac_command}` and

@@ -35,6 +35,10 @@ pub enum Message {
     AssistSelection(u16),
     /// A decoded resurrection that still needs admission and consent checks.
     Resurrection(crate::resurrection::ResurrectionOffer),
+    /// TAKP's completion of an accepted resurrection: its kept offer with
+    /// the answer 1, which moves the player only for the offer this session
+    /// accepted (6.596).
+    ResurrectionCompleted(crate::resurrection::ResurrectionOffer),
     /// A decoded translocate that still needs admission and consent checks.
     TranslocateOffer(crate::confirmations::TranslocateOffer),
     /// A received Titanium completion that still needs exact consent correlation.
@@ -658,8 +662,9 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
 }
 
 /// What TAKP and Quarm say of other players: a die rolled near the player,
-/// the answer to an assist, and a consent given to the player (6.585,
-/// 6.591); None for other messages.
+/// the answer to an assist, a consent given to the player, and an offer
+/// to resurrect the player and TAKP's completion of it (6.585, 6.591,
+/// 6.596); None for other messages.
 fn eqmac_people(opcode: u16, body: &[u8]) -> Option<Message> {
     let read = |result: anyhow::Result<WorldEvent>| {
         result.map_or_else(|error| unreadable(Part::World, &error), Message::Event)
@@ -672,6 +677,16 @@ fn eqmac_people(opcode: u16, body: &[u8]) -> Option<Message> {
         crate::socials::EQMAC_ASSIST_OPCODE => {
             read(crate::socials::eqmac_assist_answer(body).map(WorldEvent::Assisted))
         }
+        crate::resurrection::EQMAC_OFFER_OPCODE => crate::resurrection::eqmac_offer(body)
+            .map_or_else(
+                |error| unreadable(Part::World, &error),
+                Message::Resurrection,
+            ),
+        crate::resurrection::EQMAC_COMPLETE_OPCODE => crate::resurrection::eqmac_completion(body)
+            .map_or_else(
+                |error| unreadable(Part::World, &error),
+                Message::ResurrectionCompleted,
+            ),
         _ => return None,
     })
 }

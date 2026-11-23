@@ -1779,6 +1779,26 @@ impl ServerType for Quarm {
         offer(shared::pets(PetOrderSet::EqMac))
     }
 
+    /// Resurrection in the `EQMac` program's packets
+    /// ([`eq_network_game::resurrection::eqmac_offer`]), from Quarm's own
+    /// handlers at SecretsOTheP/EQMacEmu fc75fcf: `Handle_OP_RezzAnswer`
+    /// takes the 228-byte offer back, every byte as it came but the answer,
+    /// and takes the zone and place from it. On a yes Quarm moves the player
+    /// itself (`MovePCGuildID`). Quarm keeps an offer with no limit and
+    /// refuses any other while one waits; the session declines after an
+    /// hour, as the `EQMac` program's dialog is said to (inferred, 6.596a).
+    /// Source-derived, not live (6.596).
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Resurrection::eqmac(EQMAC_CONSENT_WINDOW)))
+    }
+
+    /// `Handle_OP_Sacrifice` at fc75fcf takes the 12-byte offer back, and
+    /// any answer but 0 gives the player's life; answered only on the
+    /// player's word. Source-derived, not live (6.596).
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::sacrifice())
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -1955,9 +1975,14 @@ impl ServerType for Quarm {
     /// session as its zone change. Quarm's own time limit is a rule, 0 (none)
     /// by default; the session's hour is ours, as on TAKP.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate(std::time::Duration::from_secs(3600)))
+        offer(shared::translocate(EQMAC_CONSENT_WINDOW))
     }
 }
+
+/// How long the session leaves a Mac server's question open before it
+/// declines: the hour TAKP gives the `EQMac` program's dialogs
+/// (`PendingConfirmationTimeoutMs`, "client dialogs expire after one hour").
+const EQMAC_CONSENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// The HP at which TAKP takes a player as dead: below -10 (`zone/attack.cpp`
 /// `Mob::HasDied`).
@@ -2141,7 +2166,7 @@ impl ServerType for Takp {
     /// ([`eq_network_game::confirmations`]); the client asks as the `EQMac`
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate(std::time::Duration::from_secs(3600)))
+        offer(shared::translocate(EQMAC_CONSENT_WINDOW))
     }
 
     /// `/who all` and friends in the `EQMac` program's packets
@@ -2196,6 +2221,27 @@ impl ServerType for Takp {
     /// live (6.595).
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::pets(PetOrderSet::EqMac))
+    }
+
+    /// Resurrection in the `EQMac` program's packets
+    /// ([`eq_network_game::resurrection::eqmac_offer`]), from TAKP's own
+    /// handlers at EQMacEmu/Server 44afcbf: `Handle_OP_RezzAnswer` takes the
+    /// 228-byte offer back, and on a yes TAKP sends its kept offer again on
+    /// `OP_RezzComplete` for the client to move itself, which the session
+    /// follows only for the offer it accepted in this admission. TAKP's own
+    /// rez effect, which the `EQMac` program applies itself, is not shown
+    /// (6.596b). TAKP keeps an offer 3,610 s; the session declines after an
+    /// hour (inferred, 6.596a). Source-derived, not live (6.596).
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Resurrection::eqmac(EQMAC_CONSENT_WINDOW)))
+    }
+
+    /// `Handle_OP_Sacrifice` at 44afcbf takes the 12-byte offer back while
+    /// it is pending (3,610 s), and any answer but 0 gives the player's life
+    /// if the caster is still the same; answered only on the player's word.
+    /// Source-derived, not live (6.596).
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::sacrifice())
     }
 
     /// Corpse looting in the `EQMac` program's packets
@@ -2649,11 +2695,12 @@ mod tests {
         // giving, groups, listing and translocate (6.576); both search the
         // Bazaar from source (6.580), and each answers `/who all` and friends
         // from its own handlers (6.583), and rolls, assists and splits the
-        // same way (6.585), corpses (6.591) and pets (6.595). Other features
+        // same way (6.585), corpses (6.591), pets (6.595), and resurrection and
+        // sacrifice answers (6.596). Other features
         // await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 27);
+        assert_eq!(quarm.features(&setup).len(), 29);
         assert_eq!(
             offers(quarm),
             [
@@ -2676,12 +2723,14 @@ mod tests {
                 Capability::Who,
                 Capability::Corpses,
                 Capability::Pets,
+                Capability::Resurrection,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
                 Capability::Assisting,
                 Capability::EnvironmentalDamage,
+                Capability::Sacrifice,
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
@@ -2693,7 +2742,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 29);
+        assert_eq!(takp.features(&setup).len(), 31);
         assert_eq!(
             offers(takp),
             [
@@ -2716,6 +2765,7 @@ mod tests {
                 Capability::Who,
                 Capability::Corpses,
                 Capability::Pets,
+                Capability::Resurrection,
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
@@ -2723,6 +2773,7 @@ mod tests {
                 Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
+                Capability::Sacrifice,
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,

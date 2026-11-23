@@ -106,9 +106,9 @@ each.
 | `GuildManagement` | An officer's and a leader's side of a guild | Yes | Yes | – | – |
 | **Server prompts and events** | | | | | |
 | `Training` | Training skills at a guildmaster | Yes | Yes | – | – |
-| `Resurrection` | Accepting or declining a resurrection | Yes | Yes | – | – |
+| `Resurrection` | Accepting or declining a resurrection (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Translocate` | Accepting or declining a translocate | Yes | Yes | Yes | Yes |
-| `Sacrifice` | Accepting or declining a sacrifice | – | Yes | – | – |
+| `Sacrifice` | Accepting or declining a sacrifice (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |
 | `ServerDialogs` | Answering server dialogs | Yes | Yes | – | – |
 | `BleedingOut` | Reporting a death the server leaves to the client | – | – | – | Yes |
 | `ServerTicks` | Showing when the regeneration tick lands | – | Yes | – | – |
