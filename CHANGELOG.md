@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Say the player looks for a group with `/lfg` (gap 3.6, checklist 6.515).
+  `GameCommand::LookForGroup { session_id, on }` sends Titanium's
+  `OP_LFGCommand` (0x68ac), 80 bytes with only the flag set
+  (`listing::titanium_looking`), as `Client::Handle_OP_LFGCommand` reads
+  it, under the new `Capability::LookingForGroup`, which only stock `EQEmu`
+  lists (from source, not yet checked live). The server tells the sender
+  nothing, so the session keeps the flag from the admission's spawn record
+  and each change sent, tells a change with `ListingSet`, and paces two
+  changes 500 ms apart. `EQMac` refuses. **Breaking:** new variants on the
+  exhaustive `GameCommand`, `Request` and `Capability` (`Capability::ALL`
+  holds 78).
 - Destroy coins on the cursor (gap 3.x, checklist 6.512).
   `GameCommand::DestroyCoins` sends `OP_MoveCoin` from the cursor to slot -1
   with the same kind both sides (Titanium 0x7657, `EQMac` 0x2d41), as stock

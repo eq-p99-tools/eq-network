@@ -27,6 +27,11 @@ const SHOW_HELM: u16 = 43;
 
 /// `OP_LFGAppearance`: a player started or stopped looking for a group.
 pub const LOOKING_OPCODE: u16 = 0x1a85;
+/// `OP_LFGCommand`: the player says they look for a group, or no longer
+/// (Titanium).
+pub const LFG_COMMAND_OPCODE: u16 = 0x68ac;
+/// `LFG_Struct`'s length, which `EQEmu` takes untranslated from Titanium.
+const LFG_COMMAND_LENGTH: usize = 80;
 /// `OP_GuildsList`: every guild's name, by number.
 pub const GUILDS_OPCODE: u16 = 0x6957;
 /// Each name in the guild list, and the heading before them.
@@ -284,6 +289,24 @@ pub(crate) fn appearance(kind: u16, value: u32) -> Result<Option<ListingChange>>
     }))
 }
 
+/// Titanium's `/lfg`: `OP_LFGCommand`, 80 bytes (`LFG_Struct`): a word,
+/// the flag (1 on, 0 off) at byte 4, a filter byte, two bytes, the level
+/// range as two words and a 64-byte comment. `EQEmu`'s
+/// `Client::Handle_OP_LFGCommand` reads the flag's low byte, stores the
+/// rest when it is on, and tells every other client with
+/// `OP_LFGAppearance`; the sender is told nothing. Everything but the flag
+/// is zero: whether `/lfg` fills the range or the comment is unread
+/// (pending R49-6i).
+#[must_use]
+pub fn titanium_looking(on: bool) -> EncodedCommand {
+    let mut body = vec![0; LFG_COMMAND_LENGTH];
+    body[4] = u8::from(on);
+    EncodedCommand {
+        opcode: LFG_COMMAND_OPCODE,
+        body,
+    }
+}
+
 /// Decodes `OP_LFGAppearance`: whose flag changed, and whether they now look
 /// for a group.
 ///
@@ -322,6 +345,21 @@ pub fn titanium_guilds(body: &[u8]) -> Result<Vec<(u32, String)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titaniums_lfg_says_only_the_flag() {
+        for on in [true, false] {
+            let command = titanium_looking(on);
+            assert_eq!(command.opcode, 0x68ac);
+            assert_eq!(command.body.len(), 80);
+            assert_eq!(command.body[4], u8::from(on));
+            assert!(command
+                .body
+                .iter()
+                .enumerate()
+                .all(|(at, byte)| at == 4 || *byte == 0));
+        }
+    }
 
     #[test]
     fn a_spawn_record_says_how_who_lists_the_player() {
