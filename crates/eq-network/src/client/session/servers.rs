@@ -1535,8 +1535,16 @@ impl ServerType for EqEmu {
     /// The task journal as `TaskManager::SendActiveTaskToClient` and the
     /// senders around it build it, from source; not yet checked live
     /// (checklist 6.546).
-    fn journal(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::<super::journal::Journal>::default())
+    ///
+    /// The player's task requests (checklist 6.555) only on a local
+    /// session until the live row passes: a wrong acceptance can bring
+    /// down a zone other players share.
+    fn journal(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(if setup.local_only {
+            super::journal::Journal::with_requests()
+        } else {
+            super::journal::Journal::default()
+        }))
     }
 
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
@@ -2114,6 +2122,37 @@ mod tests {
                 keeps,
                 "{protocol:?}"
             );
+        }
+    }
+
+    #[test]
+    fn only_a_local_stock_eqemu_session_takes_task_requests() {
+        use crate::client::ServerProtocol;
+        use crate::world::Capability;
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        for local in [false, true] {
+            setup.local_only = local;
+            for protocol in [
+                ServerProtocol::Project1999,
+                ServerProtocol::EqEmu,
+                ServerProtocol::Quarm,
+                ServerProtocol::Takp,
+                ServerProtocol::EqEmuRof2,
+            ] {
+                let takes = match protocol {
+                    ServerProtocol::EqEmu => local,
+                    ServerProtocol::Project1999
+                    | ServerProtocol::Quarm
+                    | ServerProtocol::Takp
+                    | ServerProtocol::EqEmuRof2 => false,
+                };
+                let offered = server_type(protocol)
+                    .journal(&setup)
+                    .is_some_and(|journal| {
+                        journal.feature.capabilities().contains(&Capability::Tasks)
+                    });
+                assert_eq!(offered, takes, "{protocol:?} local {local}");
+            }
         }
     }
 

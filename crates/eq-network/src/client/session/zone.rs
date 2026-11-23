@@ -944,7 +944,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 127;
+    const KINDS: usize = 132;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1015,6 +1015,11 @@ mod tests {
             ClientCommand::Shield { .. } => 124,
             ClientCommand::RequestTitles { .. } => 125,
             ClientCommand::SetTitle { .. } => 126,
+            ClientCommand::AcceptTask { .. } => 127,
+            ClientCommand::DeclineTasks { .. } => 128,
+            ClientCommand::CancelTask { .. } => 129,
+            ClientCommand::AskTaskHistory { .. } => 130,
+            ClientCommand::ListTaskTimers { .. } => 131,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1445,6 +1450,29 @@ mod tests {
             ClientCommand::Shield {
                 session_id,
                 spawn_id: 9,
+                created,
+            },
+            ClientCommand::AcceptTask {
+                session_id,
+                task_id: 9,
+                created,
+            },
+            ClientCommand::DeclineTasks { session_id },
+            ClientCommand::CancelTask {
+                session_id,
+                at: eq_network_game::tasks::TaskSlot {
+                    kind: eq_network_game::tasks::TaskKind::Quest,
+                    slot: 0,
+                },
+                created,
+            },
+            ClientCommand::AskTaskHistory {
+                session_id,
+                index: 0,
+                created,
+            },
+            ClientCommand::ListTaskTimers {
+                session_id,
                 created,
             },
             ClientCommand::UseAbility {

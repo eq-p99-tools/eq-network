@@ -9,8 +9,8 @@ use super::{
     Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
     BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
     MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TITANIUM_DESCRIPTION, TITANIUM_PROFILE,
-    TRANSLOCATE, VOICE_MACRO,
+    SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
+    TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -196,7 +196,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x381d => sent("OP_PlayerStateRemove", EQEMU, Read(&[Zone])),
         0x385e => sent("OP_ZonePlayerToBind", EQEMU, Read(&[Zone])),
         0x3906 => sent("OP_AdventureFinish", EQEMU, planned(LaterSystems)),
-        0x397d => sent("OP_TaskHistoryReply", EQEMU, planned(LaterSystems)),
+        0x397d => sent_private("OP_TaskHistoryReply", EQEMU, Partly(&[Zone], TASK_HISTORY)),
         0x3990 => sent("OP_BeginCast", EQEMU, Read(&[Zone])),
         // P99's compact position update.
         0x3a2b => sent("P99's compact position", P99, Read(&[Zone])),
@@ -291,7 +291,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             )),
         ),
         0x5e3d => sent("OP_SendGuildTributes", EQEMU, planned(LaterSystems)),
-        0x5e7c => sent("OP_TaskSelectWindow", EQEMU, planned(LaterSystems)),
+        0x5e7c => sent_private("OP_TaskSelectWindow", EQEMU, Partly(&[Zone], TASK_OFFERS)),
         0x5eab => sent("OP_SetTitleReply", EQEMU, Read(&[Zone])),
         0x5ecd => sent("OP_ExpUpdate", EQEMU, Read(&[Zone])),
         0x5ef7 => sent_private(
