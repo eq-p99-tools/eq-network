@@ -1,7 +1,9 @@
 use super::*;
 use crate::client::session::{feature::testing, motion::Motion};
 use eq_network_game::{
-    boats::riders::{titanium_board, titanium_leave, titanium_missing, Transfer},
+    boats::riders::{
+        eqmac_board, eqmac_leave, titanium_board, titanium_leave, titanium_missing, Transfer,
+    },
     world::SpawnKind,
     zoning::{self, Death},
     GameDialect,
@@ -107,6 +109,95 @@ fn the_first_linked_tick_boards_and_two_unlinked_ticks_leave() {
         [titanium_board(BOAT).unwrap(), titanium_leave()]
     );
     assert!(!riding.aboard.load(Ordering::Relaxed));
+}
+
+/// The Mac-era wire, as Quarm's server type speaks it.
+fn mac_wire() -> &'static dyn crate::client::session::wire::Wire {
+    crate::client::session::servers::server_type(crate::client::ServerProtocol::Quarm).wire()
+}
+
+#[test]
+fn the_mac_era_boards_at_once_and_leaves_after_two_unlinked_samples() {
+    // TAKP 0x4c131d (read 9a; 6.618): a reliable board on the first frame
+    // aboard, an empty unreliable leave after two frames off; samples stand
+    // in for frames.
+    let riding = Arc::new(Riding::default());
+    let outcome = testing::run_on(mac_wire(), |out| {
+        let mut world = admitted(out);
+        world.riding = Arc::clone(&riding);
+        let sample = boat(&mut world, 8, BOAT, Position::default());
+        let mut riders = Riders::for_generation(GameDialect::EqMac);
+        riders.admitted(&mut world, out).unwrap();
+        // No 1 s tick to wait for.
+        let now = Instant::now();
+        world.body.record_carrier_support(Some(sample));
+        riders.tick(now, &mut world, out).unwrap();
+        assert_eq!(world.vehicle.as_deref(), Some(BOAT));
+        world.body.record_carrier_support(Some(sample));
+        riders.tick(now, &mut world, out).unwrap();
+        world.body.record_carrier_support(None);
+        riders.tick(now, &mut world, out).unwrap();
+        assert_eq!(world.vehicle.as_deref(), Some(BOAT));
+        world.body.record_carrier_support(None);
+        riders.tick(now, &mut world, out).unwrap();
+        assert_eq!(world.vehicle, None);
+        riders.tick(now, &mut world, out).unwrap();
+    });
+    assert_eq!(outcome.sent, [eqmac_board(BOAT).unwrap()]);
+    assert_eq!(outcome.unreliable, [eqmac_leave()]);
+    assert!(!riding.aboard.load(Ordering::Relaxed));
+}
+
+#[test]
+fn a_mac_era_link_that_flickers_once_stays_aboard() {
+    // B4 (6.618): one unlinked sample between linked ones sends nothing
+    // more; two unlinked, then linked, sends exactly one leave and one
+    // board.
+    let flicker = |off: usize| {
+        testing::run_on(mac_wire(), |out| {
+            let mut world = admitted(out);
+            world.riding = Arc::new(Riding::default());
+            let sample = boat(&mut world, 8, BOAT, Position::default());
+            let mut riders = Riders::for_generation(GameDialect::EqMac);
+            riders.admitted(&mut world, out).unwrap();
+            let now = Instant::now();
+            world.body.record_carrier_support(Some(sample));
+            riders.tick(now, &mut world, out).unwrap();
+            for _ in 0..off {
+                world.body.record_carrier_support(None);
+                riders.tick(now, &mut world, out).unwrap();
+            }
+            world.body.record_carrier_support(Some(sample));
+            riders.tick(now, &mut world, out).unwrap();
+        })
+    };
+    let once = flicker(1);
+    assert_eq!(once.sent, [eqmac_board(BOAT).unwrap()]);
+    assert_eq!(once.unreliable, []);
+    let twice = flicker(2);
+    assert_eq!(
+        twice.sent,
+        [eqmac_board(BOAT).unwrap(), eqmac_board(BOAT).unwrap()]
+    );
+    assert_eq!(twice.unreliable, [eqmac_leave()]);
+}
+
+#[test]
+fn no_mac_era_server_type_offers_riding_yet() {
+    // B1 (6.618): Quarm and TAKP send no board or leave until the
+    // Mac-era arrival is read, because neither runs the riding wire.
+    let setup = crate::client::session::servers::Setup::new(
+        "Tester",
+        eq_network_game::food::AutoEat::default(),
+    );
+    for protocol in [
+        crate::client::ServerProtocol::Quarm,
+        crate::client::ServerProtocol::Takp,
+    ] {
+        assert!(crate::client::session::servers::server_type(protocol)
+            .riders(&setup)
+            .is_none());
+    }
 }
 
 #[test]

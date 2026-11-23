@@ -82,8 +82,13 @@ pub const DUEL_ACCEPT_OPCODE: u16 = 0x1b09;
 pub const EQMAC_REQUEST_DUEL_OPCODE: u16 = 0xcf40;
 /// `EQMac`'s `OP_DuelAccept`, which Quarm names `OP_DuelResponse2`.
 pub const EQMAC_DUEL_ACCEPT_OPCODE: u16 = 0x5d41;
-/// TAKP's `OP_DuelResponse`: a client's answer turning a challenge down.
+/// `EQMac`'s `OP_DuelResponse` (the program's 0x40d0): a client turning a
+/// challenge down, by `/decline` or on its own (TAKP program read 11h).
 pub const EQMAC_DUEL_RESPONSE_OPCODE: u16 = 0xd040;
+/// The `EQMac` program's word that the player won the duel (its 0x415e,
+/// TAKP program read 11h). Neither TAKP's nor Quarm's opcode table names
+/// it, so both drop it.
+pub const EQMAC_DUEL_WON_OPCODE: u16 = 0x5e41;
 /// `OP_DuelDecline` in `EQEmu`'s Titanium table: the player turns a
 /// challenge down (Titanium). The official program sends no decline of its
 /// own on it: it sends 0x3bad only when the player wins a duel, in 8 bytes
@@ -285,7 +290,8 @@ pub enum DuelNews {
         /// The opponent.
         challenger: u16,
     },
-    /// `/duel` with no target, or one that is not a player (0x33c0).
+    /// `/duel` with no target, or one that is not a player (0x33c0). The
+    /// `EQMac` program takes any spawn that isn't a corpse (read 11g).
     NoPlayerTarget,
     /// `/duel` at the player themselves (0x33c1).
     NotYourself,
@@ -312,7 +318,8 @@ pub enum DuelNews {
     /// The one the player challenged turned it down on their program's own
     /// (R49-6d): 0x567 they ignore the player, 0x568 they are dueling, 0x569
     /// another challenge waits for them (%1 their name, colour 15). No line
-    /// for None.
+    /// for None. On `EQMac` (read 11h) reason 0 also comes from their
+    /// `/decline`, with the same line 0x567.
     TurnedDown {
         /// Who.
         by: u16,
@@ -331,6 +338,17 @@ pub enum DuelNews {
         /// The opponent who left.
         opponent: u16,
     },
+    /// `EQMac`'s `/decline` turned the waiting challenge down (0x33be, %1
+    /// their name; TAKP program read 11h, 0x4fc966). Inferred: the
+    /// challenger's name, as the other duel lines take.
+    Declining {
+        /// Who challenged.
+        challenger: u16,
+    },
+    /// `EQMac`'s `/decline` with no challenge waiting (0x33bf).
+    NothingToDecline,
+    /// `EQMac`'s `/decline` during a duel (0x33bd).
+    DecliningWhileDueling,
 }
 
 /// The Titanium program's own refusal of a challenge (R49-6a):
@@ -654,14 +672,44 @@ pub fn eqmac_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
 }
 
 /// `EQMac`'s no to a challenge: `OP_DuelResponse` (6 bytes), the
-/// challenger, the player, the reason 0 (declined) and a byte of padding.
+/// challenger, the player and the reason 0 (`/decline`, or an ignored
+/// challenger), each 16 bits (TAKP program read 11h).
 #[must_use]
 pub fn eqmac_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
-    let mut body = [challenger.to_le_bytes(), own.to_le_bytes()].concat();
-    body.extend([0, 0]);
+    eqmac_duel_auto_decline(challenger, own, DuelAutoDecline::Ignored)
+}
+
+/// The `EQMac` program's own refusal of a challenge (TAKP program read
+/// 11h, 0x4e31b7): `OP_DuelResponse` (6 bytes), the challenger, the player
+/// and the reason, each 16 bits. TAKP's `Handle_OP_DuelResponse` relays it
+/// to the challenger; Quarm's ends both sides' duel state and tells the
+/// challenger, whatever the reason (44afcbf, fc75fcf).
+#[must_use]
+pub fn eqmac_duel_auto_decline(
+    challenger: u16,
+    own: u16,
+    reason: DuelAutoDecline,
+) -> EncodedCommand {
     EncodedCommand {
         opcode: EQMAC_DUEL_RESPONSE_OPCODE,
-        body,
+        body: [
+            challenger.to_le_bytes(),
+            own.to_le_bytes(),
+            u16::from(reason.byte()).to_le_bytes(),
+        ]
+        .concat(),
+    }
+}
+
+/// The `EQMac` program's word that the player killed the opponent in the
+/// duel (TAKP program read 11h, 0x528e16): 0x415e, 4 bytes, the opponent
+/// then the player, each 16 bits. Neither TAKP nor Quarm names the opcode,
+/// so both drop it; it is sent as the program sends it.
+#[must_use]
+pub fn eqmac_duel_won(opponent: u16, own: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_DUEL_WON_OPCODE,
+        body: [opponent.to_le_bytes(), own.to_le_bytes()].concat(),
     }
 }
 

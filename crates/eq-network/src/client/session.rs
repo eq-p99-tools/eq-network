@@ -30,6 +30,7 @@ mod groups;
 mod guilds;
 pub(super) mod hazards;
 mod hiding;
+mod inspect_answer;
 mod inventory;
 mod journal;
 mod lifecycle;
