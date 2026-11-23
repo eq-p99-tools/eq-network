@@ -168,6 +168,25 @@ pub fn eqmac_scribe(slot: u16, spell_id: u32) -> Result<EncodedCommand> {
     Ok(book_packet(u32::from(slot), spell_id, 0))
 }
 
+/// `EQMac`'s request deleting a book slot (6.604 E4): `DeleteSpell_Struct`,
+/// 8 bytes, the signed slot, then zeros where the server writes its
+/// outcome. TAKP's and Quarm's own `Handle_OP_DeleteSpell` answer with the
+/// same packet, success 1 only for a slot that held a spell; both delete
+/// the spell from the character's record but leave the live profile as it
+/// was until the next load.
+///
+/// # Errors
+/// Refuses a slot past the 256-slot book.
+pub fn eqmac_delete(slot: u16) -> Result<EncodedCommand> {
+    let slot = book_slot(u32::from(slot))?;
+    let mut body = vec![0; 8];
+    body[..2].copy_from_slice(&slot.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: EQMAC_DELETE_OPCODE,
+        body,
+    })
+}
+
 /// `EQMac`'s request exchanging two book slots, already checked against the
 /// book; TAKP answers with the same packet.
 ///

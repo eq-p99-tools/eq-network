@@ -71,9 +71,9 @@ each.
 | `Pets` | Commanding a pet (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Casting` | Casting memorized spells | Yes | Yes | Yes | Yes |
 | `Spellbook` | Memorizing, scribing and forgetting spells | Yes | Yes | Yes | Yes |
-| `MovingSpells` | Moving a spell within the spellbook | Yes | Yes | – | – |
-| `DeletingSpells` | Deleting a spell from the spellbook | – | Yes | – | – |
-| `CancellingBuffs` | Cancelling a beneficial buff | Yes | Yes | – | – |
+| `MovingSpells` | Moving a spell within the spellbook (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
+| `DeletingSpells` | Deleting a spell from the spellbook (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |
+| `CancellingBuffs` | Cancelling a beneficial buff (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `StoppingSongs` | Stopping a Bard song | Yes | Yes | – | – |
 | **Items and coin** | | | | | |
 | `Inventory` | Moving and using items in the inventory and the bank | Yes | Yes | Yes | Yes |
@@ -97,10 +97,10 @@ each.
 | `Raiding` | Raids | – | Yes | – | – |
 | `Listing` | AFK, anonymous and roleplaying | Yes | Yes | Yes | Yes |
 | `Rolling` | `/random` (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
-| `Emoting` | `/emote` | Yes | Yes | – | – |
+| `Emoting` | `/emote` (source-derived on TAKP and Quarm, not yet checked live; animations Titanium only) | Yes | Yes | Yes | Yes |
 | `Assisting` | `/assist` (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
-| `Petitioning` | Petitions to the server's staff | – | Yes | – | – |
-| `ReportingBugs` | Bug reports | – | Yes | – | – |
+| `Petitioning` | Petitions to the server's staff (source-derived on TAKP and Quarm, not yet checked live; Quarm runs with petitions off and says so) | – | Yes | Yes | Yes |
+| `ReportingBugs` | Bug reports (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |
 | `SendingFeedback` | Feedback, which only TAKP-family servers read | – | – | – | – |
 | `PlayerInspection` | Inspecting other players | Yes | Yes | – | – |
 | `GuildRoster` | A guild member's side of a guild | Yes | Yes | – | – |

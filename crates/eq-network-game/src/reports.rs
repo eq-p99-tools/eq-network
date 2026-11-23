@@ -40,8 +40,11 @@ pub const FEEDBACK_LONGEST: usize = 1023;
 
 /// Titanium's `BugReport_Struct`.
 const TITANIUM_BUG_LENGTH: usize = 8736;
-/// `EQMac`'s `BugReport_Struct`.
-const EQMAC_BUG_LENGTH: usize = 3340;
+/// `EQMac`'s `IntelBugStruct`: the reporter at 0 and the text at 107. TAKP
+/// and Quarm take it alongside their 3340-byte `BugReport_Struct`, and fill
+/// in the player's place and target themselves (6.604 E6). Which layout the
+/// `EQMac` program sends is row 11d.
+const EQMAC_BUG_LENGTH: usize = 1131;
 /// `EQMac`'s `Feedback_Struct`.
 const FEEDBACK_LENGTH: usize = 1131;
 /// A name field, in every layout here.
@@ -335,19 +338,12 @@ pub fn bug(
                 body,
             })
         }
+        // Only the reporter and the player's words: every other byte stays
+        // zero, and the server adds the place and target.
         GameDialect::EqMac => {
             let mut body = vec![0; EQMAC_BUG_LENGTH];
-            put(&mut body, 0, NAME_FIELD, report.category.name())?;
-            put_name(&mut body, 64, reporter);
-            body[160..164].copy_from_slice(&place.x.to_le_bytes());
-            body[164..168].copy_from_slice(&place.y.to_le_bytes());
-            body[168..172].copy_from_slice(&place.z.to_le_bytes());
-            body[172..176].copy_from_slice(&place.heading.to_le_bytes());
-            if let Some(target) = &report.target {
-                put_name(&mut body, 192, &target.name);
-            }
-            body[256..260].copy_from_slice(&report.mask().to_le_bytes());
-            put(&mut body, 2312, 1024, text)?;
+            put_name(&mut body, 0, reporter);
+            put(&mut body, 107, 1024, text)?;
             Ok(EncodedCommand {
                 opcode: EQMAC_BUG_OPCODE,
                 body,
@@ -467,20 +463,18 @@ mod tests {
     }
 
     #[test]
-    fn eqmac_bug_reports_fill_the_servers_struct() {
-        let mut plain = report();
-        plain.target = None;
-        let packet = bug(GameDialect::EqMac, "Reporter", &plain).unwrap();
+    fn eqmac_bug_reports_carry_only_the_reporter_and_the_words() {
+        // A target and a place on the report go nowhere: the server adds
+        // its own.
+        let packet = bug(GameDialect::EqMac, "Reporter", &report()).unwrap();
         assert_eq!(packet.opcode, 0xb340);
         let body = &packet.body;
-        assert_eq!(body.len(), 3340);
-        assert_eq!(text_at(body, 0), "Pathing");
-        assert_eq!(text_at(body, 64), "Reporter");
-        assert_eq!(&body[160..164], &10.5f32.to_le_bytes());
-        assert_eq!(&body[172..176], &256.4f32.to_le_bytes());
-        assert_eq!(text_at(body, 192), "");
-        assert_eq!(&body[256..260], &0u32.to_le_bytes());
-        assert_eq!(text_at(body, 2312), "The guard walks into the wall.");
+        assert_eq!(body.len(), 1131);
+        assert_eq!(text_at(body, 0), "Reporter");
+        assert!(body["Reporter".len()..107].iter().all(|byte| *byte == 0));
+        let words = "The guard walks into the wall.";
+        assert_eq!(text_at(body, 107), words);
+        assert!(body[107 + words.len()..].iter().all(|byte| *byte == 0));
     }
 
     #[test]

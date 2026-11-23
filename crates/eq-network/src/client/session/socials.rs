@@ -48,7 +48,7 @@ const EQMAC_ASSIST_WAIT: Duration = Duration::from_secs(5);
 pub(super) struct Socials {
     project1999: bool,
     assist: Option<PendingAssist>,
-    /// TAKP and Quarm: rolls and assists only.
+    /// TAKP and Quarm: rolls, assists, emotes and yells.
     eqmac: bool,
     /// There, when the last assist went, while it is unanswered.
     eqmac_assist: Option<Instant>,
@@ -65,8 +65,9 @@ impl Socials {
     /// TAKP and Quarm, each from its own `Handle_OP_RandomReq` and
     /// `Handle_OP_Assist` (Quarm fc75fcf, TAKP 44afcbf; 6.585): rolls, with
     /// P99's ends of 0 to 32000 in order (ours: the `EQMac` program's limit
-    /// is unread, 6.585b), and one assist at a time. Emotes and yells wait
-    /// for their own reads.
+    /// is unread, 6.585b), and one assist at a time; emotes and yells from
+    /// their own `Handle_OP_Emote` and `Handle_OP_YellForHelp` (6.604 E1,
+    /// E2). Emote animations stay Titanium's.
     pub(super) fn eqmac() -> Self {
         Self {
             eqmac: true,
@@ -84,7 +85,12 @@ impl Feature for Socials {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
         if self.eqmac {
-            return vec![Capability::Rolling, Capability::Assisting];
+            return vec![
+                Capability::Rolling,
+                Capability::Emoting,
+                Capability::Assisting,
+                Capability::Yelling,
+            ];
         }
         vec![
             Capability::Rolling,
@@ -98,7 +104,11 @@ impl Feature for Socials {
         if self.eqmac {
             return matches!(
                 command,
-                ClientCommand::Random { .. } | ClientCommand::Assist { .. }
+                ClientCommand::Random { .. }
+                    | ClientCommand::Assist { .. }
+                    | ClientCommand::Emote { .. }
+                    | ClientCommand::SocialEmote { .. }
+                    | ClientCommand::YellForHelp { .. }
             );
         }
         matches!(
@@ -179,36 +189,7 @@ impl Feature for Socials {
             // still (0x49e0c1, read R47); the host checks the stillness, and
             // the session sends nothing for a player it knows isn't standing.
             ClientCommand::EmoteAnimation { animation, .. } => animate(*animation, world, out),
-            ClientCommand::Emote { text, .. } => {
-                let text = text.trim();
-                if text.is_empty() {
-                    return actions::refuse(command, "Say what you do.", out.log);
-                }
-                if text.len() >= socials::EMOTE_LONGEST {
-                    return actions::refuse(command, "That emote is too long.", out.log);
-                }
-                if self.project1999 {
-                    let Ok(packet) = socials::project1999_emote(text) else {
-                        return actions::refuse(
-                            command,
-                            "That emote is too long or contains invalid text.",
-                            out.log,
-                        );
-                    };
-                    out.send(&packet)?;
-                    let event = socials::local_emote(out.sender.name, text);
-                    let zone = out.log.zone.clone();
-                    return out.log.record(&zone, RecordEvent::Chat(event));
-                }
-                out.request(&Request::Emote(text.to_owned()))?;
-                // The player hears their emote as the others do.
-                let body = socials::heard_emote(out.sender.name, text);
-                if let Some(event) = out.wire.chat(socials::EMOTE_OPCODE, &body, false)? {
-                    let zone = out.log.zone.clone();
-                    out.log.record(&zone, RecordEvent::Chat(event))?;
-                }
-                Ok(())
-            }
+            ClientCommand::Emote { text, .. } => self.emote(command, text, out),
             ClientCommand::SocialEmote { text, .. } => self.social_emote(command, text, out),
             ClientCommand::Assist { spawn_id, .. } => {
                 if world.own_spawn == Some(*spawn_id) {
@@ -275,6 +256,49 @@ fn animate(animation: u8, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Socials {
+    /// An ordinary `/emote`, which the player hears as the others do.
+    fn emote(&self, command: &ClientCommand, text: &str, out: &mut Out<'_, '_>) -> Result<()> {
+        let text = text.trim();
+        if text.is_empty() {
+            return actions::refuse(command, "Say what you do.", out.log);
+        }
+        if text.len() >= socials::EMOTE_LONGEST {
+            return actions::refuse(command, "That emote is too long.", out.log);
+        }
+        if self.project1999 {
+            let Ok(packet) = socials::project1999_emote(text) else {
+                return actions::refuse(
+                    command,
+                    "That emote is too long or contains invalid text.",
+                    out.log,
+                );
+            };
+            out.send(&packet)?;
+            let event = socials::local_emote(out.sender.name, text);
+            let zone = out.log.zone.clone();
+            return out.log.record(&zone, RecordEvent::Chat(event));
+        }
+        out.request(&Request::Emote(text.to_owned()))?;
+        // The player hears their emote as the others do: the
+        // servers pass it to everyone near but its maker.
+        let (opcode, body) = if self.eqmac {
+            (
+                socials::EQMAC_EMOTE_OPCODE,
+                socials::eqmac_heard_emote(out.sender.name, text),
+            )
+        } else {
+            (
+                socials::EMOTE_OPCODE,
+                socials::heard_emote(out.sender.name, text),
+            )
+        };
+        if let Some(event) = out.wire.chat(opcode, &body, false)? {
+            let zone = out.log.zone.clone();
+            out.log.record(&zone, RecordEvent::Chat(event))?;
+        }
+        Ok(())
+    }
+
     /// Asks TAKP or Quarm to assist, one assist at a time until its answer
     /// or [`EQMAC_ASSIST_WAIT`].
     fn eqmac_assist(
@@ -335,14 +359,35 @@ const SURNAME_WAIT: Duration = Duration::from_secs(10);
 /// timer, level 12940, length 12942 and filter 1374), so the session adds
 /// no line; a surname it takes reaches the zone's spawns as their last
 /// name. One request waits at a time, and an answer to none is withheld.
-/// Only stock `EQEmu` lists it, from source, not yet checked live
-/// (checklist 6.507).
+/// Stock `EQEmu` lists it from source (checklist 6.507), and TAKP and
+/// Quarm from theirs ([`Surnames::eqmac`], 6.604 E5); none is checked live.
 #[derive(Default)]
 pub(super) struct Surnames {
     asked: Option<Instant>,
+    eqmac: bool,
 }
 
+/// The level TAKP's and Quarm's `Handle_OP_Surname` say the client
+/// requires before it asks (`SURNAME_LEVEL`).
+const EQMAC_SURNAME_LEVEL: u8 = 20;
+/// The longest surname they say the client sends: it cuts it to 19.
+const EQMAC_SURNAME_LONGEST: usize = 19;
+
 impl Surnames {
+    /// TAKP and Quarm, from their own `Handle_OP_Surname` (Quarm fc75fcf,
+    /// TAKP 44afcbf; 6.604 E5). Their comments say the client itself
+    /// refuses under level 20 and cuts a surname to 19 characters, so the
+    /// session refuses those first: inferred from those comments, and never
+    /// more permissive than the servers, which refuse both too. Every other
+    /// case (a surname already, the name filter, the content flag) is the
+    /// server's line.
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
     fn waiting(&self) -> bool {
         self.asked
             .is_some_and(|asked| asked.elapsed() < SURNAME_WAIT)
@@ -376,7 +421,7 @@ impl Feature for Surnames {
     fn handle(
         &mut self,
         command: &ClientCommand,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let ClientCommand::Surname { surname, .. } = command else {
@@ -393,8 +438,18 @@ impl Feature for Surnames {
         if surname.is_empty() || !surname.bytes().all(|byte| byte.is_ascii_graphic()) {
             return actions::refuse(command, "A surname is one word of plain text.", out.log);
         }
-        if surname.len() >= eq_network_game::names::SURNAME_FIELD {
+        if surname.len() >= eq_network_game::names::SURNAME_FIELD
+            || (self.eqmac && surname.len() > EQMAC_SURNAME_LONGEST)
+        {
             return actions::refuse(command, "That surname is too long.", out.log);
+        }
+        if self.eqmac
+            && world
+                .player
+                .as_ref()
+                .is_none_or(|player| player.level < EQMAC_SURNAME_LEVEL)
+        {
+            return actions::refuse(command, "You must be level 20 to take a surname.", out.log);
         }
         out.request(&Request::Surname(surname.to_owned()))?;
         self.asked = Some(Instant::now());
@@ -703,6 +758,64 @@ mod tests {
     }
 
     #[test]
+    fn a_mac_surname_is_100_bytes_and_refused_first_only_where_the_servers_say_the_client_does() {
+        let wire = &super::super::wire::EqMac;
+        let refused = |outcome: &testing::Outcome<Result<()>>| {
+            outcome.sent.is_empty()
+                && outcome.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::SocialRefused { session_id: 5, .. })
+                    )
+                })
+        };
+        let at_level = |level| {
+            let mut world = World::new(5);
+            let mut player = testing::player(7);
+            player.level = level;
+            world.player.admit(player);
+            world
+        };
+        let ask = |feature: &mut Surnames, world: &mut World, surname: &str| {
+            let command = ClientCommand::Surname {
+                session_id: 5,
+                surname: surname.into(),
+            };
+            testing::run_on(wire, |out| feature.handle(&command, world, out))
+        };
+        // Under level 20, and over 19 characters: refused before sending.
+        assert!(refused(&ask(
+            &mut Surnames::eqmac(),
+            &mut at_level(19),
+            "Exemplum"
+        )));
+        assert!(refused(&ask(
+            &mut Surnames::eqmac(),
+            &mut at_level(20),
+            &"a".repeat(20)
+        )));
+        // 19 characters at level 20 go, in the 100-byte record.
+        let mut feature = Surnames::eqmac();
+        let outcome = ask(&mut feature, &mut at_level(20), &"a".repeat(19));
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, 0xc441);
+        assert_eq!(outcome.sent[0].body.len(), 100);
+        assert_eq!(&outcome.sent[0].body[68..87], "a".repeat(19).as_bytes());
+        // Titanium keeps its own bounds.
+        let outcome = testing::run(|out| {
+            Surnames::default().handle(
+                &ClientCommand::Surname {
+                    session_id: 5,
+                    surname: "a".repeat(25),
+                },
+                &mut at_level(1),
+                out,
+            )
+        });
+        assert_eq!(outcome.sent.len(), 1);
+    }
+
+    #[test]
     fn an_answer_releases_the_wait_and_one_to_no_request_is_withheld() {
         let world = World::new(5);
         let answer = || {
@@ -759,22 +872,24 @@ mod tests {
     }
 
     #[test]
-    fn eqmac_socials_roll_and_assist_only_in_the_mac_packets() {
+    fn eqmac_socials_roll_assist_emote_and_yell_in_the_mac_packets() {
         use crate::world::Capability;
         let wire = &super::super::wire::EqMac;
         let mut feature = Socials::eqmac();
         assert_eq!(
             feature.capabilities(),
-            [Capability::Rolling, Capability::Assisting]
+            [
+                Capability::Rolling,
+                Capability::Emoting,
+                Capability::Assisting,
+                Capability::Yelling
+            ]
         );
-        let emote = ClientCommand::Emote {
+        // An emote's animation stays Titanium's.
+        assert!(!feature.owns(&ClientCommand::EmoteAnimation {
             session_id: 5,
-            text: "waves.".into(),
-        };
-        assert!(!feature.owns(&emote));
-        assert!(!feature.owns(&ClientCommand::SocialEmote {
-            session_id: 5,
-            text: " nudges ".into(),
+            animation: 0x4d,
+            created: Instant::now(),
         }));
         let mut world = World::new(5);
         world.own_spawn = Some(7);
@@ -822,6 +937,63 @@ mod tests {
         // Never oneself.
         feature.eqmac_assist = None;
         assert_eq!(run(&mut feature, &assist(7), &mut world).sent, []);
+    }
+
+    #[test]
+    fn a_mac_emote_is_1026_bytes_and_heard_as_the_others_hear_it() {
+        let wire = &super::super::wire::EqMac;
+        let mut feature = Socials::eqmac();
+        let mut world = World::new(5);
+        let emote = ClientCommand::Emote {
+            session_id: 5,
+            text: "waves.".into(),
+        };
+        let outcome = testing::run_on(wire, |out| feature.handle(&emote, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        let packet = &outcome.sent[0];
+        assert_eq!(packet.opcode, 0x1540);
+        assert_eq!(packet.body.len(), 1026);
+        assert_eq!(&packet.body[..9], b"\0\0 waves.");
+        assert!(packet.body[9..].iter().all(|byte| *byte == 0));
+        // The player's own line, as the Mac reader reads the others'.
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::Record(record) if matches!(
+                &record.event,
+                RecordEvent::Chat(chat)
+                    if chat.message.as_ref().is_some_and(|line| line.text.ends_with(" waves."))
+            )
+        )));
+        // A social emote leads with 0xffff and goes as built, unechoed.
+        let social = ClientCommand::SocialEmote {
+            session_id: 5,
+            text: " nudges you.".into(),
+        };
+        let outcome = testing::run_on(wire, |out| feature.handle(&social, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(&outcome.sent[0].body[..14], b"\xff\xff nudges you.");
+        assert_eq!(outcome.sent[0].body.len(), 1026);
+        // Too long, or no words: nothing goes.
+        for text in ["   ".to_owned(), "a".repeat(socials::EMOTE_LONGEST)] {
+            let emote = ClientCommand::Emote {
+                session_id: 5,
+                text,
+            };
+            let outcome = testing::run_on(wire, |out| feature.handle(&emote, &mut world, out));
+            assert_eq!(outcome.sent, []);
+        }
+        // A yell is empty on its own opcode.
+        let yell = ClientCommand::YellForHelp {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(wire, |out| feature.handle(&yell, &mut world, out));
+        assert_eq!(outcome.sent, [socials::eqmac_yell()]);
+        assert_eq!(
+            (outcome.sent[0].opcode, outcome.sent[0].body.len()),
+            (0xda41, 0)
+        );
     }
 
     #[test]

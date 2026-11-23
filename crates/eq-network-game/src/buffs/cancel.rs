@@ -179,6 +179,47 @@ pub fn titanium_packet(own_id: u16, slot: u32, buff: &Buff) -> Result<EncodedCom
     })
 }
 
+/// `EQMac`'s cancellation (6.604 E3): `OP_Buff`, `SpellBuffFade_Struct`,
+/// 20 bytes: the player, the slot's ten-byte record as received, the
+/// slot, and the remove flag 1. TAKP's and Quarm's own `Handle_OP_Buff`
+/// drop any other length and read only the spell: Quarm fades it only when
+/// it is beneficial and doesn't outlast death, and TAKP fades any spell,
+/// so the caller's beneficial-only check is what keeps the client to the
+/// program's own buffs. Which fields the `EQMac` program fills is row 11c.
+///
+/// # Errors
+/// Refuses a missing own-player identity, a sentinel spell, and a value
+/// wider than its 16-bit field.
+pub fn eqmac_packet(own_id: u16, slot: u32, buff: &Buff) -> Result<EncodedCommand> {
+    ensure!(
+        own_id != 0 && !matches!(buff.spell_id, 0 | 0xffff | u32::MAX),
+        "Invalid buff cancellation"
+    );
+    let short = |value: u32| u16::try_from(value).ok();
+    let (Some(spell), Some(counters), Some(slot), Ok(duration)) = (
+        short(buff.spell_id),
+        short(buff.counters),
+        short(slot),
+        i16::try_from(buff.duration_ticks),
+    ) else {
+        anyhow::bail!("Invalid buff cancellation");
+    };
+    let mut body = vec![0; 20];
+    body[..2].copy_from_slice(&own_id.to_le_bytes());
+    body[2] = buff.effect_type;
+    body[3] = buff.caster_level;
+    body[4] = buff.bard_modifier;
+    body[6..8].copy_from_slice(&spell.to_le_bytes());
+    body[8..10].copy_from_slice(&duration.to_le_bytes());
+    body[10..12].copy_from_slice(&counters.to_le_bytes());
+    body[12..14].copy_from_slice(&slot.to_le_bytes());
+    body[16..20].copy_from_slice(&1_u32.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: crate::buffs::EQMAC_BUFF_OPCODE,
+        body,
+    })
+}
+
 /// Builds P99's Titanium cancellation pair in send order, after slot validation.
 ///
 /// The first record names the old spell in the cleared buff fields. Its
@@ -213,6 +254,28 @@ pub fn project1999_packets(own_id: u16, slot: u32, spell_id: u32) -> Result<[Enc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mac_cancellation_is_the_received_record_in_twenty_bytes() {
+        let packet = eqmac_packet(0x0107, 3, &buff(202)).unwrap();
+        assert_eq!(packet.opcode, 0x3241);
+        assert_eq!(
+            packet.body,
+            [7, 1, 2, 12, 10, 0, 202, 0, 30, 0, 4, 0, 3, 0, 0, 0, 1, 0, 0, 0]
+        );
+        // A permanent buff's -1 goes as the 0xffff the server sent.
+        let mut permanent = buff(202);
+        permanent.duration_ticks = -1;
+        assert_eq!(
+            eqmac_packet(7, 3, &permanent).unwrap().body[8..10],
+            [0xff, 0xff]
+        );
+        for spell in [0, 0xffff, u32::MAX, 0x1_0000] {
+            assert!(eqmac_packet(7, 3, &buff(spell)).is_err(), "{spell}");
+        }
+        assert!(eqmac_packet(0, 3, &buff(202)).is_err());
+        assert!(eqmac_packet(7, 0x1_0000, &buff(202)).is_err());
+    }
 
     fn buff(spell_id: u32) -> Buff {
         Buff {
