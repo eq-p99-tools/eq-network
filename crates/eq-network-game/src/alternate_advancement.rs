@@ -1,5 +1,7 @@
-//! Read-only Titanium AA selections, rank definitions, points, AA experience
-//! and reuse timers. No purchases or activations.
+//! Titanium AA selections, rank definitions, points, AA experience and reuse
+//! timers, read as sent; and the Titanium client's one AA request,
+//! `OP_AAAction`, which trains a rank, activates one or sets the experience
+//! split ([`crate::alternate_advancement::Action`], checklist 6.556).
 //!
 //! Layouts follow `EQEmu` `common/patches/titanium_structs.h`, the
 //! `OP_SendAATable`/`OP_RespondAA` encoders in `common/patches/titanium.cpp`
@@ -17,8 +19,11 @@ pub const SELECTIONS_OPCODE: u16 = 0x3af4;
 /// Withdraws the previous AA view; a replacement selection array must follow.
 pub const CLEAR_OPCODE: u16 = 0x5918;
 /// The server's AA reuse timer (`UseAA_Struct`); the client's 16-byte form
-/// of this opcode is a request, not read here.
+/// of this opcode is a request ([`ACTION_OPCODE`]), not read here.
 pub const TIMER_OPCODE: u16 = 0x0681;
+/// The Titanium client's AA request (`AA_Action`, 16 bytes), the same opcode
+/// as the server's timer.
+pub const ACTION_OPCODE: u16 = TIMER_OPCODE;
 /// The player's AA experience, unspent points and experience split
 /// (`AltAdvStats_Struct`).
 pub const PROGRESS_OPCODE: u16 = 0x5f58;
@@ -29,6 +34,11 @@ pub const EQMAC_PROGRESS_OPCODE: u16 = 0x2342;
 /// `EQMac`'s server reuse timer (`UseAA_Struct`); the client's 256-byte text
 /// form of this opcode is a request, not read here.
 pub const EQMAC_TIMER_OPCODE: u16 = 0x1442;
+/// The `EQMac` client's AA request: 256 bytes of text, the same opcode as
+/// the server's timer (TAKP's `Client::Handle_OP_AAAction`).
+pub const EQMAC_ACTION_OPCODE: u16 = EQMAC_TIMER_OPCODE;
+/// The length TAKP takes for an `EQMac` AA request; it drops any other.
+pub const EQMAC_ACTION_LENGTH: usize = 256;
 /// The number of rank bytes in `EQMac`'s `OP_RespondAA`, after its first.
 pub const EQMAC_RANK_SLOTS: usize = 226;
 /// The number of entries in `EQMac`'s profile AA array.
@@ -265,6 +275,128 @@ impl Update {
             | Self::MacTimer(_) => false,
         }
     }
+}
+
+/// What the player asks of their AAs: one `OP_AAAction`
+/// (`Client::Handle_OP_AAAction`, which drops a packet of any other size
+/// with no answer).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub enum Action {
+    /// Buy this rank (action 3): the definition's id, as the server's table
+    /// offered it. `EQEmu` looks the rank up by that id
+    /// (`Client::PurchaseAlternateAdvancementRank`); which id the program
+    /// sends is read R49-39a, inferred until then.
+    Train {
+        /// The rank to buy.
+        rank_id: u32,
+    },
+    /// Use this owned rank's ability (action 0), on a target or none.
+    Activate {
+        /// The owned rank.
+        rank_id: u32,
+        /// The target's spawn, or None for 0.
+        target: Option<u16>,
+    },
+    /// The share of experience that goes to AAs: 0 turns it off (action 2),
+    /// 1 to 100 sets it (action 1). Inferred until read R49-39c.
+    Split {
+        /// The share, 0 to 100.
+        percentage: u8,
+    },
+}
+
+/// Why the session did not send an [`Action`]. A host words it; the
+/// official client's own lines for these are not read yet (R49-39b).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub enum Refusal {
+    /// The rank is not one the server's table offered this admission, or it
+    /// came past the session's bound on definitions.
+    NotOffered,
+    /// The player already owns the rank.
+    Owned,
+    /// The rank before it is not one the table shows the player owns.
+    PreviousNotOwned,
+    /// Something the check needs is not known yet: what the player owns,
+    /// their unspent points, level or class.
+    Unknown,
+    /// The rank costs more than the player's unspent points.
+    TooFewPoints,
+    /// The player's level is below the rank's.
+    LevelTooLow,
+    /// The rank is not for the player's class.
+    WrongClass,
+    /// A rank bought before is still waiting for the server's answer.
+    AwaitingAnswer,
+    /// The rank is not owned, or has no ability to use.
+    NotActivatable,
+    /// Too soon after the last request of its kind.
+    TooSoon,
+    /// The split is above 100, or the target is spawn 0.
+    OutOfRange,
+}
+
+/// Titanium's `OP_AAAction` body for an action: action, ability, target and
+/// experience share, each a little-endian u32.
+///
+/// # Errors
+/// Refuses a split above 100, a target of spawn 0 and a rank id of 0.
+pub fn titanium_action(action: Action) -> Result<[u8; 16]> {
+    let (kind, ability, target, share) = match action {
+        Action::Train { rank_id } => {
+            ensure!(rank_id != 0, "no rank 0");
+            (3, rank_id, 0, 0)
+        }
+        Action::Activate { rank_id, target } => {
+            ensure!(rank_id != 0, "no rank 0");
+            ensure!(target != Some(0), "spawn 0 is no target");
+            (0, rank_id, u32::from(target.unwrap_or(0)), 0)
+        }
+        Action::Split { percentage: 0 } => (2, 0, 0, 0),
+        Action::Split { percentage } => {
+            ensure!(percentage <= 100, "a split is at most 100");
+            (1, 0, 0, u32::from(percentage))
+        }
+    };
+    let mut body = [0; 16];
+    for (at, value) in [kind, ability, target, share].into_iter().enumerate() {
+        body[at * 4..at * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    Ok(body)
+}
+
+/// `EQMac`'s `OP_AAAction` body for an action: TAKP's text, NUL-padded to
+/// [`EQMAC_ACTION_LENGTH`], built from fixed words and numbers only. TAKP
+/// reads `on N` and `buy N` and `activate N` by their prefix and `atoi`,
+/// and `off` exactly; the program's own bytes (case, spacing, padding) are
+/// read R49-41a, inferred until then. A train and an activation name the
+/// Mac AA id, 1 to [`EQMAC_RANK_SLOTS`]; the server picks the rank to buy
+/// itself, and TAKP's text has no target.
+///
+/// # Errors
+/// Refuses a Mac AA id outside 1 to 226, any target, and a split above 100.
+pub fn eqmac_action(action: Action) -> Result<[u8; EQMAC_ACTION_LENGTH]> {
+    let mac_id = |id: u32| {
+        ensure!(
+            (1..=u32::try_from(EQMAC_RANK_SLOTS)?).contains(&id),
+            "a Mac AA id is 1 to 226"
+        );
+        Ok(id)
+    };
+    let text = match action {
+        Action::Train { rank_id } => format!("buy {}", mac_id(rank_id)?),
+        Action::Activate { rank_id, target } => {
+            ensure!(target.is_none(), "TAKP's activation names no target");
+            format!("activate {}", mac_id(rank_id)?)
+        }
+        Action::Split { percentage: 0 } => "off".to_owned(),
+        Action::Split { percentage } => {
+            ensure!(percentage <= 100, "a split is at most 100");
+            format!("on {percentage}")
+        }
+    };
+    let mut body = [0; EQMAC_ACTION_LENGTH];
+    body[..text.len()].copy_from_slice(text.as_bytes());
+    Ok(body)
 }
 
 fn word(body: &[u8], at: usize) -> u32 {
@@ -830,5 +962,96 @@ mod tests {
             ]
         );
         assert!(eqmac_profile(&profile[1..]).is_err());
+    }
+
+    #[test]
+    fn each_action_is_sixteen_bytes_in_place() {
+        let words = |body: [u8; 16]| -> Vec<u32> {
+            body.chunks(4)
+                .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+                .collect()
+        };
+        assert_eq!(
+            words(titanium_action(Action::Train { rank_id: 4_201 }).unwrap()),
+            [3, 4_201, 0, 0]
+        );
+        assert_eq!(
+            words(
+                titanium_action(Action::Activate {
+                    rank_id: 77,
+                    target: Some(300),
+                })
+                .unwrap()
+            ),
+            [0, 77, 300, 0]
+        );
+        assert_eq!(
+            words(
+                titanium_action(Action::Activate {
+                    rank_id: 77,
+                    target: None,
+                })
+                .unwrap()
+            ),
+            [0, 77, 0, 0]
+        );
+        assert_eq!(
+            words(titanium_action(Action::Split { percentage: 50 }).unwrap()),
+            [1, 0, 0, 50]
+        );
+        assert_eq!(
+            words(titanium_action(Action::Split { percentage: 100 }).unwrap()),
+            [1, 0, 0, 100]
+        );
+        assert_eq!(
+            words(titanium_action(Action::Split { percentage: 0 }).unwrap()),
+            [2, 0, 0, 0]
+        );
+        assert!(titanium_action(Action::Split { percentage: 101 }).is_err());
+        assert!(titanium_action(Action::Train { rank_id: 0 }).is_err());
+        assert!(titanium_action(Action::Activate {
+            rank_id: 77,
+            target: Some(0),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn each_eqmac_action_is_takps_text_from_numbers_only() {
+        let text = |action| {
+            let body = eqmac_action(action).unwrap();
+            assert_eq!(body.len(), 256);
+            let end = body.iter().position(|byte| *byte == 0).unwrap();
+            // Nothing after the text but NULs, and nothing in it but the
+            // fixed words, a space and digits.
+            assert!(body[end..].iter().all(|byte| *byte == 0));
+            assert!(body[..end]
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b' '));
+            String::from_utf8(body[..end].to_vec()).unwrap()
+        };
+        assert_eq!(text(Action::Train { rank_id: 12 }), "buy 12");
+        assert_eq!(text(Action::Train { rank_id: 226 }), "buy 226");
+        assert_eq!(
+            text(Action::Activate {
+                rank_id: 1,
+                target: None,
+            }),
+            "activate 1"
+        );
+        assert_eq!(text(Action::Split { percentage: 0 }), "off");
+        assert_eq!(text(Action::Split { percentage: 50 }), "on 50");
+        assert_eq!(text(Action::Split { percentage: 100 }), "on 100");
+        for refused in [
+            Action::Train { rank_id: 0 },
+            Action::Train { rank_id: 227 },
+            Action::Activate {
+                rank_id: 12,
+                target: Some(300),
+            },
+            Action::Split { percentage: 101 },
+        ] {
+            assert!(eqmac_action(refused).is_err(), "{refused:?}");
+        }
     }
 }

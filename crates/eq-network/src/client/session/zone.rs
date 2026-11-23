@@ -947,7 +947,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 136;
+    const KINDS: usize = 139;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1025,8 +1025,11 @@ mod tests {
             ClientCommand::CancelTask { .. } => 131,
             ClientCommand::AskTaskHistory { .. } => 132,
             ClientCommand::ListTaskTimers { .. } => 133,
-            ClientCommand::BrowseTrader { .. } => 134,
-            ClientCommand::EndBrowse { .. } => 135,
+            ClientCommand::TrainAlternateAdvancement { .. } => 134,
+            ClientCommand::ActivateAlternateAdvancement { .. } => 135,
+            ClientCommand::SetAlternateAdvancementSplit { .. } => 136,
+            ClientCommand::BrowseTrader { .. } => 137,
+            ClientCommand::EndBrowse { .. } => 138,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1648,6 +1651,19 @@ mod tests {
                 title_id: 7,
                 suffix: false,
             },
+            ClientCommand::TrainAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+            },
+            ClientCommand::ActivateAlternateAdvancement {
+                session_id,
+                rank_id: 9,
+                target: Some(300),
+            },
+            ClientCommand::SetAlternateAdvancementSplit {
+                session_id,
+                percentage: 50,
+            },
             ClientCommand::BazaarSearch {
                 session_id,
                 criteria: eq_network_game::bazaar::BazaarCriteria::default(),
@@ -2102,27 +2118,21 @@ mod tests {
                     .contains(&crate::world::Capability::ServerFilters)));
                 continue;
             }
-            if matches!(command, ClientCommand::SendFeedback { .. }) {
-                // Built and tested, and listed by no server type until its
-                // own live check (6.511f).
-                assert!(!servers.iter().any(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::SendingFeedback)));
-                continue;
-            }
-            if matches!(
-                command,
-                ClientCommand::BazaarSearch { .. }
-                    | ClientCommand::BazaarWelcome { .. }
-                    | ClientCommand::BrowseTrader { .. }
-                    | ClientCommand::EndBrowse { .. }
-            ) {
-                // Built and tested, and listed by no server type until their
-                // local live rows (6.550a, 6.558a).
-                let capability = command.capability().expect("a zone command's");
+            // Built and tested, and listed by no server type until each
+            // one's own live check: feedback (6.511f), AAs (6.556), the
+            // Bazaar's search (6.550a) and browsing a trader (6.558a).
+            if let Some(unlisted) = command.capability().filter(|capability| {
+                [
+                    crate::world::Capability::SendingFeedback,
+                    crate::world::Capability::AlternateAdvancement,
+                    crate::world::Capability::BazaarSearching,
+                    crate::world::Capability::BazaarBrowsing,
+                ]
+                .contains(capability)
+            }) {
                 assert!(!servers
                     .iter()
-                    .any(|features| features.capabilities().contains(&capability)));
+                    .any(|features| features.capabilities().contains(&unlisted)));
                 continue;
             }
             if Features::is_departure(&command) {

@@ -899,6 +899,35 @@ pub enum GameCommand {
         /// Whether it is the suffix.
         suffix: bool,
     },
+    /// Buy this AA rank: a definition the server's table offered this
+    /// admission ([`crate::alternate_advancement::Action::Train`]). Spends
+    /// points, which nothing gives back; the server answers a purchase with
+    /// its own lines and the new table, and a refused one with nothing.
+    TrainAlternateAdvancement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The rank's definition id.
+        rank_id: u32,
+    },
+    /// Use an owned AA rank's ability, on a target or none
+    /// ([`crate::alternate_advancement::Action::Activate`]); the server
+    /// answers a reuse wait with its own line.
+    ActivateAlternateAdvancement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The owned rank's definition id.
+        rank_id: u32,
+        /// The target's spawn, or None.
+        target: Option<u16>,
+    },
+    /// The share of experience that goes to AAs, 0 (off) to 100
+    /// ([`crate::alternate_advancement::Action::Split`]).
+    SetAlternateAdvancementSplit {
+        /// Current zone admission.
+        session_id: u64,
+        /// The share, 0 to 100.
+        percentage: u8,
+    },
     /// Search the Bazaar for traders' items; the server answers with
     /// [`crate::bazaar::BazaarEvent::Results`] when anything matched, then
     /// [`crate::bazaar::BazaarEvent::SearchDone`]. Only in the Bazaar, and
@@ -1390,6 +1419,9 @@ impl GameCommand {
             Self::Surname { .. } => "Surname",
             Self::RequestTitles { .. } => "RequestTitles",
             Self::SetTitle { .. } => "SetTitle",
+            Self::TrainAlternateAdvancement { .. } => "TrainAlternateAdvancement",
+            Self::ActivateAlternateAdvancement { .. } => "ActivateAlternateAdvancement",
+            Self::SetAlternateAdvancementSplit { .. } => "SetAlternateAdvancementSplit",
             Self::BazaarSearch { .. } => "BazaarSearch",
             Self::BazaarWelcome { .. } => "BazaarWelcome",
             Self::BrowseTrader { .. } => "BrowseTrader",
@@ -1535,6 +1567,9 @@ impl GameCommand {
             | Self::Surname { session_id, .. }
             | Self::RequestTitles { session_id }
             | Self::SetTitle { session_id, .. }
+            | Self::TrainAlternateAdvancement { session_id, .. }
+            | Self::ActivateAlternateAdvancement { session_id, .. }
+            | Self::SetAlternateAdvancementSplit { session_id, .. }
             | Self::BazaarSearch { session_id, .. }
             | Self::BazaarWelcome { session_id }
             | Self::BrowseTrader { session_id, .. }
@@ -1706,6 +1741,9 @@ impl GameCommand {
             Self::Random { .. } => Capability::Rolling,
             Self::Surname { .. } => Capability::Surnaming,
             Self::RequestTitles { .. } | Self::SetTitle { .. } => Capability::Titling,
+            Self::TrainAlternateAdvancement { .. }
+            | Self::ActivateAlternateAdvancement { .. }
+            | Self::SetAlternateAdvancementSplit { .. } => Capability::AlternateAdvancement,
             Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
             Self::BrowseTrader { .. } | Self::EndBrowse { .. } => Capability::BazaarBrowsing,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
@@ -1779,6 +1817,9 @@ impl GameCommand {
             | Self::Surname { .. }
             | Self::RequestTitles { .. }
             | Self::SetTitle { .. }
+            | Self::TrainAlternateAdvancement { .. }
+            | Self::ActivateAlternateAdvancement { .. }
+            | Self::SetAlternateAdvancementSplit { .. }
             | Self::BazaarSearch { .. }
             | Self::BazaarWelcome { .. }
             | Self::BrowseTrader { .. }
@@ -2117,6 +2158,9 @@ pub fn encode(
         | GameCommand::Surname { .. }
         | GameCommand::RequestTitles { .. }
         | GameCommand::SetTitle { .. }
+        | GameCommand::TrainAlternateAdvancement { .. }
+        | GameCommand::ActivateAlternateAdvancement { .. }
+        | GameCommand::SetAlternateAdvancementSplit { .. }
         | GameCommand::BazaarSearch { .. }
         | GameCommand::BazaarWelcome { .. }
         | GameCommand::BrowseTrader { .. }

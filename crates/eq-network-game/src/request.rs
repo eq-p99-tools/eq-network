@@ -200,6 +200,9 @@ pub enum Request {
         /// Whether it is the suffix.
         suffix: bool,
     },
+    /// Train, activate or set the split of the player's AAs
+    /// ([`crate::alternate_advancement::titanium_action`]).
+    AlternateAdvancement(crate::alternate_advancement::Action),
     /// Search the Bazaar ([`crate::bazaar::search`]).
     BazaarSearch(crate::bazaar::BazaarCriteria),
     /// Ask how many traders and items the Bazaar has
@@ -637,6 +640,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             opcode: crate::names::SET_TITLE_OPCODE,
             body: crate::names::set_title(*title_id, *suffix),
         },
+        Request::AlternateAdvancement(action) => EncodedCommand {
+            opcode: crate::alternate_advancement::ACTION_OPCODE,
+            body: crate::alternate_advancement::titanium_action(*action)?.to_vec(),
+        },
         Request::Emote(text) => socials::emote(text)?,
         Request::SocialEmote(text) => socials::social_emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
@@ -776,6 +783,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
+#[allow(clippy::too_many_lines, reason = "one arm per request")]
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
         Request::ReadBook(book) => books::eqmac_request(book),
@@ -872,6 +880,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerTrade { asker, busy: true } => exchange::eqmac::busy(sender.spawn(), *asker),
         Request::AcceptTrade { with } => exchange::eqmac::accept(*with),
         Request::CancelTrade { with } => exchange::eqmac::cancel(sender.spawn(), *with),
+        Request::AlternateAdvancement(action) => Ok(EncodedCommand {
+            opcode: crate::alternate_advancement::EQMAC_ACTION_OPCODE,
+            body: crate::alternate_advancement::eqmac_action(*action)?.to_vec(),
+        }),
         Request::Surname(surname) => Ok(EncodedCommand {
             opcode: crate::names::EQMAC_SURNAME_OPCODE,
             body: crate::names::surname_request(sender.name, surname)?,
@@ -1075,6 +1087,26 @@ mod tests {
         }
         assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
         assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
+    }
+
+    #[test]
+    fn each_generation_sends_its_own_aa_action() {
+        use crate::alternate_advancement::Action;
+        let train = Request::AlternateAdvancement(Action::Train { rank_id: 9 });
+        let sent = titanium(&train, PLAYER).unwrap();
+        assert_eq!(
+            (sent.opcode, sent.body),
+            (0x0681, vec![3, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        );
+        assert!(titanium(
+            &Request::AlternateAdvancement(Action::Split { percentage: 101 }),
+            PLAYER
+        )
+        .is_err());
+        // TAKP's is 256 bytes of text on its own opcode (N4).
+        let text = eqmac(&train, PLAYER).unwrap();
+        assert_eq!((text.opcode, text.body.len()), (0x1442, 256));
+        assert_eq!(&text.body[..6], b"buy 9\0");
     }
 
     #[test]
