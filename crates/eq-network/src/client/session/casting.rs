@@ -819,11 +819,15 @@ impl Casting {
             Err(error) => Some(error),
         };
         // Titanium's own line for a refusal its cast start says (read
-        // R49-34 e 8); the Mac-era program's lines aren't read.
+        // R49-34 e 8); the Mac-era and RoF2 programs' lines aren't read.
+        let program_lines = match out.wire.dialect() {
+            eq_network_game::GameDialect::Titanium => true,
+            eq_network_game::GameDialect::EqMac | eq_network_game::GameDialect::Rof2 => false,
+        };
         let string_id = error
             .as_ref()
             .and_then(|error| error.downcast_ref::<eq_network_game::inventory::ItemRefusal>())
-            .filter(|_| out.wire.dialect() == eq_network_game::GameDialect::Titanium)
+            .filter(|_| program_lines)
             .map(|refusal| refusal.string_id);
         out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
             session_id: request.session_id,
