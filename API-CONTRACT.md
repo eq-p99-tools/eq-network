@@ -2097,9 +2097,11 @@ mask bit, Human 1 to Iksar 13) and from 0 for the slot, all ones as any, the sta
 item type with its own special values (0, 31, 46 to 49). Its record has no
 level bound, so a search with either level is refused, as is a criterion
 past 16 bits or equal to all ones. The welcome request is action 9 in 20
-bytes. The handler drops any other size. Both servers check that a search
-comes from zone 151 (`Zones::BAZAAR`), and the session sends one only
-there; the same one in flight, 10 s wait and 2 s floor hold.
+bytes. The handler drops any other size. Neither server refuses a search
+from outside the Bazaar: the handler builds a "Bazaar Search hack" note
+when the zone is not 151 (`Zones::BAZAAR`) and answers all the same. The
+session sends one only in zone 151, our own stricter rule, taken because
+the servers flag it; the same one in flight, 10 s wait and 2 s floor hold.
 
 Each result comes in a packet of its own, a 76-byte row, and the end after
 the last (20 bytes, action 12). So the host hears one `Results` with one

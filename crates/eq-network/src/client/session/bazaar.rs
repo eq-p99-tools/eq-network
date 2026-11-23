@@ -26,10 +26,12 @@
 //! own records ([`bazaar::eqmac`]): their handler answers each result in a
 //! packet of its own, then the end, so the host hears one
 //! [`BazaarEvent::Results`] per row before [`BazaarEvent::SearchDone`], and
-//! rows past [`bazaar::MOST_ROWS`] are withheld and told as a gap. Both
-//! servers check that a search comes from zone 151 (`Zones::BAZAAR`,
-//! `Client::Handle_OP_BazaarSearch`), as stock `EQEmu` searches only the
-//! player's zone; the session sends one only there on every server.
+//! rows past [`bazaar::MOST_ROWS`] are withheld and told as a gap. Neither
+//! server refuses a search from outside the Bazaar: its
+//! `Client::Handle_OP_BazaarSearch` builds a "Bazaar Search hack" note when
+//! the zone is not 151 (`Zones::BAZAAR`) and answers all the same. The
+//! session sends one only in zone 151 there too, our own stricter rule,
+//! taken because the servers flag it.
 //!
 //! Offered on TAKP and Quarm from their source, not live yet (6.580a).
 //! Built, and not yet offered on stock `EQEmu`: it offers each once its

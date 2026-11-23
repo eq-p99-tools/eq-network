@@ -10,7 +10,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   88-byte search and 20-byte welcome request, and the server's 76-byte
   result rows, each in a packet of its own, and its end. Offered on TAKP
   and Quarm as source-derived, not live (row 6.580a open; first use
-  attended). Sent only in the Bazaar (zone 151), with Titanium's pacing.
+  attended). Sent only in the Bazaar (zone 151; ours, stricter, since the
+  servers flag a search from elsewhere but answer it), with Titanium's pacing.
   A search with a level bound is refused: the Mac record has none. An item
   id past 32767 arrives wrapped and can't be trusted as an id.
 
