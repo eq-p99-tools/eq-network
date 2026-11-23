@@ -51,7 +51,7 @@ use super::{
     raids::Raids,
     reading::Reading,
     resurrection::Resurrection,
-    socials::Socials,
+    socials::{Socials, Surnames},
     spellbook::{Edits, Spellbook},
     talk::Talk,
     targeting::Targeting,
@@ -489,6 +489,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Asking for a last name: `/surname`.
+    fn surnames(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -598,6 +603,7 @@ pub(super) trait ServerType: Sync {
             self.groups(setup),
             self.listing(setup),
             self.socials(setup),
+            self.surnames(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
@@ -1471,6 +1477,14 @@ impl ServerType for EqEmu {
     /// Checked live on `EQEmu` with two characters.
     fn socials(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::socials())
+    }
+
+    /// Asked and answered as `Client::Handle_OP_Surname` reads it, from
+    /// source; not yet checked live (checklist 6.507). P99 waits for an
+    /// attended check, and TAKP and Quarm for theirs: their encoder and
+    /// answer are built and listed by no server type.
+    fn surnames(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Surnames>::default())
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -2504,7 +2518,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 46),
+            (ServerProtocol::EqEmu, 47),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2566,6 +2580,25 @@ mod tests {
                     "{protocol:?} {capability:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn only_eqemu_lists_the_surname_request() {
+        // A surname stays for good, or days: each server type is listed
+        // after its own live check (6.507), and only EQEmu's handler waits
+        // for it next. P99 needs an attended run, and TAKP and Quarm theirs.
+        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Surnaming));
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::Surnaming),
+                "{protocol:?}"
+            );
         }
     }
 

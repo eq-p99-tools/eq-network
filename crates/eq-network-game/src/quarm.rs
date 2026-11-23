@@ -1031,6 +1031,8 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         }
         crate::names::EQMAC_TITLE_OPCODE => vec![crate::names::eqmac_title(body)?],
         crate::names::EQMAC_GM_RENAME_OPCODE => vec![crate::names::eqmac_gm_rename(body)?],
+        crate::names::EQMAC_LAST_NAME_OPCODE => vec![crate::names::eqmac_last_name(body)?],
+        crate::names::EQMAC_SURNAME_OPCODE => vec![crate::names::surname_answer(body)?],
         crate::gm::EQMAC_KICK_OPCODE
         | crate::gm::EQMAC_KILL_OPCODE
         | crate::gm::EQMAC_BECOME_NPC_OPCODE

@@ -20,6 +20,8 @@ mod eqmac;
 mod rof2;
 pub(in crate::client) use eqmac::EqMacAdmission;
 pub(in crate::client) use rof2::Rof2Admission;
+#[cfg(test)]
+pub(super) use rof2::READS as ROF2_READS;
 
 const PROFILE_OPCODE: u16 = 0x75df;
 const WEATHER_OPCODE: u16 = 0x254d;

@@ -164,7 +164,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6c40 => sent("OP_GMKill", EQMAC, Partly(&[Zone], KICK)),
         0x6d40 => sent("OP_GMKick", EQMAC, Partly(&[Zone], KICK)),
         0x6e40 => sent("OP_GMGoto", QUARM, Read(&[Zone])),
-        0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
+        0x6e41 => sent("OP_GMLastName", EQMAC, Read(&[Zone])),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
         // The answer to OP_GetGuildsList, with the player's own guild; not news
@@ -206,7 +206,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xba41 => sent("OP_ApplyPoison", EQMAC, Read(&[Zone])),
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
         0xc341 => sent("OP_LogServer", EQMAC, Partly(&[World, Zone], LOG_SERVER)),
-        0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
+        0xc441 => sent("OP_Surname", EQMAC, Read(&[Zone])),
         0xcb40 => sent("OP_GMNameChange", EQMAC, Partly(&[Zone], GM_RENAME)),
         0xce40 => sent("OP_ReadBook", EQMAC, Read(&[Zone])),
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),

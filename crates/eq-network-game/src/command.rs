@@ -806,6 +806,15 @@ pub enum GameCommand {
         /// The highest.
         high: u32,
     },
+    /// Ask the server for this last name: `/surname`. The case is left as
+    /// given, since `EQEmu` and TAKP set it themselves; the server answers
+    /// with [`crate::world::WorldEvent::SurnameAnswer`] or a line of its own.
+    Surname {
+        /// Current zone admission.
+        session_id: u64,
+        /// The surname: one word of printable ASCII, sent as typed.
+        surname: String,
+    },
     /// Emote, in the player's own words: `/emote`.
     Emote {
         /// Current zone admission.
@@ -1193,6 +1202,7 @@ impl GameCommand {
             Self::ToggleRoleplay { .. } => "ToggleRoleplay",
             Self::ShowHelm { .. } => "ShowHelm",
             Self::Random { .. } => "Random",
+            Self::Surname { .. } => "Surname",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1319,6 +1329,7 @@ impl GameCommand {
             | Self::ToggleRoleplay { session_id }
             | Self::ShowHelm { session_id, .. }
             | Self::Random { session_id, .. }
+            | Self::Surname { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1473,6 +1484,7 @@ impl GameCommand {
             | Self::ToggleRoleplay { .. } => Capability::Listing,
             Self::ShowHelm { .. } => Capability::ShowingHelm,
             Self::Random { .. } => Capability::Rolling,
+            Self::Surname { .. } => Capability::Surnaming,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1540,6 +1552,7 @@ impl GameCommand {
             | Self::ToggleRoleplay { .. }
             | Self::ShowHelm { .. }
             | Self::Random { .. }
+            | Self::Surname { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -1848,6 +1861,7 @@ pub fn encode(
         | GameCommand::ToggleRoleplay { .. }
         | GameCommand::ShowHelm { .. }
         | GameCommand::Random { .. }
+        | GameCommand::Surname { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }

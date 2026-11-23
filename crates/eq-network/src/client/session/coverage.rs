@@ -17,9 +17,11 @@
 //! name TAKP's. Opcodes are the values on the wire.
 
 mod eqmac;
+mod rof2;
 mod titanium;
 
 pub(super) use eqmac::eqmac;
+pub(super) use rof2::rof2;
 pub(super) use titanium::titanium;
 
 use super::{wire::Wire, Events, GapKind, ServerProtocol};
@@ -198,8 +200,8 @@ pub(super) enum Step {
     PlayerState,
     /// Social, guild, title and GM messages: what is left of them answers
     /// requests eq-network does not send yet, for an inspection, the
-    /// guild's message of the day and list, the titles, a surname, and a
-    /// game master's zone requests, finds, petition checkouts and soul
+    /// guild's message of the day and list, the titles, and a game
+    /// master's zone requests, finds, petition checkouts and soul
     /// marks.
     Social,
     /// `EQMac`'s catch-up on the world: what Titanium's decoders already
@@ -216,6 +218,8 @@ pub(super) enum Step {
     LaterSystems,
     /// Group roles and raids.
     Raids,
+    /// `RoF2`'s catch-up: what its entry and zone leave unread.
+    Rof2,
 }
 
 impl fmt::Display for Step {
@@ -229,6 +233,7 @@ impl fmt::Display for Step {
             Self::Bazaar => "the bazaar and traders",
             Self::LaterSystems => "later and rarely used systems",
             Self::Raids => "group roles and raids",
+            Self::Rof2 => "RoF2's catch-up",
         })
     }
 }
@@ -243,6 +248,8 @@ const EQMAC: &[ServerProtocol] = &[ServerProtocol::Takp, ServerProtocol::Quarm];
 const TAKP: &[ServerProtocol] = &[ServerProtocol::Takp];
 /// Quarm's alone.
 const QUARM: &[ServerProtocol] = &[ServerProtocol::Quarm];
+/// Stock `EQEmu`'s, to the `RoF2` client.
+const ROF2: &[ServerProtocol] = &[ServerProtocol::EqEmuRof2];
 
 /// What the session leaves unread of Titanium's profile.
 const TITANIUM_PROFILE: &[Part] = &[
@@ -750,6 +757,7 @@ mod tests {
         for (generation, table) in [
             ("Titanium", titanium as fn(u16) -> Option<ServerMessage>),
             ("EQMac", eqmac),
+            ("RoF2", rof2),
         ] {
             for opcode in 0..=u16::MAX {
                 let Some(message) = table(opcode) else {
