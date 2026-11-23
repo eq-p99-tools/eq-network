@@ -800,7 +800,7 @@ pub enum GameCommand {
     Surname {
         /// Current zone admission.
         session_id: u64,
-        /// The surname, ASCII letters only.
+        /// The surname: one word of printable ASCII, sent as typed.
         surname: String,
     },
     /// Emote, in the player's own words: `/emote`.
