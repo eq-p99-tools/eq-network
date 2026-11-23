@@ -65,12 +65,23 @@ fn local_report(hazard: Hazard, amount: u32) -> ClientCommand {
                 sampled_at: Instant::now(),
             },
         },
-        Hazard::Freezing => unreachable!("this fixture reports only fall, drowning and lava"),
+        Hazard::Freezing | Hazard::ZoneHeat => {
+            unreachable!("this fixture reports only fall, drowning and lava")
+        }
     }
 }
 
 fn all_hazards() -> Hazards {
     Hazards::new(&[Hazard::Falling, Hazard::Drowning, Hazard::Lava], false)
+}
+
+/// What the Titanium session sends for a report: `OP_EnvDamage`, then the
+/// damage record (read R49-3 c, R49-3a).
+fn titanium_report(hazard: Hazard, amount: u32) -> Vec<EncodedCommand> {
+    vec![
+        hazards::titanium_damage(7, hazard, amount).unwrap(),
+        hazards::titanium_damage_record(7, hazard, amount).unwrap(),
+    ]
 }
 
 fn assert_no_damage_authority(events: &[ClientEvent]) {
@@ -98,7 +109,14 @@ fn local_fall_drowning_and_lava_stand_only_sitters_and_looters() {
                 feature.handle(&local_report(hazard, 13), &mut world, out)
             });
             outcome.result.unwrap();
-            let mut expected = vec![hazards::titanium_damage(7, hazard, 13).unwrap()];
+            // The program reports no damage in the freeze stance (read
+            // R49-3 d, R49-3a).
+            let skipped = posture == PostureState::Frozen;
+            let mut expected = if skipped {
+                Vec::new()
+            } else {
+                titanium_report(hazard, 13)
+            };
             if stands {
                 expected.push(command::titanium_posture(7, Posture::Standing).unwrap());
             }
@@ -128,10 +146,7 @@ fn the_stay_seated_option_applies_to_every_local_report() {
                 feature.handle(&local_report(hazard, 13), &mut world, out)
             });
             outcome.result.unwrap();
-            assert_eq!(
-                outcome.sent,
-                [hazards::titanium_damage(7, hazard, 13).unwrap()]
-            );
+            assert_eq!(outcome.sent, titanium_report(hazard, 13));
             assert_eq!(world.posture.current(), Some(posture));
             assert_no_damage_authority(&outcome.events);
         }
@@ -196,6 +211,7 @@ fn safe_fall_stands_only_when_damage_remains() {
         if amount > 0 {
             expected.extend([
                 hazards::titanium_damage(7, Hazard::Falling, amount).unwrap(),
+                hazards::titanium_damage_record(7, Hazard::Falling, amount).unwrap(),
                 command::titanium_posture(7, Posture::Standing).unwrap(),
             ]);
         }
@@ -234,6 +250,7 @@ fn a_repeated_liquid_sample_cannot_stand_a_player_who_sat_again() {
         outcome.sent,
         [
             hazards::titanium_damage(7, Hazard::Lava, 13).unwrap(),
+            hazards::titanium_damage_record(7, Hazard::Lava, 13).unwrap(),
             command::titanium_posture(7, Posture::Standing).unwrap(),
             command::titanium_posture(7, Posture::Sitting).unwrap(),
         ]
@@ -271,6 +288,7 @@ fn failed_safe_fall_damage_or_posture_submission_keeps_the_sent_prefix_explicit(
     let expected = [
         hazards::safe_fall(true),
         hazards::titanium_damage(7, Hazard::Falling, 40).unwrap(),
+        hazards::titanium_damage_record(7, Hazard::Falling, 40).unwrap(),
         command::titanium_posture(7, Posture::Standing).unwrap(),
     ];
     for fail_at in 0..expected.len() {
@@ -325,4 +343,118 @@ fn local_fall_reports_add_no_unread_mac_posture_rule() {
         assert_eq!(world.posture.current(), Some(posture));
         assert_no_damage_authority(&outcome.events);
     }
+}
+
+fn liquid_report(hazard: LiquidHazard, amount: u32) -> ClientCommand {
+    ClientCommand::LiquidDamage {
+        session_id: 5,
+        hazard,
+        amount,
+        observation: LiquidObservation {
+            revision: 0,
+            position: Position::default(),
+            sampled_at: Instant::now(),
+        },
+    }
+}
+
+fn hit_points(current: i32) -> Message {
+    Message::Event(WorldEvent::HitPoints {
+        spawn_id: 7,
+        current,
+        maximum: 100,
+        items: eq_network_game::world::ItemHitPoints::LeftOut,
+    })
+}
+
+#[test]
+fn a_report_that_would_leave_the_player_dead_sends_no_damage_record() {
+    // The death floor is -10 (inferred, 6.491b): at -10 the record goes, and
+    // one point past it the program takes the death path instead.
+    // Items add 2 here, so a report of 1 is 3 HP.
+    let items: ItemCount = |_| Ok(2);
+    for (hp, amount, recorded) in [
+        (1, 13, true),
+        (1, 14, false),
+        (-12, 1, false),
+        (48, 13, true),
+    ] {
+        let mut world = seated_world(PostureState::Standing, false);
+        let mut feature = all_hazards().with_item_count(items);
+        let outcome = testing::run(|out| -> Result<()> {
+            enter(&feature, &world, out)?;
+            feature.observe(&hit_points(hp), &mut world, out)?;
+            feature.handle(
+                &liquid_report(LiquidHazard::Drowning, amount),
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        let mut expected = vec![hazards::titanium_damage(7, Hazard::Drowning, amount).unwrap()];
+        if recorded {
+            expected.push(hazards::titanium_damage_record(7, Hazard::Drowning, amount).unwrap());
+        }
+        assert_eq!(outcome.sent, expected, "hp {hp}, amount {amount}");
+        assert!(
+            outcome.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::HazardReported { record, .. }) if *record == recorded
+            )),
+            "hp {hp}, amount {amount}"
+        );
+    }
+}
+
+#[test]
+fn without_an_item_count_the_record_goes_whatever_the_reported_hp() {
+    // The report leaves item HP out, so it can't place the player below
+    // the floor (6.491b).
+    let mut world = seated_world(PostureState::Standing, false);
+    let mut feature = all_hazards();
+    let outcome = testing::run(|out| -> Result<()> {
+        enter(&feature, &world, out)?;
+        feature.observe(&hit_points(-5), &mut world, out)?;
+        feature.handle(&liquid_report(LiquidHazard::Drowning, 13), &mut world, out)
+    });
+    outcome.result.unwrap();
+    assert_eq!(outcome.sent, titanium_report(Hazard::Drowning, 13));
+}
+
+#[test]
+fn a_carrier_race_reports_no_liquid_damage() {
+    for race in CARRIER_RACES {
+        let mut world = seated_world(PostureState::Standing, false);
+        let mut player = testing::player(7);
+        player.race = race;
+        world.player.admit(player);
+        let mut feature = all_hazards();
+        let outcome = testing::run(|out| -> Result<()> {
+            enter(&feature, &world, out)?;
+            feature.handle(&liquid_report(LiquidHazard::Lava, 13), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [], "race {race}");
+    }
+}
+
+#[test]
+fn zone_200_lava_goes_as_its_own_type_with_its_record() {
+    let mut world = seated_world(PostureState::Standing, false);
+    let mut feature = Hazards::new(
+        &[
+            Hazard::Falling,
+            Hazard::Drowning,
+            Hazard::Lava,
+            Hazard::ZoneHeat,
+        ],
+        false,
+    );
+    let outcome = testing::run(|out| -> Result<()> {
+        enter(&feature, &world, out)?;
+        feature.handle(&liquid_report(LiquidHazard::ZoneHeat, 90), &mut world, out)
+    });
+    outcome.result.unwrap();
+    assert_eq!(outcome.sent, titanium_report(Hazard::ZoneHeat, 90));
+    assert_eq!(outcome.sent[0].body[22], 244);
 }
