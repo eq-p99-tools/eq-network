@@ -64,6 +64,22 @@ enum LoginOpcode {
     Unknown(u16),
 }
 
+/// What `RoF2`'s login reads, and the expansion list it skips, for the
+/// coverage table's test.
+#[cfg(test)]
+pub(super) const fn rof2_reads() -> ([u16; 4], Option<u16>) {
+    let opcodes = LoginOpcodes::ROF2;
+    (
+        [
+            opcodes.ready,
+            opcodes.accepted,
+            opcodes.list,
+            opcodes.play_response,
+        ],
+        opcodes.expansions,
+    )
+}
+
 /// The opcodes a generation's login server answers with. The client's own
 /// (session ready 1, credentials 2, list request 4, play 0x0d, complete 3)
 /// are the same for every generation that logs in this way.
