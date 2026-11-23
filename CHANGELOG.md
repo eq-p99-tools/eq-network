@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A knight's special waits as the Titanium program's does (read R49-29 b,
+  checklist 6.626). The program's own slot-9 timer: 10 s from a send, and
+  the spell's recast from the server's refresh of gem 9 (`OP_MemorizeSpell`
+  kind 3). While it runs, the press is refused with the program's line
+  0x2efd and nothing is sent. The server's long reuse (the profile's
+  timer, or the estimate) is still reported in `KnightReuse` but no longer
+  holds the press: after the local wait the press goes and the server
+  refuses it as it does the program's. The program takes 1 s off the
+  recast for each point of the player's effect 0x127, which isn't totalled
+  here, so the wait is never shorter than the program's (inferred). The
+  recast comes from the host's installed spell data through the new
+  default method `SightCatalog::recast`; without it the press keeps
+  today's hold on the server's long reuse. A new zone session starts with
+  no local wait, as the program's actor does. Not breaking: the trait
+  method has a default.
 - Tracking ends silently as the Titanium program's does (read R49-30 c,
   checklist 6.636): when six minutes pass, when the followed spawn is
   removed, and when the player dies, `TrackingUpdate::Ended` now carries no
