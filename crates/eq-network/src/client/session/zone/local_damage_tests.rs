@@ -157,3 +157,32 @@ fn an_accepted_local_report_and_repeated_server_echo_send_only_one_stand() {
             .any(|event| matches!(event, ClientEvent::World(WorldEvent::HitPoints { .. }))));
     }
 }
+
+#[test]
+fn a_received_environmental_record_stands_a_seated_player_once() {
+    // The program's 0x4a56e3 stands a seated player for its own record as
+    // for a received one (read R49-3b), through the one stand-when-hit path.
+    for kind in [244, 246, 250, 251, 252, 253] {
+        let (mut world, mut features) = fixture();
+        let record = Message::Event(WorldEvent::Damage(Damage {
+            target_id: 7,
+            source_id: 0,
+            kind,
+            spell_id: None,
+            outcome: DamageOutcome::Hit(13),
+            push: None,
+        }));
+        let outcome = testing::run(|out| -> Result<()> {
+            enter(&world, &features, out)?;
+            hear(vec![record], &mut features, &mut world, out, true)?;
+            Ok(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [command::titanium_posture(7, Posture::Standing).unwrap()],
+            "type {kind}"
+        );
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+    }
+}
