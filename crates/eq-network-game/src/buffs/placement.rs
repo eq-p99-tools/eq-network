@@ -21,7 +21,9 @@
 //! abilities. Only the held buffs are known here, and only those whose
 //! value can be worked out, so their total is a lower bound: the slots
 //! below it are named, and past it the top is unknown unless the caller
-//! says the other sources add nothing.
+//! says the other sources add nothing. That the known sum's absolute value
+//! is a lower bound is inferred: it holds only when the unknown sources
+//! share the known sum's sign.
 //!
 //! Values are 0x40f339's, as its read gives them, at each side's level.
 //!
@@ -339,6 +341,8 @@ fn normal_top(landing: &Landing<'_>) -> (u32, bool) {
                 .map(|(total, value)| total + value);
         }
     }
+    // Inferred: the absolute value assumes the other sources share the
+    // known sum's sign.
     let added = total.map_or(0, |total| {
         u32::try_from(total.unsigned_abs())
             .unwrap_or(u32::MAX)
