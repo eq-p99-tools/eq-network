@@ -8,7 +8,7 @@
 //! mail_opcodes.conf`, which every client generation shares. What the
 //! Titanium program itself sends in the bytes the server skips, and the
 //! mailbox it names, are inferred (recording checklist 6.509, pending read
-//! R49-8 a).
+//! R49-12 a).
 //!
 //! The key is kept only in [`Login`], zeroed when it is dropped, and no
 //! `Debug`, event or error carries it.
@@ -51,10 +51,10 @@ const TITANIUM_CHANNELS_LETTER: u8 = b'B';
 /// The digits of the key.
 const KEY_DIGITS: usize = 8;
 /// What the program puts before the world's name in the mailbox it logs in
-/// with; the server keeps only the part after the last dot [I, R49-8 a].
+/// with; the server keeps only the part after the last dot [I, R49-12 a].
 const MAILBOX_PREFIX: &str = "SOE.EQ.";
 /// The first byte of the client's login and commands, which the server
-/// skips [I, R49-8 a].
+/// skips [I, R49-12 a].
 const LEAD: u8 = 0;
 
 /// What the client logs in to a Titanium chat server with: the server, and

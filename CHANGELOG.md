@@ -6,7 +6,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - Open the chat server's channels link (recording checklist 6.509; the
-  Titanium program's own side is pending read R49-8). From the world's
+  Titanium program's own side is pending read R49-12). From the world's
   Titanium chat-channel offer (`OP_SetChatServer`, letter `B`), where the
   server type opens one (`EQEmu`; not Project 1999, on Adam's word, nor
   Quarm, TAKP or RoF2), the session opens one link per character on its own
