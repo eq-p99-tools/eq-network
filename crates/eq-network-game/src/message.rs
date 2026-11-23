@@ -128,7 +128,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 27] = [
+pub const ROF2_READS: [u16; 31] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -156,13 +156,17 @@ pub const ROF2_READS: [u16; 27] = [
     crate::rof2_casting::STUN_OPCODE,
     crate::rof2_casting::ILLUSION_OPCODE,
     crate::rof2_casting::FACE_OPCODE,
+    crate::rof2_buffs::UPDATE_OPCODE,
+    crate::rof2_buffs::ICONS_OPCODE,
+    crate::rof2_buffs::TARGET_ICONS_OPCODE,
+    crate::rof2_buffs::PET_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
 /// spawns' movement and removal (6.514), how they look and how hurt they
 /// are (6.518), the player's own news and the combat records (6.519), and
-/// casting, stuns and illusions (6.522) are read yet; a body a reader
-/// refuses is unreadable, told by its opcode and length only.
+/// casting, stuns and illusions (6.522), and buffs (6.527) are read yet; a
+/// body a reader refuses is unreadable, told by its opcode and length only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -179,7 +183,11 @@ pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
             Err(error) => vec![unreadable(Part::World, &error)],
             Ok(None) => match crate::rof2_looks::read(opcode, body) {
                 Ok(Some(event)) => vec![Message::Event(event)],
-                Ok(None) => rof2_casting(opcode, body).into_iter().collect(),
+                Ok(None) => match crate::rof2_buffs::read(opcode, body) {
+                    Ok(Some(event)) => vec![Message::Event(event)],
+                    Ok(None) => rof2_casting(opcode, body).into_iter().collect(),
+                    Err(error) => vec![unreadable(Part::World, &error)],
+                },
                 Err(error) => vec![unreadable(Part::World, &error)],
             },
         },

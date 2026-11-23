@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's buffs as stock `EQEmu` sends them, labelled inferred for
+  RoF2 (6.527). The new `rof2_buffs` module reads `OP_Buff` (0x659c, 100
+  bytes) into Titanium's `BuffUpdate`: fade word 1 is `FadeBySpell` and 2
+  `BySpell` (inferred as Titanium's readings of the server's 1 and 0), the
+  float bard modifier reads back as the server's byte, and the counters
+  read 0, since the encoder sends none. `OP_BuffCreate` (0x3377) and
+  `OP_TargetBuffs` (0x4f4b) give the new `WorldEvent::BuffIcons` (the
+  spawn, the window, whole list or one slot, the tick timer and each
+  slot's spell, ticks, hits and caster), and `OP_PetBuffWindow` (0x5882)
+  gives Titanium's `PetBuffs`, refusing a body whose count and entries
+  differ. Coverage lists the four. An admitted RoF2 session hands the host
+  each and still sends and offers nothing.
 - Pace all chat a host asks for (6.523). Every `SendChat`,
   `SendChatInAdmission` and `ChatChannel` goes through one pace that spans
   zones: at most 10 lines in any 5 s, and at most 12 shout, auction,

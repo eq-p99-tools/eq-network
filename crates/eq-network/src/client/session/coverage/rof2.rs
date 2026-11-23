@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519, 6.522), and the chat rows from the chat
-//! parser (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527), and the chat rows from the
+//! chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -79,6 +79,12 @@ const ILLUSION: &[Part] = &[Part(
 /// What the zone decoder leaves unread of a face change (6.522).
 const FACE_CHANGE: &[Part] = &[Part(
     "the Drakkin heritage, tattoo and details",
+    Planned(Rof2),
+)];
+/// What the zone decoder leaves unread of a buff update (6.527).
+const BUFF: &[Part] = &[Part(
+    "the counters, which the encoder does not send, the hit count, the location and the slot \
+     data",
     Planned(Rof2),
 )];
 /// What the session does with a message stock `EQEmu` sends the `RoF2`
@@ -166,6 +172,12 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x36a4 => sent("OP_Stun", ROF2, Read(&[Zone])),
         0x312a => sent("OP_Illusion", ROF2, Partly(&[Zone], ILLUSION)),
         0x1af3 => sent("OP_SetFace", ROF2, Partly(&[Zone], FACE_CHANGE)),
+        // Buffs (6.527). The icon messages' and the pet window's zero
+        // words are not parts; they carry nothing from the server.
+        0x659c => sent("OP_Buff", ROF2, Partly(&[Zone], BUFF)),
+        0x3377 => sent("OP_BuffCreate", ROF2, Read(&[Zone])),
+        0x4f4b => sent("OP_TargetBuffs", ROF2, Read(&[Zone])),
+        0x5882 => sent("OP_PetBuffWindow", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the

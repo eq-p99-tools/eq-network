@@ -458,6 +458,65 @@ fn eqmac_record(bytes: &[u8; 10]) -> Option<Buff> {
     })
 }
 
+/// Which window a buff icon message fills: the type byte stock `EQEmu`
+/// writes last (`Mob::MakeBuffsPacket` in `zone/spells.cpp`), kept as sent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum BuffWindow {
+    /// 0: the player's own buffs.
+    Own,
+    /// 5: a targeted player's.
+    TargetPlayer,
+    /// 7: a targeted NPC's.
+    TargetNpc,
+    /// Any other type byte, which stock `EQEmu` does not send.
+    Other(u8),
+}
+
+impl BuffWindow {
+    /// The window a type byte names.
+    #[must_use]
+    pub const fn from_wire(value: u8) -> Self {
+        match value {
+            0 => Self::Own,
+            5 => Self::TargetPlayer,
+            7 => Self::TargetNpc,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// One buff icon: what a slot shows.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BuffIcon {
+    /// The slot, in the server's own numbering.
+    pub slot: u32,
+    /// The spell; None for -1, which empties the slot.
+    pub spell_id: Option<u32>,
+    /// Ticks left; negative for a buff that does not wear off.
+    pub ticks: i32,
+    /// Hits left on a buff that counts them.
+    pub hits: u32,
+    /// The caster's name, when sent.
+    pub caster_name: Option<String>,
+}
+
+/// A buff icon message (`RoF2`'s `OP_BuffCreate` and `OP_TargetBuffs`):
+/// a spawn's buff icons, the whole list or one slot.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BuffIcons {
+    /// The spawn whose buffs these are.
+    pub spawn_id: u16,
+    /// Which window they fill.
+    pub window: BuffWindow,
+    /// Whether this is the whole list, replacing every slot, rather than
+    /// the slots named.
+    pub all: bool,
+    /// The server's buff tick timer, in milliseconds, as sent.
+    pub tick_timer_ms: i32,
+    /// The slots named, in the order sent.
+    pub icons: Vec<BuffIcon>,
+}
+
 fn word(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(
         bytes[offset..offset + 4]
