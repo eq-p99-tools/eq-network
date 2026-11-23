@@ -273,3 +273,37 @@ fn an_item_use_the_programs_item_path_refuses_names_its_line() {
     let mut belt = Belt::new(Vec::new());
     assert_eq!(line(&belt.run(Belt::use_slot(0))), Some(None));
 }
+
+#[test]
+fn an_item_used_before_its_recast_names_the_programs_line() {
+    // Read R49-34 k: a send stamps the item and its type with now plus the
+    // delay, in wall-clock seconds; a use before the later stamp is 0xec.
+    let line = |outcome: &testing::Outcome<Result<()>>| {
+        outcome.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::ItemUseAction {
+                request_id: 1,
+                error: Some(_),
+                string_id,
+                ..
+            }) => Some(*string_id),
+            _ => None,
+        })
+    };
+    let mut slow = potion(23);
+    slow.activation
+        .effect
+        .as_mut()
+        .unwrap()
+        .recast_delay_seconds = 30;
+    slow.activation.effect.as_mut().unwrap().recast_type = 4;
+    let mut belt = Belt::new(vec![slow.clone()]);
+    assert!(cast(&belt.run(Belt::use_slot(0))).is_some());
+    let again = belt.run(Belt::use_slot(0));
+    assert!(cast(&again).is_none());
+    assert_eq!(line(&again), Some(Some(0xec)));
+    // The server's own stamp for the instance holds it too.
+    let mut stamped = slow;
+    stamped.activation.recast_timestamp = u32::MAX;
+    let mut belt = Belt::new(vec![stamped]);
+    assert_eq!(line(&belt.run(Belt::use_slot(0))), Some(Some(0xec)));
+}

@@ -12,9 +12,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ItemUseAction`'s `string_id` (Titanium sessions only; the Mac-era
   program's lines aren't read). The level test now comes before the worn
   test, in the program's order. `ItemRefusal` carries each line beside
-  this library's words. The program's 0xec (an item used before its
-  recast) isn't built: which clock it compares the item's recast stamp
-  with isn't read yet.
+  this library's words. An item with a recast delay used before its
+  recast says the program's 0xec and sends nothing (read R49-34 k): a send
+  stamps the item and its recast type (0-19) with now plus the delay, in
+  wall-clock seconds as the program's 0x576e80 keeps them, and a use
+  before the later of those and the server's own stamp for the instance is
+  refused. That the serialized recast timestamp is the program's item
+  stamp is inferred. The stamps last for the zone session; the program's
+  type timers outlast a zone change (the server still refuses an early
+  use).
 - **Breaking:** A same-zone zone line places the player locally on stock
   EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
   program's 0x48aaa6 sends one position record and lands the player itself,

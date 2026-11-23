@@ -372,7 +372,82 @@ pub(super) struct Casting {
     disciplines: disciplines::DisciplineState,
     use_disciplines: DisciplineUse,
     belt_use: BeltUses,
+    item_recasts: ItemRecasts,
 }
+
+/// The Titanium program's item recast stamps (0x411f3d step 6, set by
+/// 0x4bac0d, read R49-34 k): seconds on its wall clock, time() at a base
+/// tick plus the ticks since. An item with a recast is refused with 0xec
+/// until the later of its own stamp and its recast type's.
+#[derive(Default)]
+struct ItemRecasts {
+    /// Each item's stamp from this session's sends, by its slot and item.
+    items: std::collections::HashMap<(InventorySlot, u32), u64>,
+    /// The type timers 0-19.
+    types: [u64; ITEM_RECAST_TYPES],
+}
+
+/// The program's recast types, 0 to 19 (0x5f0b70).
+const ITEM_RECAST_TYPES: usize = 20;
+
+impl ItemRecasts {
+    /// When the item may be used again: the later of the server's own
+    /// stamp for the instance ([I]: that the serialized recast timestamp is
+    /// the program's item +0x54), this session's stamp for it, and its
+    /// type's.
+    fn ready(&self, slot: InventorySlot, item: &eq_network_game::inventory::InventoryItem) -> u64 {
+        let Some(effect) = item.activation.effect.as_ref() else {
+            return 0;
+        };
+        let own = self
+            .items
+            .get(&(slot, item.details.id))
+            .copied()
+            .unwrap_or(0);
+        let kind = usize::try_from(effect.recast_type)
+            .ok()
+            .and_then(|kind| self.types.get(kind))
+            .copied()
+            .unwrap_or(0);
+        u64::from(item.activation.recast_timestamp)
+            .max(own)
+            .max(kind)
+    }
+
+    /// The program stamps the item and its type at the send: now plus the
+    /// recast delay.
+    fn sent(
+        &mut self,
+        slot: InventorySlot,
+        item: &eq_network_game::inventory::InventoryItem,
+        now: u64,
+    ) {
+        let Some(effect) = item.activation.effect.as_ref() else {
+            return;
+        };
+        if effect.recast_delay_seconds == 0 {
+            return;
+        }
+        let ready = now + u64::from(effect.recast_delay_seconds);
+        self.items.insert((slot, item.details.id), ready);
+        if let Some(kind) = usize::try_from(effect.recast_type)
+            .ok()
+            .and_then(|kind| self.types.get_mut(kind))
+        {
+            *kind = ready;
+        }
+    }
+}
+
+/// The program's wall clock in seconds (0x576e80).
+fn wall_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// The program's line for an item used before its recast (colour 0x121).
+const ITEM_RECAST_LINE: u32 = 0xec;
 
 /// Which wire's disciplines the server type takes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -767,6 +842,29 @@ impl Casting {
                 string_id: Some(string_id),
             }));
         }
+        // Titanium's program reads its item recasts first (step 6); the
+        // Mac-era and RoF2 programs' aren't read.
+        let program_lines = match out.wire.dialect() {
+            eq_network_game::GameDialect::Titanium => true,
+            eq_network_game::GameDialect::EqMac | eq_network_game::GameDialect::Rof2 => false,
+        };
+        let item = world.inventory.items().get(&request.slot).cloned();
+        let now = wall_seconds();
+        let recasting = item.as_ref().is_some_and(|item| {
+            item.activation
+                .effect
+                .as_ref()
+                .is_some_and(|effect| effect.recast_delay_seconds != 0)
+                && now < self.item_recasts.ready(request.slot, item)
+        });
+        if program_lines && recasting {
+            return out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
+                session_id: request.session_id,
+                request_id: request.request_id,
+                error: Some("The item is not ready to use again yet".into()),
+                string_id: Some(ITEM_RECAST_LINE),
+            }));
+        }
         let target_available = world.player.is_some() && world.visible(request.target_id);
         let prepared = world
             .player
@@ -797,6 +895,9 @@ impl Casting {
         let error = match prepared {
             Ok((spell_id, packet)) => {
                 out.send(&packet)?;
+                if let Some(item) = item.as_ref().filter(|_| program_lines) {
+                    self.item_recasts.sent(request.slot, item, now);
+                }
                 let timed = world
                     .inventory
                     .click_cast_time_ms(request.slot)
@@ -819,11 +920,7 @@ impl Casting {
             Err(error) => Some(error),
         };
         // Titanium's own line for a refusal its cast start says (read
-        // R49-34 e 8); the Mac-era and RoF2 programs' lines aren't read.
-        let program_lines = match out.wire.dialect() {
-            eq_network_game::GameDialect::Titanium => true,
-            eq_network_game::GameDialect::EqMac | eq_network_game::GameDialect::Rof2 => false,
-        };
+        // R49-34 e 8).
         let string_id = error
             .as_ref()
             .and_then(|error| error.downcast_ref::<eq_network_game::inventory::ItemRefusal>())
