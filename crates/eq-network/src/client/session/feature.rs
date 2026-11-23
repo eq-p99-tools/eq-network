@@ -207,6 +207,10 @@ pub(in crate::client) struct World {
     /// Whether the player's melee auto attack is on, as last sent; only the
     /// combat feature changes it, and the player's death turns it off.
     pub(super) attacking: bool,
+    /// The world's player-versus-player ruleset, where the world sent one
+    /// (`CharacterSession::world_ruleset`): Pick Pockets on a player tests
+    /// it for 4 (read R49-31 d, e).
+    pub(super) ruleset: Option<u32>,
     /// How the zone session ends, once a feature has decided; see [`World::end`].
     exit: Option<ZoneExit>,
     /// Death and zone transfers, which hold the player's actions.
@@ -286,6 +290,7 @@ impl World {
             grouped: false,
             posture: OwnPosture::default(),
             attacking: false,
+            ruleset: None,
             exit: None,
             lifecycle: ZoneLifecycle::default(),
             zone: (0, 0),
