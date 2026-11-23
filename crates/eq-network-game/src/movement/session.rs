@@ -389,6 +389,8 @@ pub struct MotionSession {
     suspended: bool,
     falls: bool,
     heading_snapshots: bool,
+    /// Whether the update carries the host's vertical speed in the air.
+    airborne_speed: bool,
     swimming: bool,
     /// How the client generation gates its own update, where it is read;
     /// see [`Self::with_gate`].
@@ -474,6 +476,14 @@ impl MotionSession {
     #[must_use]
     pub const fn with_heading_snapshots(mut self, enabled: bool) -> Self {
         self.heading_snapshots = enabled;
+        self
+    }
+
+    /// Sends the host's vertical speed in the air on land
+    /// ([`crate::GameDialect::sends_airborne_speed`], 6.617).
+    #[must_use]
+    pub const fn with_airborne_speed(mut self, enabled: bool) -> Self {
+        self.airborne_speed = enabled;
         self
     }
 
@@ -681,6 +691,7 @@ impl MotionSession {
             suspended: false,
             falls: false,
             heading_snapshots: false,
+            airborne_speed: false,
             swimming: false,
             gate: None,
             held: None,
@@ -1169,6 +1180,19 @@ impl MotionSession {
         };
         guard.speed = Some(speed);
         let swimming = request.mode.is_water_motion();
+        // The host's speed in the air on land, bounded by what the program
+        // could reach: up to the jump's take-off speed (the generation's
+        // read jump, 0 without one) and down to the fall's limit (derived
+        // from the programs' gravity, [`super::fall_speed`]). Flight and the
+        // water send their own; a generation that doesn't send it, none.
+        let airborne = match request.vertical_speed {
+            Some(vertical) if self.airborne_speed && !swimming && !self.options.fly => {
+                ensure!(vertical.is_finite(), "non-finite vertical speed");
+                let rise = guard.jump.map_or(0.0, |(take_off, _)| take_off);
+                Some(vertical.clamp(-guard.fall_speed, rise))
+            }
+            _ => None,
+        };
         let (from_heading, to_heading) = guard.own_headings(request);
         let displacement = guard.accept_with_modes(
             request,
@@ -1177,16 +1201,23 @@ impl MotionSession {
             lateral_rate,
             (self.swimming, swim_backward, swim_caps),
         )?;
-        // Following a slope has no vertical stroke. Ordinary falls still
-        // carry their descent in absolute Z. For a swim stroke Titanium
-        // copies all three tick velocities into its existing update fields.
+        // Following a slope has no vertical stroke. Titanium builds the
+        // update from the actor's own three velocity fields (0x465244, read
+        // R49-27 (c)): a swim stroke's, and in the air on land the jump's
+        // or fall's vertical speed at that moment, which other clients'
+        // pickers read for the rise and fall poses (0x44fa8f). Its kept
+        // recordings show that speed, and 0 on every grounded update and on
+        // the landing (capture-derived, recording checklist 6.617). Small
+        // values the program sends over bumpy ground are not sent here, a
+        // departure (6.617); flight sends none, unread (6.617). A still
+        // rider's own z is 0 (6.470).
         let delta = guard.shoreline_velocity.unwrap_or([
             displacement[0] / elapsed * velocity_scale,
             displacement[1] / elapsed * velocity_scale,
             if swimming {
                 displacement[2] / elapsed * velocity_scale
             } else {
-                0.0
+                airborne.map_or(0.0, |speed| speed * velocity_scale)
             },
         ]);
         let moving = displacement[..if swimming { 3 } else { 2 }]

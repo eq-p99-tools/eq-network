@@ -589,6 +589,7 @@ fn a_singing_bards_movement_is_untouched() {
         position: eq_network_game::world::Position::default(),
         created: Instant::now(),
         support: None,
+        vertical_speed: None,
     });
     assert_eq!(
         super::super::actions::needs(&step),
