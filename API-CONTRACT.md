@@ -1451,8 +1451,10 @@ as the planned exchanges gap, never as an error.
 
 TAKP offers `Looting` the same way, from its handlers at EQMacEmu/Server
 44afcbf (6.577): the same 2-byte open and close, 12-byte item request, echo
-before the checks and empty-cursor rule as Quarm's. Delivery and coins stay
-with the inventory owner.
+before the checks and empty-cursor rule as Quarm's. Both servers end the loot
+for an item request sooner than 10 ms after the last on the corpse
+(`loot_cooldown_timer`), so the session never sends one sooner and refuses
+one asked sooner. Delivery and coins stay with the inventory owner.
 
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its

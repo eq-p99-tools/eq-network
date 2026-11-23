@@ -72,7 +72,16 @@ chooses automatic destinations or writes the purse. The existing inventory
 owner consumes successful coin grants and ordinary carried/cursor updates.
 Duplicate open-success messages cannot add coins twice. An item request is
 not retried automatically; its place cannot be requested twice in the same
-listing. Different listed places have no added pacing timer.
+listing. Item requests on one corpse are paced to the servers' own rule:
+TAKP's and Quarm's `Corpse::loot_cooldown_timer` is 10 ms (TAKP 44afcbf,
+Quarm fc75fcf), checked just after the echo in `LootCorpseItem`, and a
+request that comes sooner ends the loot with `OP_LootComplete`. The session
+never sends an item request sooner than 10 ms after the last on the same
+corpse; one asked sooner is refused locally ("Wait a moment before taking the
+next item.") and can be asked again. The timer is measured when the server
+reads the packet, so two requests sent 10 ms apart can still arrive closer
+together; the official program's own pace between loot clicks is unread
+(open row 6.577a).
 
 `LootUpdate::Acknowledged` is informational. Consumers must handle this new
 enum variant separately from `Taken`: it does not prove an item was received.

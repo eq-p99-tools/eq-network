@@ -9,7 +9,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
   the echo before the server's checks, and an empty cursor before an item
   request, as TAKP's `CheckCursorEmptyWhenLooting` defaults. Source-derived,
-  not yet checked live.
+  not yet checked live. On TAKP and Quarm, item requests on one corpse are
+  now at least 10 ms apart, the servers' `loot_cooldown_timer`; one asked
+  sooner is refused.
 - Offer Quarm giving and trading, groups, anonymous and roleplaying, and
   translocate answers (6.576), each from Quarm's own handlers at
   SecretsOTheP/EQMacEmu fc75fcf. Source-derived, not live. The encoders

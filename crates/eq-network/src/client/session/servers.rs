@@ -1701,9 +1701,13 @@ impl ServerType for Quarm {
     }
 
     /// Quarm's source-derived corpse flow uses the existing inventory owner
-    /// for delivery and coins. Public-server validation remains pending.
+    /// for delivery and coins, with item requests paced to its 10 ms
+    /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
+    /// Public-server validation remains pending.
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Looting::requiring_empty_cursor()))
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     fn item_rules(&self) -> ItemRules {
@@ -2047,10 +2051,14 @@ impl ServerType for Takp {
     /// `Corpse::LootCorpseItem` echoes the request before its checks.
     /// TAKP's `CheckCursorEmptyWhenLooting` defaults true
     /// (`common/ruletypes.h`), so an item request waits for an empty
-    /// cursor, as on Quarm. Delivery and coins stay with the inventory
-    /// owner. Source-derived, not live (6.577).
+    /// cursor, as on Quarm. Its `loot_cooldown_timer` is 10 ms, as Quarm's,
+    /// so item requests are paced ([`super::looting::EQMAC_ITEM_PACE`]).
+    /// Delivery and coins stay with the inventory owner. Source-derived, not
+    /// live (6.577).
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Looting::requiring_empty_cursor()))
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     /// Giving items to NPCs and trading with players, in the `EQMac`
