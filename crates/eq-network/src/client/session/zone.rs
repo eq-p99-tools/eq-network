@@ -332,6 +332,7 @@ fn run_connected(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::for_zone(session_id, config);
+    world.ruleset = context.world_ruleset.get();
     let mut recording_only = false;
     let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
@@ -3764,3 +3765,5 @@ mod discipline_tests;
 
 #[cfg(test)]
 mod local_damage_tests;
+#[cfg(test)]
+mod tracking_zone_tests;

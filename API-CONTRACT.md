@@ -1905,10 +1905,10 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   refused with the `IN_USE` line and no echo, so the take's wait runs out and
   the session gives it up. Leaving the boat, a zone offer and the player's
   death each give control back.
-- **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
-  types until the `EQMac` program's steering (a position update under the
-  boat's spawn moves it on both servers) and its arrival are read (open row
-  9b and the arrival placement).
+- **Not offered.** `BoatControl` stays off on both server types: read 9c
+  found no boat steering in the `EQMac` program (its controlled spawn is a
+  horse). `BoatRiding` stays off until an attended first ride on each
+  server; the offer is its own change.
 - **Board and leave (built, not offered; 6.618).** The `EQMac` program's
   frame routine (TAKP `eqgame.exe` 0x4c131d, read 9a) sends `OP_BoardBoat`
   (the program's 0x41bb; 0xbb41 in this crate's byte order, as Quarm's
@@ -1921,6 +1921,22 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   checks for them on each accepted motion sample on the Mac era, where
   Titanium uses its 1 s tick. Samples standing in for the program's frames
   is inferred.
+- **Arrival (built, not offered; 6.641).** With a boat named in the
+  profile, the `EQMac` program finds that spawn by name and stands the
+  player at the profile's position, linked to the boat (TAKP `eqgame.exe`
+  0x53df6e, read 9c). Both servers write that position as a world point: a
+  zone line's target, the safe point, or the boat's own place (`SendToBoat`
+  and zoning; source-derived). So the riders feature takes the profile's
+  position as a world point, publishes `Arrival::Aboard` with it in the
+  boat's frame as the boat stands at the arrival, and accepts the host's
+  placement at the first try only: Titanium's second try has no Mac read.
+  With the boat not in, it sends nothing (no 0x3710), publishes
+  `Arrival::Waiting`, looks for the boat again on each tick and holds the
+  player aboard once it comes in; after 60 s it uses the zone's safe point.
+  The bound and the safe point are inferred from Titanium. A Mac rider
+  crosses the zone line standing on the deck; there is no carry-on
+  transfer. In Timorous Deep and Firiona Vie the servers blank the name and
+  place the rider themselves, so that arrival is an ordinary one.
 - **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
   `Message::VehicleName`, last among the profile's messages. Both servers
   keep it across zones and clear it on `OP_LeaveBoat` and in a zone without

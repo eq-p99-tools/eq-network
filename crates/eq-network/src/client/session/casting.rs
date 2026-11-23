@@ -943,6 +943,17 @@ impl Feature for Casting {
         if let (Some(reuse), Message::KnightRefresh(remaining)) = (&mut self.knights, message) {
             reuse.received(*remaining, now);
         }
+        // The server's refresh of gem 9 starts the program's local wait
+        // (R49-29 b, 0x458ed8).
+        if let (
+            Some(reuse),
+            Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh { slot, spell_id, .. })),
+        ) = (&mut self.knights, message)
+        {
+            if *slot == u32::from(eq_network_game::knights::CAST_SLOT) {
+                reuse.refreshed(*spell_id, |spell| world.sight.recast(spell), now);
+            }
+        }
         let own = (self.use_disciplines == DisciplineUse::Titanium)
             .then(|| {
                 world

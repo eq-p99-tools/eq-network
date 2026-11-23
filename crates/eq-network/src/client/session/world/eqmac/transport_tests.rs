@@ -249,6 +249,7 @@ fn selection_creation_and_handoff(protocol: ServerProtocol, camp_return: bool) {
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
             chat_pace: std::sync::Arc::default(),
+            world_ruleset: std::cell::Cell::new(None),
         };
         let mut handler = |event| {
             events.send(event).unwrap();
@@ -368,6 +369,7 @@ fn deletion_world(
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
             chat_pace: std::sync::Arc::default(),
+            world_ruleset: std::cell::Cell::new(None),
         };
         let mut handler = |event| {
             events.send(event).unwrap();

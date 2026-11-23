@@ -12,6 +12,53 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   comes with the Titanium song rules, on P99 and stock `EQEmu`; not the
   Mac-era server types, whose program is unread. The host keeps the timers;
   nothing is sent for it. **Breaking:** a new `Capability` variant.
+- Build the Mac-era program's arrival aboard a boat (TAKP 0x53df6e, read
+  9c, checklist 6.641), not offered yet: Quarm and TAKP keep `BoatRiding`
+  off until an attended first ride.
+  - The profile's position is taken as a world point, as both servers
+    write it (TAKP 44afcbf and Quarm fc75fcf, source-derived), and
+    `Arrival::Aboard` carries it in the boat's frame. The host's placement
+    is accepted at the first try only.
+  - With the boat not in, nothing is sent; the session looks again each
+    tick and gives up at the safe point after 60 s (inferred from
+    Titanium).
+
+- A knight's special waits as the Titanium program's does (read R49-29 b,
+  checklist 6.626). The program's own slot-9 timer: 10 s from a send, and
+  the spell's recast from the server's refresh of gem 9 (`OP_MemorizeSpell`
+  kind 3). While it runs, the press is refused with the program's line
+  0x2efd and nothing is sent. The server's long reuse (the profile's
+  timer, or the estimate) is still reported in `KnightReuse` but no longer
+  holds the press: after the local wait the press goes and the server
+  refuses it as it does the program's. The program takes 1 s off the
+  recast for each point of the player's effect 0x127, which isn't totalled
+  here, so the wait is never shorter than the program's (inferred). The
+  recast comes from the host's installed spell data through the new
+  default method `SightCatalog::recast`; without it the press keeps
+  today's hold on the server's long reuse. A new zone session starts with
+  no local wait, as the program's actor does. Not breaking: the trait
+  method has a default.
+- Tracking ends silently as the Titanium program's does (read R49-30 c,
+  checklist 6.636): when six minutes pass, when the followed spawn is
+  removed, and when the player dies, `TrackingUpdate::Ended` now carries no
+  line (it carried 0x3189 and 0x30d3). A zone change ends it with the zone
+  session, as before. The two-second report runs only while the player's
+  Tracking skill reads 0 or more as the program's signed value (read
+  R49-30 b). The program's 0x30d3, for a tracked spawn it no longer holds
+  while still tracking, is a state removal never leaves here, so it isn't
+  said (inferred). Not breaking: only which line is sent.
+- Pick Pockets on a player follows the world's ruleset (6.631 follow-up),
+  read from the world's rules packet (`OP_LogServer`, the value
+  `WorldRules::pvp` already decodes). Under ruleset 4 the two flag lines
+  (0x307a, 0x307b) are skipped; the player is refused with 0x307c when
+  not eligible for player combat, and with 0x307d when the target's level
+  is outside five of theirs either way or is 5 or lower. The program's
+  eligibility test reads a team value no packet field is mapped to yet:
+  the player's own PvP flag stands in for it (inferred). Under any other
+  ruleset only the flag lines apply, and this library's own level-range
+  words are gone. A session that hasn't read the rules (the Mac-era and
+  RoF2 worlds today) keeps the flags and the level range in this
+  library's words. Not breaking: the new state is internal.
 - **Breaking:** A same-zone zone line places the player locally on stock
   EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
   program's 0x48aaa6 sends one position record and lands the player itself,
