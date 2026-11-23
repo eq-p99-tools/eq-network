@@ -581,11 +581,6 @@ const TRANSLOCATE: &[Part] = &[Part(
          and TAKP's Client::SendPendingTranslocatePacket)",
     ),
 )];
-/// What the session leaves unread of a quest's word on the player's stats.
-const STATS: &[Part] = &[Part(
-    "the first byte, the five resists and the second copy of every field",
-    Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
-)];
 /// What the session leaves unread of a discipline reuse timer.
 const DISCIPLINE_TIMER: &[Part] = &[Part(
     "the last field",
@@ -1068,6 +1063,40 @@ mod tests {
                 (0x1ee9, 95, true),
                 (0x1ee9, 95, true)
             ]
+        );
+    }
+
+    #[test]
+    fn eqemus_stat_record_is_a_gap_with_its_length_and_the_programs_is_read() {
+        use crate::client::{Gap, GapKind, GapStage};
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        let program: Vec<u8> = [7u32, 1, 5]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        for body in [vec![0; 141], program] {
+            unheard.tell(&Titanium, 0x5b7b, &body, &mut log).unwrap();
+            let messages = eq_network_game::message::titanium(0x5b7b, &body);
+            unheard
+                .sift(&Titanium, (0x5b7b, &body), messages, &mut log)
+                .unwrap();
+        }
+        log.end_stage().unwrap();
+        drop(log);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!((gaps[0].opcode, gaps[0].min_length), (0x5b7b, 141));
+        assert!(
+            matches!(&gaps[0].kind, GapKind::Unreadable { error, .. } if error.contains("141-byte"))
         );
     }
 

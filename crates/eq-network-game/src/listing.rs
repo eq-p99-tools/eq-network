@@ -294,13 +294,15 @@ pub(crate) fn appearance(kind: u16, value: u32) -> Result<Option<ListingChange>>
 /// range as two words and a 64-byte comment. `EQEmu`'s
 /// `Client::Handle_OP_LFGCommand` reads the flag's low byte, stores the
 /// rest when it is on, and tells every other client with
-/// `OP_LFGAppearance`; the sender is told nothing. Everything but the flag
-/// is zero: whether `/lfg` fills the range or the comment is unread
-/// (pending R49-6i).
+/// `OP_LFGAppearance`; the sender is told nothing. As the program's `/lfg
+/// on` and `/lfg off` write it (read R49-6i, 0x468694): the flag, the word
+/// at 8 left 0 and the word at 12 set to 100 (inferred: levels 0 to 100),
+/// with no filter and no comment.
 #[must_use]
 pub fn titanium_looking(on: bool) -> EncodedCommand {
     let mut body = vec![0; LFG_COMMAND_LENGTH];
     body[4] = u8::from(on);
+    body[12..16].copy_from_slice(&100u32.to_le_bytes());
     EncodedCommand {
         opcode: LFG_COMMAND_OPCODE,
         body,
@@ -360,17 +362,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn titaniums_lfg_says_only_the_flag() {
+    fn titaniums_lfg_says_the_flag_and_the_programs_range() {
         for on in [true, false] {
             let command = titanium_looking(on);
             assert_eq!(command.opcode, 0x68ac);
             assert_eq!(command.body.len(), 80);
             assert_eq!(command.body[4], u8::from(on));
+            assert_eq!(command.body[12..16], [100, 0, 0, 0]);
             assert!(command
                 .body
                 .iter()
                 .enumerate()
-                .all(|(at, byte)| at == 4 || *byte == 0));
+                .all(|(at, byte)| at == 4 || at == 12 || *byte == 0));
         }
     }
 

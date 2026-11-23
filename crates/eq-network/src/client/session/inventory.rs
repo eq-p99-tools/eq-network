@@ -256,8 +256,11 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             Some(true)
         }
         // A reward's coins, which every server adds to the purse without a
-        // money update (inferred: the official client's purse after a
-        // reward is unrecorded).
+        // money update, and which the Titanium program adds to its own purse
+        // as it shows them (read R49-6g: 0x45df62, by 0x417d70, 0x417d46,
+        // 0x417d1c and 0x417cf2). `EQEmu` 1d9cb5c7: `Client::QuestReward`
+        // fills `QuestReward_Struct` (copper at 20, then silver, gold and
+        // platinum) and calls `AddMoneyToPP` with `update_client` false.
         WorldEvent::Reward(reward) if !reward.coins.is_empty() => {
             wallet.add_to_purse(reward.coins);
             Some(true)

@@ -27,7 +27,7 @@ use super::{
     character::Character,
     clock::Clock,
     combat::Combat,
-    confirmations::{Duel, Sacrifice, Translocate},
+    confirmations::{Sacrifice, Translocate},
     control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
@@ -783,11 +783,11 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Character, Clock, Combat,
-        Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
-        Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looking, Looting, Map,
-        Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading,
-        Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks,
-        Tradeskills, Training, Transfers, Translocate, Who,
+        Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
+        Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looking, Looting, Map, Marks,
+        MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading, Resurrection,
+        Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills,
+        Training, Transfers, Translocate, Who,
     };
 
     pub(super) fn spellbook(edits: Edits) -> Box<dyn Feature> {
@@ -925,10 +925,6 @@ mod shared {
 
     pub(super) fn translocate(timeout: std::time::Duration) -> Box<dyn Feature> {
         Box::new(Translocate::new(timeout))
-    }
-
-    pub(super) fn duel(echoes_challenge: bool) -> Box<dyn Feature> {
-        Box::new(Duel::new(echoes_challenge))
     }
 
     pub(super) fn reading() -> Box<dyn Feature> {
@@ -1546,11 +1542,11 @@ impl ServerType for EqEmu {
         offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
     }
 
-    /// Answered on the player's word as `Client::Handle_OP_DuelAccept` and
-    /// `Handle_OP_DuelDecline` read it, from source; not yet checked live
-    /// (checklist 6.492). P99, TAKP and Quarm wait for their checks.
+    /// The Titanium program's duel (R49-6 a, e, h), from the read; not
+    /// yet checked live (checklist 6.492). P99 waits for an attended row,
+    /// and TAKP and Quarm for theirs (11g).
     fn duel(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::duel(false))
+        offer(Box::<super::duel::TitaniumDuel>::default())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {

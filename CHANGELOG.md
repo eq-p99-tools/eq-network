@@ -5,6 +5,46 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Follow the Titanium program's read R49-6 for duels, stuns, becoming a
+  corpse, `/lfg`, the quest reward, stat increases and `/sheathe` and
+  `/aggressive`.
+  - **Breaking.** `WorldEvent::DuelNews(socials::DuelNews)` is new, and
+    `Capability::WeaponStances` and `GameCommand::ToggleStance` are new.
+    `GameCommand::ChallengeDuel`'s `target` is now the player's target, or
+    0 for none. `Request::AnswerDuel` with `accept: false` is refused on
+    Titanium, and `Request::AutoDeclineDuel` and `Request::PlayerState` are
+    new. `WorldEvent::StatsChanged` now carries `stats::StatIncrease`.
+  - **Duel.** The program has no challenge window and no decline. A
+    challenge is news. `/duel` at the challenger accepts with
+    `OP_RequestDuel`, then `OP_DuelAccept`; anywhere else it challenges.
+    The session turns a challenge down on its own, as the program does
+    (0x3ea0, 12 bytes, reason 1 or 2), and keeps no pace, time-out or
+    distance test. The host's question stays, as a departure the host
+    owns: a yes sends what `/duel` sends, and a no sends nothing. The
+    Mac-era duel is held for row 11g. The ignore-list refusal (reason 0)
+    is not sent.
+  - **Duel ends (read R49-6d).** Only the player's side, the one challenged
+    or accepted, ends a duel. Its death is `Won` (with the program's 8-byte
+    0x3bad) or `Ended`. Its leaving is `Forfeited` (with 0x3bad) or
+    `Lapsed`. Its program's own refusal, 0x3ea0, now read as
+    `DuelUpdate::AutoDeclined`, is `TurnedDown`. New:
+    `DuelNews::{TurnedDown, Lapsed, Forfeited}`, `Request::DuelOver` and
+    `socials::titanium_duel_over`.
+  - **Stun.** A stun under divine aura (effect 40) is ignored (0x417839).
+    A stun during a stun doesn't extend it.
+  - **Corpse.** `OP_BecomeCorpse` places the spawn and stops it.
+  - **LFG.** Titanium's body says the program's range, 100, at +0xc.
+  - **Quest reward.** The coin order is cited to `EQEmu`'s
+    `QuestReward_Struct` and `AddMoneyToPP` (1d9cb5c7).
+  - **Stances.** `/sheathe` and `/aggressive` flip state bit 2 or 8 and send
+    `OP_PlayerStateAdd` or `OP_PlayerStateRemove`, on stock `EQEmu` only.
+    The first P99 use is attended.
+  - **Stats.** `OP_IncreaseStats` is read as the program reads it, 12 bytes
+    `{spawn, stat, amount}` (`stats::StatIncrease`, which replaces
+    `stats::StatChange`; breaking). `EQEmu`'s own 141-byte form is
+    unreadable, as it is to the program, and each one is counted as a gap
+    with its length.
+
 - A Titanium trap or door record (type 253, the new `TRAP_DAMAGE_KIND`)
   keeps its spell field in `Damage::spell_id`, since the Titanium program
   picks the line it prints for one by that field (0x4a56e3, read R49-3b).
@@ -33,6 +73,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     after every report sent, for the program's own damage line.
   - **Breaking:** `WorldEvent::HazardReported`; `ZoneHeat` on `LiquidHazard`
     and `Hazard`; `Hazard` is `Serialize`.
+
 - Apply Poison as the Titanium program does it (read R49-1, 6.493): the
   session sits a standing player, waits 10 s seated, then sends the request.
   Any posture change before then cancels it. The skill and posture refusals
