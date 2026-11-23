@@ -405,8 +405,6 @@ const VOICE_MACRO: &[Part] = &[Part(
     "the word after whom it is spoken to, and the last 60 bytes",
     Reason::Needless("EQEmu leaves them zero (zone/worldserver.cpp WorldServer::HandleMessage)"),
 )];
-/// What the session leaves unimplemented for an `EQMac` inspect request.
-const INSPECT_REQUEST: &[Part] = &[Part("the response", Reason::Planned(Step::Social))];
 /// What the session leaves unread of a challenge to a duel.
 const DUEL_REQUEST: &[Part] = &[Part(
     "the first spawn",
