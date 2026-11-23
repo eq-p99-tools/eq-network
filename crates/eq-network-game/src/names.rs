@@ -153,18 +153,20 @@ pub const SURNAME_FIELD: usize = 32;
 /// cut, and its case left as typed, since `EQEmu` and TAKP set it
 /// themselves (`Client::Handle_OP_Surname`). Only what the record cannot
 /// carry is refused; which letters a surname may have is the server's to
-/// judge, and the program's own rule is not read yet (inferred, program
-/// read R49-10).
+/// judge. A space is carried: the Titanium program sends a quoted word
+/// whole, spaces and all (read R49-10), and the server's name filter judges
+/// it.
 ///
 /// # Errors
-/// Refuses an empty surname or player name, a surname with a space, a
-/// control character or anything outside ASCII, and either one too long
-/// for its field.
+/// Refuses an empty surname or player name, a control character or
+/// anything outside ASCII, and either one too long for its field.
 pub fn surname_request(player: &str, surname: &str) -> Result<Vec<u8>> {
     ensure!(!surname.is_empty(), "a surname needs a word");
     ensure!(
-        surname.bytes().all(|byte| byte.is_ascii_graphic()),
-        "a surname is one word of plain text"
+        surname
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' '),
+        "a surname is plain text"
     );
     ensure!(
         surname.len() < SURNAME_FIELD,
@@ -267,21 +269,17 @@ pub fn set_title(title_id: u32, suffix: bool) -> Vec<u8> {
 /// Decodes the server's answer in `OP_Surname`: the request's record sent
 /// back, its word 1 where the surname was taken (`EQEmu` and TAKP) and 0
 /// where TAKP's name filter refused it. `EQEmu` refuses with a line of its
-/// own instead and sends no record.
+/// own instead and sends no record. The Titanium program takes any word
+/// but 0 as taken (read R49-10), and so does this.
 ///
 /// # Errors
-/// Rejects another length, another word and a surname that fills its
-/// field.
+/// Rejects another length and a surname that fills its field.
 pub(crate) fn surname_answer(body: &[u8]) -> Result<WorldEvent> {
     ensure!(
         body.len() == SURNAME_LENGTH,
         "invalid surname answer length"
     );
-    let accepted = match word(body, 64) {
-        0 => false,
-        1 => true,
-        _ => bail!("invalid surname answer"),
-    };
+    let accepted = word(body, 64) != 0;
     let field = &body[SURNAME_AT..];
     ensure!(field.contains(&0), "surname answer without its end");
     Ok(WorldEvent::SurnameAnswer {
@@ -613,14 +611,10 @@ mod tests {
         // Which marks a surname may have is the server's to judge.
         assert!(surname_request("Examplar", "Ex'ample").is_ok());
         assert!(surname_request("Examplar", "Ex-ample").is_ok());
-        for refused in [
-            "",
-            "Ex ample",
-            "Ex\tample",
-            "Exämple",
-            "Ex\0",
-            &"a".repeat(32),
-        ] {
+        // A quoted word's spaces go as typed (read R49-10).
+        let spaced = surname_request("Examplar", "Ex ample").unwrap();
+        assert_eq!(&spaced[68..76], b"Ex ample");
+        for refused in ["", "Ex\tample", "Exämple", "Ex\0", &"a".repeat(32)] {
             assert!(surname_request("Examplar", refused).is_err(), "{refused:?}");
         }
         assert!(surname_request("", "Exemplum").is_err());
@@ -647,9 +641,13 @@ mod tests {
                 last_name: "Exemplum".into(),
             }
         );
+        // Any other word is taken, as the program reads it (R49-10).
         let mut other = body.clone();
         other[64] = 2;
-        assert!(surname_answer(&other).is_err());
+        assert!(matches!(
+            surname_answer(&other).unwrap(),
+            WorldEvent::SurnameAnswer { accepted: true, .. }
+        ));
         let mut full = body.clone();
         full[68..100].fill(b'a');
         assert!(surname_answer(&full).is_err());

@@ -1236,7 +1236,9 @@ mod tests {
             let packet = packet.unwrap();
             assert_eq!((packet.opcode, &packet.body), (opcode, &body));
         }
-        assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
+        assert!(titanium(&Request::Surname("Ex\tample".into()), PLAYER).is_err());
+        // A quoted word's spaces go (read R49-10).
+        assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_ok());
         assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
     }
 

@@ -2208,14 +2208,16 @@ ready reaches the host as chat with string 393 and the server's color.
 Where the server type takes `/surname` (`Capability::Surnaming`: stock
 `EQEmu`, TAKP and Quarm, each from its own source and not yet checked live),
 send
-`GameCommand::Surname` with the word the player typed. It goes as typed:
-never cut, its case left for the server to set. Only what the record cannot
-carry is refused (`WorldEvent::SocialRefused`): an empty word, a space, a
-control character, anything outside ASCII, or 32 bytes and more. One request
-waits at a time, until its answer, a zone change, or 10 s. The server
-answers with `WorldEvent::SurnameAnswer` (`accepted`, and the surname it
-names) or with a line of its own for each refusal; an answer to no request
-is withheld. The name a taken surname gives the spawns comes from the zone's
+`GameCommand::Surname` with the word the host's `/surname` settled on (the
+Titanium program's is the first word, quotes taken whole, cut to 19 bytes:
+read R49-10). It goes as given, a quoted word's spaces included, its case
+left for the server to set. Only what the record cannot carry is refused
+(`WorldEvent::SocialRefused`): an empty word, a control character, anything
+outside ASCII, or 32 bytes and more. Nothing holds a second request: the
+program paces it by its own question. The server answers with
+`WorldEvent::SurnameAnswer` (`accepted`, any word but 0 as the program reads
+it, and the surname it names) or with a line of its own for each refusal;
+every answer reaches the host, asked or not, as the program shows each. The name a taken surname gives the spawns comes from the zone's
 own `WorldEvent::LastName`, not from the answer. `EQMac`'s request and
 answer (100 bytes) are listed by TAKP and Quarm (6.604 E5), and `EQMac`'s
 `OP_GMLastName` gives `WorldEvent::LastName` too. There the session also
@@ -2223,7 +2225,8 @@ refuses first what the servers' comments say the `EQMac` program refuses
 (inferred, never more than the server does): a character under level 20,
 and a surname over 19 characters. A character who already has a surname is
 the server's to refuse, with its own line. A surname stays for
-good, or for days, so a host sends it only on the player's own typed word.
+good, or for days, so a host sends it only on the player's own word,
+answered yes.
 
 ## Titles
 
