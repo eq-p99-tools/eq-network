@@ -1204,19 +1204,36 @@ capability, inventory owner or automatic EQMac loot-all behavior changes here.
 
 ## Spoken languages
 
-`chat::Tongue` is the language a message is spoken in and the speaker's skill
-in it. Its fields are private: a tongue is `Tongue::COMMON` (language 0, skill
-100) or `Tongue::spoken(&PlayerState, language)`, which takes the skill from
-the profile and is `None` when the profile lacks the language or holds no skill
-in it. No caller can send a language or a skill of its own.
-`SendChatInAdmission` carries one; `chat::encode_outbound_in` writes it
-(Titanium: language u32 at 128, skill u32 at 144; `EQMac`: u16s at 128 and
-134); `encode_outbound_for` and `SendChat` write the common tongue. RoF2 is
-refused. Which channels carry a chosen tongue is the host's choice: `EQEmu` and
-TAKP take the language from every channel, use their own record of the skill,
-and turn OOC, GM, broadcast and petition chat back to the common tongue
-themselves. What the official client writes in the skill field is inferred,
-pending program read R49-4b.
+`chat::Tongue` is the language a message is spoken in and the skill it carries.
+Its fields are private: a tongue is `Tongue::COMMON` (language 0, skill 100),
+`Tongue::spoken(&PlayerState, language, Speaker)` for a typed line, or
+`Tongue::unslurred(&PlayerState, language, game_master)` for the away reply.
+Both are `None` when the profile lacks the language or holds no skill in it.
+No caller can send a language or a skill of its own.
+
+The skill is worded as the Titanium program words it (read R49-4b):
+- the profile's skill less `PlayerState::intoxication >> 2`, never below 0,
+  language 0 included (`unslurred` takes nothing off);
+- 100 when `Speaker::game_master`;
+- -1 (`u32::MAX`) when the speaker is a game master and
+  `Speaker::log_server_word_zero` is set.
+
+`Tongue::skill()` is the wire's u32. `SendChatInAdmission` carries one;
+`chat::encode_outbound_in` writes it (Titanium: language u32 at 128, skill u32
+at 144; `EQMac`: u16s at 128 and 134, the skill cut to 16 bits, inferred);
+`encode_outbound_for` and `SendChat` write the common tongue. RoF2 is refused.
+The program sends the same tongue on every channel: `EQEmu` and TAKP take the
+language from every channel, use their own record of the skill, and turn OOC,
+GM, broadcast and petition chat back to the common tongue themselves.
+
+`PlayerState::intoxication: Option<u32>` is the profile's (Titanium u32 at
+128, `EQMac` byte at 4968; `None` on RoF2). No later change of it is decoded.
+
+`WorldRules::listener_garble: Option<bool>` is Titanium's `OP_LogServer` word
+at 16, which turns on the program's second garble stage by the listener's own
+skill (read R49-4c). `EQEmu` leaves it 0. The `EQMac` word at the same offset
+is `WorldRules::gibberish`, which TAKP's program reads the same way (read
+R49-4m).
 
 A received `OP_ChannelMessage` now fills `ChatEvent::language` and
 `ChatEvent::language_skill` on both generations, as sent: `EQEmu` sends 27 for a
