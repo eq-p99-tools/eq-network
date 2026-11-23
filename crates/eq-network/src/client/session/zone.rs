@@ -924,7 +924,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 116;
+    const KINDS: usize = 117;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1053,6 +1053,7 @@ mod tests {
             ClientCommand::GuildMakeLeader { .. } => 101,
             ClientCommand::GuildDemote { .. } => 102,
             ClientCommand::SetInspectNote { .. } => 91,
+            ClientCommand::Surname { .. } => 116,
         }
     }
 
@@ -1522,6 +1523,10 @@ mod tests {
                 session_id,
                 low: 1,
                 high: 6,
+            },
+            ClientCommand::Surname {
+                session_id,
+                surname: "Exemplum".into(),
             },
             ClientCommand::Emote {
                 session_id,

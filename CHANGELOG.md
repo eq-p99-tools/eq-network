@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Ask for a last name with `/surname` (gap 3.6, checklist 6.507).
+  `GameCommand::Surname` sends `OP_Surname`'s 100-byte record (Titanium
+  0x4668, `EQMac` 0xc441) with the surname as typed, under the new
+  `Capability::Surnaming`, which only stock `EQEmu` lists (from
+  `Client::Handle_OP_Surname`, not yet checked live; P99, TAKP and Quarm wait
+  for their own checks). The encoder refuses only what the record cannot
+  carry. One request waits at a time. The server's answer comes as
+  `WorldEvent::SurnameAnswer`, and one to no request is withheld. `EQMac`'s
+  196-byte `OP_GMLastName` now decodes to `WorldEvent::LastName`. Coverage:
+  both `OP_Surname` rows and `EQMac`'s `OP_GMLastName` are read.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request`,
+  `WorldEvent` and `Capability` (`Capability::ALL` holds 72).
 - Build RoF2's zone connection and entry against stock `EQEmu` from its
   public source, labelled inferred for RoF2 (6.501). `Rof2::connect_zone`
   speaks the modern transport, and `Rof2Admission` sends the 76-byte entry,

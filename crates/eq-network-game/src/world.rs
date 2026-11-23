@@ -659,12 +659,15 @@ pub enum Capability {
     ServerFiltersAtOnce,
     /// Accepting or declining a challenge to a duel.
     Dueling,
+    /// Asking for a last name: `/surname`
+    /// ([`crate::command::GameCommand::Surname`]).
+    Surnaming,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 72] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -736,6 +739,7 @@ impl Capability {
         Self::ServerFilters,
         Self::ServerFiltersAtOnce,
         Self::Dueling,
+        Self::Surnaming,
     ];
 }
 
@@ -1264,6 +1268,16 @@ pub enum WorldEvent {
         /// The character, by the name they spawned with.
         name: String,
         /// The new last name; empty when it was taken away.
+        last_name: String,
+    },
+    /// The server's answer to the player's `/surname`
+    /// ([`crate::names::surname_answer`]): whether it took the surname, and
+    /// the surname as it took it or refused it. Where taken, the zone's
+    /// [`WorldEvent::LastName`] changes the name the spawns carry.
+    SurnameAnswer {
+        /// Whether the server took it.
+        accepted: bool,
+        /// The surname the answer names.
         last_name: String,
     },
     /// The player has newly earned titles to choose from
@@ -1830,7 +1844,7 @@ pub enum WorldEvent {
         /// What the official string names, in its order: a member's name.
         arguments: Vec<String>,
     },
-    /// A roll, emote or assist was not sent, and why.
+    /// A roll, emote, assist or surname was not sent, and why.
     SocialRefused {
         /// Admission from the request.
         session_id: u64,
@@ -2531,6 +2545,7 @@ mod tests {
             Capability::ServerFilters => 68,
             Capability::ServerFiltersAtOnce => 69,
             Capability::Dueling => 70,
+            Capability::Surnaming => 71,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
