@@ -267,6 +267,13 @@ pub struct ClientConfig {
     /// Installed WLD boundaries for P99's local pads. The current server
     /// admission and any indexed server route still control resolution.
     pub installed_zone_boundaries: Option<std::sync::Arc<dyn InstalledZoneBoundaries>>,
+    /// The `EQMac` program's language minimum levels, read from the
+    /// installed program and checked ([`LanguageLevels::checked`]). TAKP and
+    /// Quarm train languages only with it (6.597); other server types ignore
+    /// it.
+    ///
+    /// [`LanguageLevels::checked`]: eq_network_game::training::LanguageLevels::checked
+    pub installed_language_levels: Option<eq_network_game::training::LanguageLevels>,
 }
 
 impl ClientConfig {
@@ -306,6 +313,7 @@ impl ClientConfig {
             sysinfo: None,
             sight_catalog: None,
             installed_zone_boundaries: None,
+            installed_language_levels: None,
         }
     }
 

@@ -22,6 +22,8 @@ pub struct ItemBonuses {
     pub stamina: i32,
     /// Fire resistance from field 20 of the Titanium item string record.
     pub fire_resistance: Option<i32>,
+    /// Cold resistance from field 16 of the Titanium item string record.
+    pub cold_resistance: Option<i32>,
     /// Raw agility modifier.
     pub agility: i32,
     /// Raw dexterity modifier.
@@ -46,8 +48,12 @@ impl ItemBonuses {
     pub fn has_modifiers(self) -> bool {
         self.fire_resistance
             .is_some_and(|resistance| resistance != 0)
+            || self
+                .cold_resistance
+                .is_some_and(|resistance| resistance != 0)
             || Self {
                 fire_resistance: None,
+                cold_resistance: None,
                 ..self
             } != Self::default()
     }
@@ -383,6 +389,7 @@ fn bonuses(fields: &[&str]) -> Result<ItemBonuses> {
         strength: value(21)?,
         stamina: value(22)?,
         fire_resistance: Some(value(20)?),
+        cold_resistance: Some(value(16)?),
         agility: value(23)?,
         dexterity: value(24)?,
         charisma: value(25)?,
@@ -528,6 +535,7 @@ mod tests {
         fields[1] = "Synthetic equipment";
         fields[4] = "123";
         for (index, value) in [
+            (16, "12"),
             (20, "-2"),
             (21, "-3"),
             (22, "4"),
@@ -548,6 +556,7 @@ mod tests {
                 strength: -3,
                 stamina: 4,
                 fire_resistance: Some(-2),
+                cold_resistance: Some(12),
                 agility: 5,
                 dexterity: 6,
                 charisma: 7,

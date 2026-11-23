@@ -180,6 +180,10 @@ pub(in crate::client) struct World {
     /// Installed geometry corroboration for same-zone zone lines, on the
     /// Titanium servers.
     pub(super) pad_boundaries: Option<std::sync::Arc<dyn crate::client::InstalledZoneBoundaries>>,
+    /// The `EQMac` program's language minimum levels, as the host read them
+    /// from the installed program; None, and on other generations, keeps
+    /// `EQMac` language training shut (6.597).
+    pub(super) language_levels: Option<eq_network_game::training::LanguageLevels>,
     /// The zone short name received on this admission.
     pub(super) zone_name: String,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
@@ -272,6 +276,7 @@ impl World {
             session_id,
             local_eqemu: false,
             pad_boundaries: None,
+            language_levels: None,
             zone_name: String::new(),
             player: PlayerRecord::default(),
             body: Body::default(),
@@ -327,6 +332,13 @@ impl World {
                     GameDialect::EqMac | GameDialect::Rof2 => false,
                 }
             })),
+            language_levels: config.installed_language_levels.clone().filter(|_| {
+                match GameDialect::from(config.protocol) {
+                    GameDialect::EqMac => true,
+                    // Only the `EQMac` program's table is read (6.597).
+                    GameDialect::Titanium | GameDialect::Rof2 => false,
+                }
+            }),
             // A same-zone zone line places the player locally on the
             // Titanium servers, as 0x48aaa6 does (read same-zone zone line,
             // 6.640). The Mac programs and RoF2 are unread, and refuse it.

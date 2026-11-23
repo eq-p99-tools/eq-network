@@ -1005,11 +1005,14 @@ mod shared {
 /// (recording checklist 6.332 for falls, 6.491 for drowning and lava; its
 /// first use there is the attended liquid row). R25's door contact report
 /// is not sent (6.491).
-const TITANIUM_HAZARDS: [Hazard; 4] = [
+const TITANIUM_HAZARDS: [Hazard; 5] = [
     Hazard::Falling,
     Hazard::Drowning,
     Hazard::Lava,
     Hazard::ZoneHeat,
+    // Velious water's cold, type 246, by the lava tick (reads R49-3 b and
+    // R49-26; checklist 6.491d). `EQEmu` applies 246 like any other type.
+    Hazard::Freezing,
 ];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`
@@ -1829,9 +1832,11 @@ impl ServerType for Quarm {
     /// faction admits the player; `OPGMTrainSkill` raises a skill by the
     /// 12-byte practice and says so with a silent skill update, and takes
     /// the scaled cost and a point without a word, which the session
-    /// projects as the server takes them. Languages are held until the
-    /// `EQMac` program's rule is read (6.597a). Source-derived, not live
-    /// (6.597).
+    /// projects as the server takes them. A language practice runs the
+    /// `EQMac` program's own gate and is resolved at once, as the program
+    /// does, since `IncreaseLanguageSkill` answers with only string 449;
+    /// without the installed program's language table it stays shut.
+    /// Source-derived, not live (6.597); the first public use is attended.
     fn training(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Training::eqmac()))
     }
@@ -2344,8 +2349,10 @@ impl ServerType for Takp {
     /// at EQMacEmu/Server 44afcbf, which match Quarm's: the 244-byte
     /// request and answer, the 12-byte practice answered by a silent skill
     /// update, the scaled cost and the point taken without a word, and the
-    /// 4-byte goodbye. Languages are held until the `EQMac` program's rule
-    /// is read (6.597a). Source-derived, not live (6.597).
+    /// 4-byte goodbye. Languages train as on Quarm, through the `EQMac`
+    /// program's gate and its at-once resolve (TAKP 44afcbf
+    /// `IncreaseLanguageSkill`). Source-derived, not live (6.597); the first
+    /// public use is attended.
     fn training(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Training::eqmac()))
     }
@@ -2549,7 +2556,8 @@ mod tests {
                     [
                         Capability::EnvironmentalDamage,
                         Capability::Drowning,
-                        Capability::LavaHeat
+                        Capability::LavaHeat,
+                        Capability::ColdWater
                     ],
                     "{protocol:?} local {local_only}"
                 );

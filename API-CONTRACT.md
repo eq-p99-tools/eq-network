@@ -26,8 +26,13 @@ program's own line (R49-3 e). `record` says whether the damage record
 followed, so a front end can expect its echo.
 
 Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
-`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
-sends it yet, since cold is unwired until R49-26.
+`LavaHeat`. Velious water's cold is `LiquidHazard::Cold`, sent as
+`Hazard::Freezing`, Titanium type 246, under the new `Capability::ColdWater`.
+It's offered on every Titanium session and shares the feet tick with lava
+(reads R49-3 b and R49-26: region kind 8, `VW`, at the origin). The host
+works out the amount, 50 − cold resist / 3 with a floor of 10. TAKP and Quarm
+don't offer it until a Mac read. **Breaking:** `LiquidHazard::Cold` and
+`Capability::ColdWater` on exhaustive enums; `Capability::ALL` grows to 91.
 
 **Breaking:**
 - `WorldEvent::HazardReported`;
@@ -1808,8 +1813,27 @@ fc75fcf and TAKP 44afcbf.
   - The session projects the purse as the server's copper-first take, or
     leaves it uncertain.
   - Points come from the profile (+156), and each level adds 5.
-- **Languages** are held: both servers accept any language 0 to 25, and the
-  `EQMac` program's own rule is unread (open row 6.597a).
+- **Languages** follow the `EQMac` program (0x47ea1f, 0x4efc95, 0x4ef6c7;
+  read 6.597). Both servers accept any language 0 to 25, check no race,
+  class or coins, take the server's cost and a point silently and answer
+  with only string 449 (`IncreaseLanguageSkill`), so the program's gate is
+  the only one.
+  - The host hands in the program's minimum-level table as
+    `ClientConfig::installed_language_levels`, read from the installed
+    program and checked by `LanguageLevels::checked`. Without it, language
+    training stays shut.
+  - The offer lists only the languages the player already speaks, each to
+    the guildmaster's byte for it.
+  - A practice runs the gate in the program's order, each refusal a
+    `TrainingRefused` with the program's line and nothing sent: too young
+    for the table (0x327c), no points (0x327d), mastered at 100 (0x327e,
+    naming the language's number), at the guildmaster's limit (0x327f),
+    then short of the program's figure in coins (0x2f21, naming the
+    guildmaster).
+  - A sent practice is resolved at once, as the program does:
+    `Trained { skill: 100 + n, value: from + 1, cost }`, with the server's
+    figure as the cost, a point spent and the purse paid. This is a
+    prediction; the next profile replaces it either way.
 - **Caps.** An offer's caps are each skill's most at the server's top level,
   not at the player's level, so a host shows a larger number than the player
   can reach now. A practice at the player's current most is refused with the
