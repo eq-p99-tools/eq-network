@@ -173,6 +173,10 @@ unreachable because validation refuses the generation:
   encoder for either generation, read by Titanium's readers under `RoF2`'s numbers. Whether the
   program reads the spell effect's last fields and plays the sound file as Titanium does is a
   read still owed.
+- Its targets, charms, rewards, reuse timers and skill answers (`rof2_answers`, 6.544): eight
+  messages with no encoder for either generation, read by Titanium's readers under `RoF2`'s
+  numbers. Whether the program reads the pick pocket answer's skill word and the begging
+  answer's first words is a read still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

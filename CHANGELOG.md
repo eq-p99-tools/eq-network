@@ -20,6 +20,58 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   text (new `sent_private` coverage rows). P99, TAKP, Quarm and RoF2 keep
   no journal; RoF2's coverage is unchanged. Nothing is sent yet.
   **Breaking:** `Message::Journal` and the five `WorldEvent` variants.
+- Read the rest of Titanium's alternate advancement, read only (6.547):
+  every `OP_SendAATable` header field (`Rank` gains `hotkey_sid`,
+  `hotkey_sid2`, `title_sid`, `desc_sid`, `cost`, `prereq_skill`,
+  `prereq_minpoints`, `kind` for the wire's `type`, `spellid`, `spell_type`,
+  `spell_refresh`, `max_level`, `last_id`, `next_id` and `cost2`, each raw
+  under its wire name), the profile's points spent, unspent and `expAA`,
+  `OP_AAExpUpdate` (0x5f58) and the server's reuse timers on `OP_AAAction`
+  (0x0681). The session publishes them as received and keeps no timers.
+  The feature is still offered on local `EQEmu` only; it opens to every
+  stock `EQEmu` session in a one-line follow-up once its local live row
+  passes, and stays off P99, TAKP, Quarm and RoF2.
+
+  **Breaking** (for the client repin):
+  - `alternate_advancement::Rank` gains the fifteen fields above.
+  - `alternate_advancement::Update` gains `Points(Option<Points>)`,
+    `Progress(Option<Progress>)` and `Timer(Timer)`, with the new structs
+    `Points`, `Progress` and `Timer`.
+  - `alternate_advancement::titanium_profile` returns `[Update; 2]`
+    (selections, then points), and `invalidated` returns `Option<Update>`
+    (`None` for an unreadable timer).
+
+- Take an item's song as the class's when the host's installed spell data
+  says so (gap 3.5, checklist 6.542, part 2). The new
+  `ItemUse::installed_class_spell: Option<bool>` is the host's word; with
+  `Some(true)` a Bard's `/stopsong` sends the stop for an item's song of a
+  class spell not memorized, as the program does (0x40db0b, read R16), and
+  with `Some(false)` it ends here only. `None` keeps the memorized test.
+  The word only chooses for a song the session already keeps; it never
+  starts one or sends a stop alone. **Breaking:** `ItemUse` gains the field.
+- Read RoF2's targets, charms, cash rewards, linked reuse timers and the
+  answers to begging, pick pocketing and bandaging as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.544). The new `rof2_answers` module
+  reads `OP_TargetCommand` (0x58e2), `OP_TargetHoTT` (0x0272), `OP_Charm`
+  (0x5d92), `OP_CashReward` (0x5f7a), `OP_LinkedReuse` (0x1619),
+  `OP_Begging` (0x6703), `OP_PickPocket` (0x39e8) and `OP_Bind_Wound`
+  (0x0386), which have no encoder for either generation, through
+  Titanium's readers into Titanium's events. Titanium's begging and pick
+  pocket reader is now the named `abilities::ask_answer`, taking the
+  ability, and its bandage reader `bind_wound::answer`. Coverage lists the
+  eight. An admitted RoF2 session hands the host each and still sends and
+  offers nothing.
+- Keep a Bard's gem cast as the song only over 100 ms once the player's
+  own `OP_BeginCast` says its time (gap 3.5, checklist 6.442 / 6.542).
+  The 100 ms rule is the program's (0x411f3d, read R16); the time is the
+  one the server sends (stock `EQEmu` sends the base cast time to the
+  caster too). Until the start comes a gem cast is taken as a song, and with
+  none it stays one, as before. Another spawn's start, another spell's, or
+  an item's song (decided by its record's cast time) changes nothing.
+  Whether 0x411f3d reads the base or the focused time, and whether P99
+  echoes the start to the caster, are inferred (R49-21a). The song state
+  still decides only what `/stopsong` and a Bard's `/stopcast` send; it
+  holds nothing and never touches movement.
 
 - Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
   sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`

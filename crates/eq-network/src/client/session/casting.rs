@@ -328,16 +328,25 @@ impl CastGuard {
 /// The program's song state (actor +0xf98 and +0x104c, read R16): the spell
 /// of the player's own last cast start, and whether an item cast it. No song
 /// ends on its own; the server's cast update, a stop, or a new cast ends it.
-/// The program's memorize path (0x308e), where a Bard memorizing a spell stops
-/// the song with the stop sent and restarts that gem's, is not followed
-/// (6.442).
+/// A gem's song is kept only over 100 ms once the player's own cast start
+/// says its time. The program's memorize path (0x308e), where a Bard
+/// memorizing a spell stops the song with the stop sent and restarts that
+/// gem's, is not followed (6.442, R49-21c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Song {
     spell: u32,
     item: bool,
+    /// A gem's song whose own cast start has not come yet: only that first
+    /// start decides it (6.542).
+    awaiting_start: bool,
+    /// For an item's song, the host's word from installed spell data on
+    /// whether its spell is the class's (`ItemUse::installed_class_spell`);
+    /// `None` falls back to the memorized test.
+    installed_class_spell: Option<bool>,
 }
 
-/// The shortest cast the program keeps as a song: over 100 ms (read R16).
+/// The longest cast the program does not keep as a song: a cast is the
+/// song only over 100 ms (0x411f3d, read R16).
 const SONG_CAST_MS: u32 = 100;
 
 /// Casts spells and item effects for the player, one at a time.
@@ -413,14 +422,16 @@ impl Casting {
         let Some(song) = self.song else {
             return out.log.diagnostic("No song is playing".into());
         };
-        // A memorized spell is taken as the class's (6.442), so an item's
-        // song of a class spell not memorized ends here unsent, where the
-        // program sends the stop.
-        if !world
-            .player
-            .as_ref()
-            .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
-        {
+        // The host's installed spell data says whether an item's song is
+        // of the class's spell (6.542); without it, a memorized spell is
+        // taken as the class's (6.442), exact for a gem's song.
+        let class_spell = song.installed_class_spell.unwrap_or_else(|| {
+            world
+                .player
+                .as_ref()
+                .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
+        });
+        if !class_spell {
             self.song = None;
             return out
                 .log
@@ -479,6 +490,27 @@ impl Casting {
         }
     }
 
+    /// The player's own cast start, with the cast time the server sends
+    /// (`EQEmu`'s base time, `Mob::DoCastSpell`), keeps a gem's song only over
+    /// 100 ms, as 0x411f3d keeps a cast (read R16). Until it comes, a gem
+    /// cast is taken as a song; with none, it stays one. Whether 0x411f3d
+    /// reads the base or the focused time is unread (R49-21a, 6.442). Only
+    /// the first own start of that spell after the gem's send decides; a
+    /// later one, such as an item's click of the same spell, changes
+    /// nothing. An item's song was decided by its record's own cast time.
+    fn song_begun(&mut self, spell: u32, duration_ms: u32) {
+        let Some(song) = self.song.as_mut() else {
+            return;
+        };
+        if song.item || song.spell != spell || !song.awaiting_start {
+            return;
+        }
+        song.awaiting_start = false;
+        if duration_ms <= SONG_CAST_MS {
+            self.song = None;
+        }
+    }
+
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -515,11 +547,13 @@ impl Casting {
             match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
-                    // The session does not know a gem's cast time; every gem
-                    // cast is taken as over 100 ms (6.442).
+                    // A gem cast is taken as a song until the player's own
+                    // cast start says its time (`song_begun`, 6.442).
                     self.song = Some(Song {
                         spell: *spell_id,
                         item: false,
+                        awaiting_start: true,
+                        installed_class_spell: None,
                     });
                     return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
@@ -579,6 +613,8 @@ impl Casting {
                     self.song = Some(Song {
                         spell: spell_id,
                         item: true,
+                        awaiting_start: false,
+                        installed_class_spell: request.installed_class_spell,
                     });
                 }
                 self.submitted(spell_id, Source::Item, world, out)?;
@@ -748,6 +784,16 @@ impl Feature for Casting {
         })) = message
         {
             self.song_reported(*spell_id, world);
+        }
+        if let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            duration_ms,
+        })) = message
+        {
+            if world.is_player(*caster_id) {
+                self.song_begun(u32::from(*spell_id), *duration_ms);
+            }
         }
         match message {
             Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,
@@ -964,6 +1010,7 @@ mod tests {
         world.inventory = inventory.into();
         let now = Instant::now();
         let item = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 5,
             revision: world.inventory.revision(),
@@ -1103,6 +1150,7 @@ mod tests {
         world.player.admit(testing::player(7));
         world.posture.observed(PostureState::Lying);
         let item = ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 3,
             session_id: 5,
             revision: 1,
@@ -1190,6 +1238,7 @@ mod tests {
     fn item_activations_share_cast_exclusion_without_blocking_posture_interrupts() {
         let now = Instant::now();
         let request = ClientCommand::UseItem(eq_network_game::inventory::ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: 12,
             revision: 1,

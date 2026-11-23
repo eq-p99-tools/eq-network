@@ -1,5 +1,17 @@
 # API and integration contracts
 
+## An item's song and the host's spell data
+
+`ItemUse::installed_class_spell: Option<bool>` is the host's word, from its
+installed spell data, on whether the clicked item's spell is the player's
+class's (spells fields 104-119 below 255 for that class). A host without an
+installed record (no spell data, or P99's replayed definitions) sends
+`None`. The session uses it only for a song it is already keeping from that
+click, to choose between sending the Bard's stop and ending the song here;
+it never starts a song, names a spell or sends a stop with no song. `None`
+keeps the memorized test (6.442, 6.542). **Breaking:** every `ItemUse`
+literal names the field.
+
 ## Server filters
 
 `ClientConfig::server_filters` is the set a character starts with; the
@@ -497,7 +509,26 @@ Post-admission facts publish immediately as singleton batches. This reduces
 admission event amplification without enlarging the viewer queue or proving
 that all possible queue saturation is prevented.
 
-Malformed packets withdraw their affected observation. An unidentified
+Since checklist 6.547 the facts also carry the rest of the Titanium AA
+state, each field raw under its wire name: every `OP_SendAATable` header
+field (the string ids, `cost`, `cost2`, the prerequisite pair, `type`,
+`spellid`, the timer id `spell_type`, `spell_refresh`, `max_level`,
+`last_id`, `next_id`); the profile's `aapoints_spent`, `aapoints` and `expAA`
+as `Update::Points`; the 12-byte `OP_AAExpUpdate` 0x5f58 as
+`Update::Progress` (experience as the server scales it to 0..330, unspent
+points and the split percentage); and the server's 12-byte `OP_AAAction`
+0x0681 as `Update::Timer` {`begin`, `ability`, `end`}, where `ability` is a
+definition's `spell_type` and `end` is the server's clock when it sent the
+timer, not a deadline. The session does no timer arithmetic and keeps no
+timers; it publishes each as received. Points, experience and timers change
+no effect, so they bring no `LiquidHazardRevision`.
+
+Malformed packets withdraw their affected observation. An unreadable
+profile withdraws its points with its selections (`Update::Points(None)`),
+unreadable experience withdraws the last (`Update::Progress(None)`), and an
+unreadable timer withdraws nothing: no timer id in it can be trusted. Each
+unreadable line carries no payload bytes; the profile, experience and
+timer lines name the length. An unidentified
 malformed definition withdraws cached definitions; `OP_ClearAA` withdraws the
 whole AA view until replacement facts arrive. These withdrawals never supply
 an empty selection. The local effect-list bound is 256 records per definition;

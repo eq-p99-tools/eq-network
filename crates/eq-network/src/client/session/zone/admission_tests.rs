@@ -837,6 +837,7 @@ impl Script {
             .chain(rof2_pools())
             .chain(rof2_world())
             .chain(rof2_socials())
+            .chain(rof2_answers())
         {
             script.packet(opcode, body);
         }
@@ -1160,6 +1161,28 @@ fn rof2_socials() -> Vec<(u16, Vec<u8>)> {
         (0x127f, words(&[1500, 0.25f32.to_bits()])),
         (0x5770, b"testsound.mp3\0".to_vec()),
         (0x5936, nimbus),
+    ]
+}
+
+/// A target, a target's target, a charm, a cash reward, a linked reuse
+/// timer, a beg's and a pick's answers and a bandage's, as stock `EQEmu`
+/// sends them to `RoF2` (6.544).
+fn rof2_answers() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let mut pick = words(&[4321, 77, 150, 5, 0]);
+    let mut item = vec![0; 64];
+    item[..11].copy_from_slice(b"Test Dagger");
+    pick.extend(item);
+    vec![
+        (0x58e2, words(&[77])),
+        (0x0272, words(&[553])),
+        (0x5d92, words(&[4321, 77, 1])),
+        (0x5f7a, words(&[4, 3, 2, 1])),
+        (0x1619, words(&[7, 5030, 5000])),
+        (0x6703, words(&[0, 0, 0, 3, 7])),
+        (0x39e8, pick),
+        (0x0386, words(&[77, 1])),
     ]
 }
 
@@ -1774,6 +1797,63 @@ fn an_admitted_rof2_session_hands_the_host_its_rolls_assists_and_effects() {
     }
     // The roller's name reaches the host in the event only.
     assert!(!diagnostics.iter().any(|line| line.contains("Testroller")));
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_targets_rewards_and_answers() {
+    use eq_network_game::{
+        abilities::{Ability, AskAnswer, AskOutcome},
+        bind_wound::{BindWoundEnd, BindWoundUpdate},
+    };
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Target(Some(77)) => Some("target"),
+            WorldEvent::TargetOfTarget(Some(553)) => Some("target of target"),
+            WorldEvent::Charm(charm) if charm.owner_id == Some(4321) && charm.pet_id == 77 => {
+                Some("charm")
+            }
+            WorldEvent::Reward(reward) if reward.coins.platinum == 1 => Some("reward"),
+            WorldEvent::LinkedReuse(reuse) if reuse.timer == 7 => Some("reuse"),
+            WorldEvent::AskAnswered(AskAnswer {
+                ability: Ability::Begging,
+                ..
+            }) => Some("beg"),
+            WorldEvent::AskAnswered(AskAnswer {
+                ability: Ability::PickPockets,
+                outcome: AskOutcome::Item(item),
+            }) if item == "Test Dagger" => Some("pick"),
+            WorldEvent::BindWound(BindWoundUpdate::Ended(BindWoundEnd::Complete)) => {
+                Some("bandage")
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            "target",
+            "target of target",
+            "charm",
+            "reward",
+            "reuse",
+            "beg",
+            "pick",
+            "bandage"
+        ]
+    );
+    for opcode in [
+        "0x58e2", "0x0272", "0x5d92", "0x5f7a", "0x1619", "0x6703", "0x39e8", "0x0386",
+    ] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The item's name reaches the host in the event only.
+    assert!(!diagnostics.iter().any(|line| line.contains("Test Dagger")));
 }
 
 #[test]

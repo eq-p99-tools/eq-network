@@ -62,6 +62,7 @@ impl CastStream {
         inventory.apply(InventoryUpdate::Snapshot(vec![item]));
         self.world.inventory = inventory.into();
         ClientCommand::UseItem(ItemUse {
+            installed_class_spell: None,
             request_id: 1,
             session_id: self.world.session_id,
             revision: self.world.inventory.revision(),

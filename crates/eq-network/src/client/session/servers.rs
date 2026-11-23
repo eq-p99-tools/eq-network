@@ -1279,6 +1279,8 @@ impl ServerType for EqEmu {
         true
     }
 
+    /// Local only until #310's local live row passes; then a one-line
+    /// follow-up offers it on every stock `EQEmu` session (checklist 6.547).
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
             offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
@@ -2051,6 +2053,7 @@ mod tests {
             ServerProtocol::Project1999,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
         ] {
             assert!(server_type(protocol).environmental_aa(&setup).is_none());
         }
