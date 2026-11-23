@@ -1068,6 +1068,7 @@ impl Feature for Motion {
                     .with_falls(self.falls)
                     .with_rooted_jumps(out.wire.dialect().root().jumps)
                     .with_heading_snapshots(out.wire.dialect().supports_heading_snapshots())
+                    .with_airborne_speed(out.wire.dialect().sends_airborne_speed())
                     .with_swimming(
                         self.swimming
                             && match out.wire.dialect() {

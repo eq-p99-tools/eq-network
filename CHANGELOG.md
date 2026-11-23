@@ -16,6 +16,64 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     accepted sample that stands on a boat, and leaves, unreliable, after two
     unlinked samples in a row. Titanium keeps its 1 s tick. Samples stand in
     for the program's frames (inferred).
+- A jump or fall on land sends the player's own vertical speed, as the
+  Titanium program's update does (0x465244, read R49-27 (c), checklist
+  6.617). Other clients draw our jumps and falls from it. Until now we sent
+  a vertical speed of 0, so they drew us standing.
+  - **Breaking:** `MovementRequest` gains `vertical_speed: Option<f32>`
+    (with the builder `airborne_at`). It is the host's own vertical speed at
+    the sample, in units a second, up positive, and none on the ground and
+    on landing.
+  - The session sends that speed, bounded by the read jump's take-off speed
+    and the derived fall limit, and 0 when none is given. This is
+    capture-derived: the official recordings show the speed at each update,
+    and 0 on the ground and on landing.
+  - New `GameDialect::sends_airborne_speed` and
+    `MotionSession::with_airborne_speed`. Titanium sends the speed, and RoF2
+    is inferred to. The Mac-era field is unread, so the Mac era keeps
+    sending 0.
+  - Departures, labelled: 0 over bumpy ground, where the program sends
+    small values, and 0 in flight, which is unread.
+- Begging and Pick Pockets reach as the Titanium program measures them
+  (read R49-31 b, checklist 6.631): from origin to origin, flat in (x, y),
+  height ignored, at most 15, rather than the bandage's reach. **Breaking:**
+  `Reaches` gains a public field, `beg_pick`; code that builds a `Reaches`
+  by literal must add it. The Mac-era program keeps the bandage's reach
+  until it is read. P99 sees only this reach change: its world's ruleset
+  isn't 4, so the ruleset-4 player lines don't apply there.
+- Pick Pockets on a corpse, or any target that is neither a player nor an
+  NPC, is refused with the program's line 0x3076 (read R49-31 e) rather
+  than this library's own words. Begging's invisibility test and the trap
+  skills' class 62 are now read (R49-31 a, c), no longer inferred.
+- Train languages on TAKP and Quarm as the `EQMac` program does (read
+  6.597, from TAKP 44afcbf and Quarm fc75fcf `IncreaseLanguageSkill`).
+  - New: `training::{LanguageLevels, EQMAC_TABLE_LANGUAGES,
+    EQMAC_TABLE_RACES, eqmac_language_trainable, eqmac_program_cost}` and
+    `ClientConfig::installed_language_levels`, the program's minimum-level
+    table a host reads from the installed program. No table values are
+    kept here; without one, language training stays shut.
+  - The offer lists the languages the player speaks; a practice runs the
+    program's gate in its order and refuses with its lines (0x327c to
+    0x327f, 0x2f21), sending nothing; a sent practice is resolved at once
+    as the program does, a prediction the next profile replaces.
+  - **Breaking:** `WorldEvent::TrainingRefused` gains `string_id` and
+    `arguments`.
+  - Source-derived, not live; the first public use is attended.
+
+- Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
+  read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
+  192-byte body with the event's reason at +4, carrying where the player
+  is at that moment (heading cut to a whole number). Sent after `/roleplay`
+  (0x0a) and `/anonymous` (0x0b), the player's close of a merchant's window
+  (0x14; which window the program's site is, is inferred) and the server's
+  end of an open loot (0x15). None while the player is dead or has no
+  spawn, or while a merchant's window or a trade is open; the program's
+  other gates are unread. P99, the Mac-era types and RoF2 send none: P99
+  waits on an official capture showing 0x736b.
+  - **Breaking:** `Request::EventSave { save, reason }`, with
+    `zoning::titanium_event_save`, `zoning::EVENT_SAVE_OPCODE` and
+    `zoning::save_reason`. `Request::EventSave` is refused on `EQMac`.
+
 - The chat server login and link follow the Titanium program (read R49-12 a,
   checklist 6.616).
   - **The login's bytes change on the wire:** after the key and its NUL
@@ -107,7 +165,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the inventory whenever it arrives (read R49-36 a). Whether it clears the
   last zone's items at zone-in is still unread, so that the original client
   then holds nothing stays inferred.
-
+- Velious water's cold as the Titanium program reports it (reads R49-3 b and
+  R49-26; checklist 6.491d). New `LiquidHazard::Cold`, sent as type 246
+  (`Hazard::Freezing`) with its damage record, on the lava's feet tick, and
+  `Capability::ColdWater`, offered on every Titanium session. **Breaking:**
+  both enums are exhaustive, and `Capability::ALL` grows to 92.
+  - `ItemBonuses::cold_resistance`, from field 16 of the Titanium item
+    record (`None` on `EQMac`), and
+    `TitaniumEnvironment::base_cold_resistance`, the profile dword at byte
+    12872 that the program's cold base reads (read R49-3c). **Breaking:**
+    both structs gain a public field.
 - Slower water's own set in the swim grant, as read R49-26 reads the Titanium
   region classifier (0x435ec9; checklist 6.483).
   - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for

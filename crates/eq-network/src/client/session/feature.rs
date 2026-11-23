@@ -179,6 +179,10 @@ pub(in crate::client) struct World {
     local_eqemu: bool,
     /// Installed geometry corroboration, enabled only for the P99 profile.
     pub(super) pad_boundaries: Option<std::sync::Arc<dyn crate::client::InstalledZoneBoundaries>>,
+    /// The `EQMac` program's language minimum levels, as the host read them
+    /// from the installed program; None, and on other generations, keeps
+    /// `EQMac` language training shut (6.597).
+    pub(super) language_levels: Option<eq_network_game::training::LanguageLevels>,
     /// The zone short name received on this admission.
     pub(super) zone_name: String,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
@@ -256,6 +260,9 @@ pub(in crate::client) struct World {
     pub(super) belt: Option<
         Box<[Option<eq_network_game::bandolier::BeltItem>; eq_network_game::bandolier::BELT_SLOTS]>,
     >,
+    /// What the Titanium program's event saves read (`OP_Save`; read
+    /// R49-22g, checklist 6.615); see [`super::saves`].
+    pub(super) saves: super::saves::Gates,
     /// What the session itself made happen, for every feature and the host
     /// to hear next; see [`World::happened`].
     news: Vec<Message>,
@@ -268,6 +275,7 @@ impl World {
             session_id,
             local_eqemu: false,
             pad_boundaries: None,
+            language_levels: None,
             zone_name: String::new(),
             player: PlayerRecord::default(),
             body: Body::default(),
@@ -299,6 +307,7 @@ impl World {
             riding: std::sync::Arc::default(),
             carried_from: super::riders::CarriedFrom::Elsewhere,
             belt: None,
+            saves: super::saves::Gates::default(),
             news: Vec::new(),
         }
     }
@@ -322,12 +331,33 @@ impl World {
                     GameDialect::EqMac | GameDialect::Rof2 => false,
                 }
             })),
+            language_levels: config.installed_language_levels.clone().filter(|_| {
+                match GameDialect::from(config.protocol) {
+                    GameDialect::EqMac => true,
+                    // Only the `EQMac` program's table is read (6.597).
+                    GameDialect::Titanium | GameDialect::Rof2 => false,
+                }
+            }),
             pad_boundaries: match config.protocol {
                 ServerProtocol::Project1999 => config.installed_zone_boundaries.clone(),
                 ServerProtocol::EqEmu
                 | ServerProtocol::Quarm
                 | ServerProtocol::Takp
                 | ServerProtocol::EqEmuRof2 => None,
+            },
+            saves: super::saves::Gates {
+                // Stock EQEmu saves on any `OP_Save` (`Handle_OP_Save`).
+                // P99's is built, but off until an official-client capture
+                // there shows one of these events' saves (6.615 V2). The
+                // Mac and RoF2 programs' event saves are unread.
+                taken: match config.protocol {
+                    ServerProtocol::EqEmu => true,
+                    ServerProtocol::Project1999
+                    | ServerProtocol::Quarm
+                    | ServerProtocol::Takp
+                    | ServerProtocol::EqEmuRof2 => false,
+                },
+                merchant_open: false,
             },
             ..Self::new(session_id)
         }

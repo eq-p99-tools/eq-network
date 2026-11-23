@@ -433,6 +433,15 @@ pub enum Request {
     /// Ask the zone the player is leaving to save them, once it approves
     /// the transfer. `EQMac` sends its own fixed save and ignores these.
     SaveOnZone(zoning::Save),
+    /// Ask the zone to save the player on an event, with the event's reason
+    /// byte (Titanium's `OP_Save`; read R49-22g). Only the Titanium client
+    /// sends it.
+    EventSave {
+        /// Where the player is now, and the boat they ride.
+        save: zoning::Save,
+        /// The event's reason ([`zoning::save_reason`]).
+        reason: u8,
+    },
     /// Take the player's own spawn out of the zone they are leaving: the
     /// last word to it before the world server.
     Depart,
@@ -814,6 +823,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             reason,
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone(save) => zoning::titanium_save_on_zone(save),
+        Request::EventSave { save, reason } => zoning::titanium_event_save(save, *reason),
         Request::RangedAttack { target_id, kind } => {
             crate::combat::ranged::titanium(*target_id, *kind)?
         }
@@ -959,6 +969,8 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             ..
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
         Request::SaveOnZone(_) => Ok(crate::quarm::save_on_zone()),
+        // The Mac program's event saves are unread (6.615).
+        Request::EventSave { .. } => anyhow::bail!("Event saves are unavailable for EQMac"),
         Request::DestroyCursor => anyhow::bail!("Cursor destruction is unavailable for EQMac"),
         Request::DropCursor => anyhow::bail!("Cursor dropping is unavailable for EQMac"),
         Request::MoveItem { from, to, quantity } => {

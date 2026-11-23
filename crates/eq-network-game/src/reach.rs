@@ -56,6 +56,8 @@ pub struct Reaches {
     pub bandage: Reach,
     /// The program's string for a player too far to bandage.
     pub too_far_to_bandage: u32,
+    /// Begging and Pick Pockets, from the player's origin to the target's.
+    pub beg_pick: Reach,
 }
 
 /// How often the TAKP program checks that an open world container is still
@@ -94,6 +96,15 @@ pub const TITANIUM: Reaches = Reaches {
         inclusive: true,
     },
     too_far_to_bandage: 12418,
+    // Begging and Pick Pockets take 0x439d16(you, target, 0), which calls
+    // 0x439c41 with 0 for its last argument: the flat (x, y) distance of
+    // the two origins, height ignored, at most 15 ([0x640e28]; read R49-31
+    // b). It isn't the bandage's rule (checklist 6.631).
+    beg_pick: Reach {
+        distance: 15.0,
+        flat: true,
+        inclusive: true,
+    },
 };
 
 /// The TAKP program's reaches (TAKP read T6 and T8).
@@ -130,6 +141,13 @@ pub const EQMAC: Reaches = Reaches {
         inclusive: false,
     },
     too_far_to_bandage: 420,
+    // Unread for the Mac-era program: the bandage's reach, as before
+    // (checklist 6.631).
+    beg_pick: Reach {
+        distance: 15.0,
+        flat: true,
+        inclusive: false,
+    },
 };
 
 #[cfg(test)]

@@ -26,8 +26,13 @@ program's own line (R49-3 e). `record` says whether the damage record
 followed, so a front end can expect its echo.
 
 Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
-`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
-sends it yet, since cold is unwired until R49-26.
+`LavaHeat`. Velious water's cold is `LiquidHazard::Cold`, sent as
+`Hazard::Freezing`, Titanium type 246, under the new `Capability::ColdWater`.
+It's offered on every Titanium session and shares the feet tick with lava
+(reads R49-3 b and R49-26: region kind 8, `VW`, at the origin). The host
+works out the amount, 50 − cold resist / 3 with a floor of 10. TAKP and Quarm
+don't offer it until a Mac read. **Breaking:** `LiquidHazard::Cold` and
+`Capability::ColdWater` on exhaustive enums; `Capability::ALL` grows to 91.
 
 **Breaking:**
 - `WorldEvent::HazardReported`;
@@ -950,6 +955,24 @@ active. The progress enum is non-exhaustive, and its new serialized value is
 `recording`. Errors in the handshake itself continue to follow the existing
 session error policy.
 
+## Titanium event saves
+
+On stock `EQEmu` Titanium, four existing actions now put one more packet on
+the wire, after their own: `ClientCommand::ToggleRoleplay` and
+`ClientCommand::ToggleAnonymous` (after the appearance update), the player's
+`ClientCommand::Shop` close of an open merchant's window (after the close),
+and the server's end of an open loot (`LootUpdate::Closed`). Each sends
+`OP_Save` (0x736b, 192 bytes): the zone save's body with the event's reason
+at +4 (`zoning::save_reason`: 0x0a, 0x0b, 0x14, 0x15), carrying the own
+spawn's place at that moment, the heading cut to a whole number. Only stock
+`EQEmu` sends it. P99 is built and held off until an official-client capture
+there shows it; Quarm, TAKP and RoF2 send none, and `Request::EventSave` is
+refused on `EQMac`. It is withheld, with a diagnostic and nothing sent, when
+the player has no own spawn or place yet, is dead, or has a merchant's window
+or a trade open. A refused or paced toggle, and a loot close with no loot
+open, send no save. Stock `EQEmu` saves the character on any `OP_Save` and
+reads nothing in the body. Reads R49-22g and R49-22h, checklist 6.615.
+
 ## Modern session termination
 
 `eq_network_transport::modern::SessionTermination` is an additive typed error
@@ -1789,8 +1812,27 @@ fc75fcf and TAKP 44afcbf.
   - The session projects the purse as the server's copper-first take, or
     leaves it uncertain.
   - Points come from the profile (+156), and each level adds 5.
-- **Languages** are held: both servers accept any language 0 to 25, and the
-  `EQMac` program's own rule is unread (open row 6.597a).
+- **Languages** follow the `EQMac` program (0x47ea1f, 0x4efc95, 0x4ef6c7;
+  read 6.597). Both servers accept any language 0 to 25, check no race,
+  class or coins, take the server's cost and a point silently and answer
+  with only string 449 (`IncreaseLanguageSkill`), so the program's gate is
+  the only one.
+  - The host hands in the program's minimum-level table as
+    `ClientConfig::installed_language_levels`, read from the installed
+    program and checked by `LanguageLevels::checked`. Without it, language
+    training stays shut.
+  - The offer lists only the languages the player already speaks, each to
+    the guildmaster's byte for it.
+  - A practice runs the gate in the program's order, each refusal a
+    `TrainingRefused` with the program's line and nothing sent: too young
+    for the table (0x327c), no points (0x327d), mastered at 100 (0x327e,
+    naming the language's number), at the guildmaster's limit (0x327f),
+    then short of the program's figure in coins (0x2f21, naming the
+    guildmaster).
+  - A sent practice is resolved at once, as the program does:
+    `Trained { skill: 100 + n, value: from + 1, cost }`, with the server's
+    figure as the cost, a point spent and the purse paid. This is a
+    prediction; the next profile replaces it either way.
 - **Caps.** An offer's caps are each skill's most at the server's top level,
   not at the player's level, so a host shows a larger number than the player
   can reach now. A practice at the player's current most is refused with the
@@ -2173,6 +2215,37 @@ grounded movement cannot qualify a sample for diagonal credit during that
 ascent. The tracker expires as accepted samples pass the jump apex. It does
 not establish a landing. None represents a native movement
 rule, safe server threshold or detection guarantee.
+
+A sample's velocity fields carry the player's own velocity in the
+generation's wire scale (checklist 6.617). A swim stroke carries all three,
+as before. On land, `MovementRequest::vertical_speed` is the host's own
+vertical speed at the moment of the sample, in units a second with up
+positive: some while the host has the player in the air, and none on the
+ground and on the sample that lands. A rider's speed is its own and leaves
+out the boat. Where the generation sends it
+(`GameDialect::sends_airborne_speed`: Titanium, and RoF2 inferred), the
+session sends that speed. It is bounded up to the read jump's take-off speed
+(0 without a read jump) and down to the fall limit derived from the zone's
+gravity (`movement::fall_speed`), and a non-number is refused. With none
+given, the session sends 0.
+
+Titanium builds its update from the actor's own velocity fields
+(`eqgame.exe` 0x465244, read R49-27 (c)), and other clients' pickers draw the
+rise and the fall from that vertical speed (0x44fa8f). Capture-derived from
+kept official recordings: the field is the speed at the moment of each
+update (a jump sends +1.968, then -0.341 a tick, where the interval means
+were +0.994 and -0.497), and it is 0 on every grounded update and on the
+landing.
+
+Departures and unread cases:
+- **Bumpy ground:** the program also sends small values (-0.11 to -0.72 a
+  tick) while walking over bumpy ground. The session sends 0 there.
+- **Flight and levitation:** the session sends 0, unread.
+- **Mac era:** the program's field is unread, so the session keeps sending 0
+  on land.
+
+Sending 0 in the air was our departure until now, and the change applies on
+every Titanium server type, P99 included.
 
 `SetBookOptions { session_id, memorize_without_sitting }` is an explicit
 memorization departure: no automatic sitting and no local five-second
