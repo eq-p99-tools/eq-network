@@ -1796,6 +1796,45 @@ program's title window is read (R49-14). `EQMac` and RoF2 build neither
 request: `EQMac` has no titles, and RoF2's numbers are owed (inferred for
 RoF2, 6.489).
 
+## Task journal
+
+Stock `EQEmu` sessions (Titanium) read the task journal the zone sends
+(gap list section 5, recording checklist 6.546, from `EQEmu`'s source and
+not yet checked live). P99, TAKP, Quarm and RoF2 keep none; there is no
+capability and nothing is sent. The host hears, each with the admission's
+`session_id`:
+
+- `WorldEvent::TaskDescribed { description }`: an entry's `TaskDescription`
+  in its `TaskSlot` (the one `TaskKind::Task` slot 0, or a `TaskKind::Quest`
+  slot 0 to 18), with its title, the server's open-journal flag, duration,
+  duration code and start time as sent (the session does no clock
+  arithmetic), description and `Rewards`. A description of another task in
+  a slot forgets that slot's earlier steps.
+- `WorldEvent::TaskStepUpdated { activity }`: one step, `Step::Hidden` or
+  `Step::Shown(Objective)` with its goal and count, for an entry the
+  session holds. `EQEmu` sends a description before its steps every time,
+  so a step for a slot holding no entry of its task is stale: the host
+  does not hear it, and it goes to the gap log by opcode and length.
+- `WorldEvent::TaskConcluded { completion }`: a step ended
+  (`stage_completed`), or the whole task completed or failed. `EQEmu` then
+  sends the entry again (a step) or takes it out (the task).
+- `WorldEvent::TaskRemoved { at }`: the server took the entry out
+  (`OP_CancelTask`), the only way an entry leaves the journal here.
+- `WorldEvent::CompletedTasks { list }`: the tasks finished, at most 50,
+  replacing the earlier list.
+
+What the zone sends before it admits the player is told at the admission,
+the task first, then the quests by slot, each description before its
+steps, then the finished list. Up to 64 stale messages heard before the
+admission go to the gap log there; past that only their count is told, as
+one diagnostic. Each zone starts empty and sends the whole journal again. A message that is short, overruns, has a string without its
+end or too long, counts past what it carries, names a shared task (kind 1,
+after Titanium), a slot past the journal or a step past 20 is refused
+whole, never cut, and goes to the gap log by opcode and length only: no
+journal message's gap keeps a sample, and no diagnostic or error carries a
+task's words. Inferred until read R49-38: the official program's use of
+each field, and whether it clears its journal at zone-in.
+
 ## Resurrection and translocate consent
 
 A live session exposes `WorldEvent::Resurrection` and
