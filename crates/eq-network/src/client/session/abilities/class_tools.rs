@@ -46,6 +46,12 @@ mod lines {
     pub(super) const PICK_YOURSELF: u32 = 0x3079;
     pub(super) const PICK_PLAYER: u32 = 0x307a;
     pub(super) const PICK_NOT_PVP: u32 = 0x307b;
+    /// Under the world's ruleset 4: you fail the program's `PvP` eligibility
+    /// test (read R49-31, follow-up of 6.631).
+    pub(super) const PICK_NOT_ELIGIBLE: u32 = 0x307c;
+    /// Under the world's ruleset 4: the target's level is outside five of
+    /// yours either way, or is 5 or lower (one line for every case).
+    pub(super) const PICK_LEVELS: u32 = 0x307d;
     pub(super) const PICK_TOO_FAR: u32 = 0x307e;
 }
 
@@ -359,37 +365,81 @@ fn pick_pockets<'w>(
                 Vec::new(),
             ));
         }
-        // The program allows a player's pockets only under its PvP rules
-        // (read R16d): each spawn's flag, from its appearance updates. Its
-        // first line also waits on a server ruleset of 4, which the session
-        // does not read: it refuses as under any other (recording
-        // checklist 6.438).
-        if !spawn.appearance.pvp {
-            return Err(Refusal::official(
-                "Pick Pockets refused: target not flagged for PvP",
-                lines::PICK_PLAYER,
-                Vec::new(),
-            ));
-        }
-        let Some(own) = world
-            .spawns
-            .visible(own_id)
-            .filter(|own| own.appearance.pvp)
-        else {
-            return Err(Refusal::official(
-                "Pick Pockets refused: you are not flagged for PvP",
-                lines::PICK_NOT_PVP,
-                Vec::new(),
-            ));
-        };
-        // Then a level range of five each way, whose two lines (0x307c and
-        // 0x307d) are not yet told apart by the read: refused in this
-        // library's words (6.438).
-        if own.level.abs_diff(spawn.level) > 5 {
-            return Err("That player's level is too far from yours".into());
+        // Which lines the program asks depends on the world's ruleset, read
+        // from the world's rules packet (OP_LogServer offset 4).
+        match world.ruleset {
+            Some(4) => pick_under_ruleset_four(own_id, spawn, world)?,
+            Some(_) => pick_by_flags(own_id, spawn, world).map(|_| ())?,
+            // A world whose rules weren't read (the Mac-era and RoF2 sessions
+            // don't decode that packet yet): the flags, then a level range of
+            // five each way in this library's own words, so neither ruleset
+            // is passed more freely than the program would pass it.
+            None => {
+                let own = pick_by_flags(own_id, spawn, world)?;
+                if own.level.abs_diff(spawn.level) > 5 {
+                    return Err("That player's level is too far from yours".into());
+                }
+            }
         }
     }
     Ok(spawn)
+}
+
+/// Pick Pockets on a player under any ruleset but 4 (read R16d): each
+/// spawn's `PvP` flag, from its appearance updates, the target's first.
+/// Returns the player's own spawn.
+fn pick_by_flags<'w>(
+    own_id: u16,
+    spawn: &SpawnState,
+    world: &'w World,
+) -> Result<&'w SpawnState, Refusal> {
+    if !spawn.appearance.pvp {
+        return Err(Refusal::official(
+            "Pick Pockets refused: target not flagged for PvP",
+            lines::PICK_PLAYER,
+            Vec::new(),
+        ));
+    }
+    world
+        .spawns
+        .visible(own_id)
+        .filter(|own| own.appearance.pvp)
+        .ok_or_else(|| {
+            Refusal::official(
+                "Pick Pockets refused: you are not flagged for PvP",
+                lines::PICK_NOT_PVP,
+                Vec::new(),
+            )
+        })
+}
+
+/// Pick Pockets on a player under the world's ruleset 4 (read for 6.631):
+/// the two flag lines are skipped; then the program's eligibility test of
+/// the player, and the level range.
+fn pick_under_ruleset_four(own_id: u16, spawn: &SpawnState, world: &World) -> Result<(), Refusal> {
+    // The program tests the player's +0x280 team value (0x47994f), which no
+    // packet field is mapped to yet: the player's own PvP flag stands in for
+    // it (inferred, labelled in the docs).
+    let Some(own) = world
+        .spawns
+        .visible(own_id)
+        .filter(|own| own.appearance.pvp)
+    else {
+        return Err(Refusal::official(
+            "Pick Pockets refused: you may not take part in player combat",
+            lines::PICK_NOT_ELIGIBLE,
+            Vec::new(),
+        ));
+    };
+    let gap = i16::from(spawn.level) - i16::from(own.level);
+    if !(-5..=5).contains(&gap) || spawn.level <= 5 {
+        return Err(Refusal::official(
+            "Pick Pockets refused: the target's level is out of range",
+            lines::PICK_LEVELS,
+            Vec::new(),
+        ));
+    }
+    Ok(())
 }
 
 /// Begging's check of its target and the player before its reach (read R14
@@ -663,6 +713,56 @@ mod tests {
             opcodes(&press(&mut abilities, &world, pick, later)),
             [0x2ad8]
         );
+    }
+
+    #[test]
+    fn under_the_worlds_ruleset_four_a_players_pockets_ask_eligibility_and_levels() {
+        let pick = (Ability::PickPockets, false);
+        let now = Instant::now();
+        let set = |world: &mut World, id, pvp: bool, level: u8| {
+            let mut spawn = world.spawns.visible(id).unwrap().clone();
+            spawn.appearance.pvp = pvp;
+            spawn.level = level;
+            world.spawns.insert(spawn);
+        };
+        let refusal =
+            |world: &World| line(&press(&mut Abilities::new(&Ability::ALL), world, pick, now));
+        let mut world = player(&[(48, 37)]);
+        world.target = crate::client::session::targeting::Target::from(46);
+        world.ruleset = Some(4);
+        // Neither flag is asked of the target; the player's own stands in
+        // for the program's eligibility test.
+        set(&mut world, 46, false, 20);
+        set(&mut world, 7, false, 20);
+        assert_eq!(refusal(&world), Some(0x307c));
+        set(&mut world, 7, true, 20);
+        assert_eq!(refusal(&world), None);
+        // Five levels either way pass; six either way, or a target of level
+        // 5 or lower, get the one line.
+        for (level, expected) in [
+            (25, None),
+            (15, None),
+            (26, Some(0x307d)),
+            (14, Some(0x307d)),
+        ] {
+            set(&mut world, 46, false, level);
+            assert_eq!(refusal(&world), expected, "target level {level}");
+        }
+        set(&mut world, 7, true, 4);
+        set(&mut world, 46, false, 5);
+        assert_eq!(refusal(&world), Some(0x307d));
+        set(&mut world, 46, false, 6);
+        assert_eq!(refusal(&world), None);
+        // Any other ruleset keeps the flags and asks no levels.
+        world.ruleset = Some(0);
+        assert_eq!(refusal(&world), Some(0x307a));
+        set(&mut world, 46, true, 60);
+        set(&mut world, 7, false, 4);
+        assert_eq!(refusal(&world), Some(0x307b));
+        set(&mut world, 7, true, 4);
+        let picked = press(&mut Abilities::new(&Ability::ALL), &world, pick, now);
+        assert_eq!(line(&picked), None);
+        assert_eq!(opcodes(&picked), [0x2ad8]);
     }
 
     #[test]

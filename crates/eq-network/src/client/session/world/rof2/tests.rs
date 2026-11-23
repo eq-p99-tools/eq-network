@@ -42,6 +42,7 @@ fn run(socket: &UdpSocket, character: &str, flags: (bool, bool)) -> mpsc::Receiv
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
             chat_pace: std::sync::Arc::default(),
+            world_ruleset: std::cell::Cell::new(None),
         };
         let mut diagnostics = Vec::new();
         let mut handler = |event| {

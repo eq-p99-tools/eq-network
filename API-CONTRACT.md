@@ -494,9 +494,10 @@ Carried slots remain provisional until covered by received inventory.
 A pack receipt for the same serialized whole item can resolve a single
 direct cursor-to-station route, separately from the station clear.
 
-## P99 local pads
+## Same-zone zone lines
 
-A P99 host can provide `InstalledZoneBoundaries` in `ClientConfig`.
+A P99 or stock EQEmu (Titanium) host can provide `InstalledZoneBoundaries`
+in `ClientConfig`; Quarm, TAKP and RoF2 refuse a same-zone line.
 The worker corroborates the entered boundary with the current approach,
 admission and indexed zone-point record where required. A same-zone pad
 submits an ordinary position report at entry and stages a local landing.
@@ -516,8 +517,20 @@ are local, and a successful send does not establish a quest outcome.
 `WorldEvent::PlayerInspection` carries the equipment names, icons and note
 received for the matching nearby player. These fields carry no inventory
 custody. `GameCommand::SetInspectNote` supplies the admission's known note
-for automatic replies. A known empty string can be sent. An absent note
-leaves the automatic reply withheld.
+for automatic replies; it needs `Capability::InspectAnswer`, which both
+Titanium types offer with `PlayerInspection`. A known empty string can be
+sent. An absent note leaves the automatic reply withheld.
+
+## EQMac inspection answers
+
+TAKP and Quarm offer `Capability::InspectAnswer` alone (6.621,
+source-derived, not live). The player's program answers each relayed
+request itself, at most once a second, with the worn places' item names
+and icons and the note from `SetInspectNote`; an absent note answers with an
+empty message, as the program always answers. Each answer emits
+`WorldEvent::InspectedBy` with line 0x57c and the asker's name when the
+asker is a known spawn other than the player. `InspectPlayer` and received
+answers are not offered on `EQMac`.
 
 ## Titanium observer sight
 
@@ -2321,8 +2334,8 @@ changes are at least 500 ms apart; a refusal is
 
 ## Duel challenges
 
-Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
-so far), the session keeps a duel as the Titanium program does (read
+Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`,
+and TAKP and Quarm as below), the session keeps a duel as the Titanium program does (read
 R49-6): the challenge the player sent, the one waiting for them, and
 whether a duel is on. It tells the host what happened in
 `WorldEvent::DuelNews` with a `socials::DuelNews`, one for each line the
@@ -2385,6 +2398,38 @@ on Titanium.
 refusal the program sends is never told to the challenger. The challenger
 stays challenging until they zone or die, as with the original client.
 The first P99 use of 0x3ea0 and of the two-packet accept is attended.
+
+### On TAKP and Quarm
+
+TAKP and Quarm offer the `EQMac` program's duel (TAKP program reads 11g
+and 11h, checklist 6.622), source-derived from each server's handlers
+(TAKP 44afcbf, Quarm fc75fcf), not live; the first public use is attended.
+It keeps the same three facts and tells the same `DuelNews`, with these
+differences:
+
+- `/duel` takes any spawn that isn't a corpse, NPCs included, and tests
+  for no target (`NoPlayerTarget`) before the player themself.
+- Its packets are 16-bit ids: `OP_RequestDuel` 0xcf40 {other, player},
+  and to accept, 0xcf40 then `OP_DuelAccept` 0x5d41 {challenger, player}.
+- Its own refusals are `OP_DuelResponse` 0xd040, 6 bytes {challenger,
+  player, reason}, with the same reasons 1 and 2.
+- TAKP relays the other client's 0xd040 as `DuelUpdate::Refused`; from the
+  one the player challenged it is `TurnedDown`, reason 0 (their `/decline`
+  or ignore list), 1 or 2, as Titanium's refusal is. Quarm sends a line of
+  text instead.
+- `Capability::DecliningDuels` and `GameCommand::DeclineDuel` are its
+  `/decline`: during a duel it tells `DecliningWhileDueling` and sends
+  nothing; with a challenge waiting it sends 0xd040 with reason 0, forgets
+  the challenge, closes the question and tells `Declining`; otherwise it
+  tells `NothingToDecline`. Titanium refuses it.
+- A kill of the opponent during the duel sends 0x5e41 (the program's
+  0x415e), 4 bytes {opponent, player}. Neither server names that opcode, so
+  both drop it.
+- The opponent leaving the zone, and the player's own death, change
+  nothing; zoning and logging out forget the duel.
+
+The `DuelOffer` question works as on Titanium: a yes sends what `/duel`
+sends, and a no stays local.
 
 ## Weapon stances
 

@@ -40,9 +40,11 @@ pub const REPORT_EVERY: Duration = Duration::from_millis(2000);
 pub mod lines {
     /// Following began, naming the spawn.
     pub const FOLLOWING: u32 = 0x2f08;
-    /// The followed spawn is gone.
+    /// No tracked spawn left while tracking (read R49-30 c): a removal or
+    /// the six minutes end tracking silently instead.
     pub const GONE: u32 = 0x30d3;
-    /// Six minutes passed.
+    /// Six minutes passed (R15a); the Titanium program ends tracking
+    /// silently then (read R49-30 c), so its session no longer says it.
     pub const EXPIRED: u32 = 0x3189;
     /// The five bearings, from straight ahead to straight behind; the middle
     /// three also name a side.
