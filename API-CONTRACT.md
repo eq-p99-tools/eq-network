@@ -1639,6 +1639,34 @@ answer are built but listed by no server type, and `EQMac`'s
 `OP_GMLastName` now gives `WorldEvent::LastName` too. A surname stays for
 good, or for days, so a host sends it only on the player's own typed word.
 
+## Titles
+
+Where the server type offers titles (`Capability::Titling`: stock `EQEmu`
+so far, from its source and not yet checked live), send
+`GameCommand::RequestTitles` to ask for the list the character may choose
+from. It goes with an empty body (inferred, pending read R49-14b; the server
+reads none of it). One request waits at a time, until its answer, a zone
+change, or 10 s, and the next waits the session's 500 ms settling after an
+answer. The answer is `WorldEvent::TitleList`: each `TitleChoice` has a
+nonzero `id`, a `prefix` and a `suffix`, either possibly empty, each at most
+63 bytes, with text read as the `TitleChanged` decoder reads it. A repeated
+id keeps its first entry. A list that is short, overruns, lacks a NUL, holds
+a zero id or has trailing bytes is refused whole and goes to the gap log by
+opcode and length; a list no request asked for is withheld and goes there
+too. `GameCommand::SetTitle { title_id, suffix }` chooses from the latest
+list of this admission: the id must be on it and have text of the kind
+asked (`suffix` true for the suffix, false for the title), or it is refused
+with `WorldEvent::SocialRefused` and nothing is sent. `title_id` 0 clears
+either kind and needs no list. Each choice the server takes it tells the
+whole zone, so two choices, clears included, go at least 500 ms apart; one
+sooner is refused and nothing is sent. A new admission forgets the list and any
+request in flight. The server says nothing back to a choice it ignores; the
+name a choice gives the spawn comes from the zone's own
+`WorldEvent::TitleChanged`. Nothing in the client calls `SetTitle` until the
+program's title window is read (R49-14). `EQMac` and RoF2 build neither
+request: `EQMac` has no titles, and RoF2's numbers are owed (inferred for
+RoF2, 6.489).
+
 ## Resurrection and translocate consent
 
 A live session exposes `WorldEvent::Resurrection` and

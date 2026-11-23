@@ -204,7 +204,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // doesn't read it and waits for the link to drop (Titanium sitting 6).
         0x3cdc => sent("OP_LogoutReply", EQEMU, Read(&[Zone])),
         // The answer to OP_RequestTitles.
-        0x3e89 => sent("OP_SendTitleList", EQEMU, unasked(Social)),
+        0x3e89 => sent("OP_SendTitleList", EQEMU, Read(&[Zone])),
         0x3ea6 => sent("OP_ApproveName", EQEMU, Read(&[World])),
         0x3eba => sent("OP_SendZonepoints", EQEMU, Read(&[Zone])),
         0x3eec => sent("OP_SetGroupTarget", EQEMU, planned(Raids)),

@@ -681,12 +681,16 @@ pub enum Capability {
     /// A Warrior's `/shield` of another player
     /// ([`crate::command::GameCommand::Shield`]).
     Shielding,
+    /// Asking which titles the player may choose, and choosing one or a
+    /// suffix ([`crate::command::GameCommand::RequestTitles`],
+    /// [`crate::command::GameCommand::SetTitle`]).
+    Titling,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 79] = [
+    pub const ALL: [Self; 80] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -766,6 +770,7 @@ impl Capability {
         Self::DestroyingCoins,
         Self::LookingForGroup,
         Self::Shielding,
+        Self::Titling,
     ];
 }
 
@@ -1296,6 +1301,10 @@ pub enum WorldEvent {
         /// The new last name; empty when it was taken away.
         last_name: String,
     },
+    /// The titles the player may choose, as the server listed them in
+    /// answer to [`crate::command::GameCommand::RequestTitles`]
+    /// ([`crate::names::title_list`]).
+    TitleList(Vec<crate::names::TitleChoice>),
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
@@ -2628,6 +2637,7 @@ mod tests {
             Capability::DestroyingCoins => 76,
             Capability::LookingForGroup => 77,
             Capability::Shielding => 78,
+            Capability::Titling => 79,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

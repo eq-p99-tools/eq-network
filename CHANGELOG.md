@@ -21,6 +21,28 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   round from both programs' structs. Coverage lists the ten; the mana and
   endurance updates and the mob percents stay unlisted. An admitted RoF2
   session still sends and offers nothing, its own death included.
+- Ask for and choose a title (gap 3.6, checklist 6.516). Stock `EQEmu`
+  offers the new `Capability::Titling`; P99, TAKP and Quarm do not, and
+  `EQMac` and RoF2 build neither request (RoF2's numbers are owed, inferred
+  for RoF2, 6.489). `GameCommand::RequestTitles` sends `OP_RequestTitles`
+  (0x5eba) with an empty body (inferred, pending read R49-14b), one at a
+  time with a 10 s lapse and the session's 500 ms settling after an answer.
+  The answer, `OP_SendTitleList` (0x3e89), is read into
+  `WorldEvent::TitleList` of `names::TitleChoice` (id, prefix, suffix): the
+  count is bounded by the body before anything is allocated, each text is
+  capped at 63 bytes, a repeated id keeps its first entry, and a zero id, a
+  missing NUL, a short body or trailing bytes refuse the whole list to the
+  gap log. A list no request asked for is withheld and logged as a gap.
+  `GameCommand::SetTitle` sends `OP_SetTitle` (0x1f22, 8 bytes, the kind as
+  0 or 1 then the id) only for an id on this admission's latest list with
+  text of that kind, or 0 to clear either kind, and at most one per 500 ms
+  (the server tells each to the whole zone); anything else is refused,
+  nothing sent. A new admission forgets the list and the request in flight.
+  Coverage lists 0x3e89 as read by the zone decoder. Nothing in a client
+  calls `SetTitle` yet: the title window waits for read R49-14.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request`,
+  `WorldEvent` and `Capability` (`Capability::ALL` holds 80; command kinds
+  125 and 126).
 - Read how RoF2's spawns look and how hurt they are, as stock `EQEmu` sends
   them, labelled inferred for RoF2 (6.518). The new `rof2_looks` module
   reads `OP_SpawnAppearance` (0x0971) through the reader every generation
