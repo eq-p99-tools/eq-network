@@ -676,9 +676,9 @@ pub enum Capability {
     /// type takes the set.
     ServerFilters,
     /// Sending a change of the server filters at once, mid-zone, where the
-    /// server type is known to read it then (`EQEmu`'s
-    /// `Client::Handle_OP_SetServerFilter`). Elsewhere a change waits for
-    /// the next zone-in (recording checklist 6.494e).
+    /// generation's official client sends one on every change (Titanium,
+    /// read in the program). Elsewhere a change waits for the next zone-in
+    /// (recording checklist 6.494e).
     ServerFiltersAtOnce,
     /// Accepting or declining a challenge to a duel.
     Dueling,

@@ -94,18 +94,25 @@ filters }` keeps a set for the character entered next; send it before
 type. A return to the character list restores the config's set, so the host
 sends `ChooseServerFilters` again before each entry. In a zone,
 `GameCommand::SetServerFilters { session_id, filters }` keeps a change for
-every later zone-in of the character. It goes to the zone at once only
-where the session offers `Capability::ServerFiltersAtOnce` (`EQEmu`, whose
-`Client::Handle_OP_SetServerFilter` reads it while connected); elsewhere
-the next zone-in carries it, until the program read (6.494c) and a live
-check (6.494e) say more. Every server type offers `Capability::ServerFilters`.
+every later zone-in of the character. It goes to the zone at once where
+the session offers `Capability::ServerFiltersAtOnce`: every Titanium server
+type, since the Titanium client sends the packet again on every change in
+its Options window (`filters::sent_on_every_change`). The `EQMac` client's
+side is unread, so there the next zone-in carries a change. Every server
+type offers `Capability::ServerFilters`.
 Each command answers `WorldEvent::ServerFiltersKept { session_id, sent }`
 (`session_id` is `None` at the character list) or
 `WorldEvent::ServerFiltersRefused`, after which the prior set stands.
 
-The kinds are named for what the servers do with each word. Which official
-option sets each word, and with which values, is unread (6.494b), so a set
-built from these kinds may be one the official options cannot produce.
+The kinds are named for what the servers do with each word. On Titanium
+each kind is one row of the client's filter table (eqgame.exe 0x66cd78), in
+the table's order, and each mode is the index of that row's choice in the
+client's own order: `FilterCategory::modes(Titanium)` lists the choices in
+that order, so a host can store and show the index. `ServerFilters::default()`
+is the table's defaults: every kind shown but bad words, whose filter
+starts on. Word 0, an ini-only switch defaulting to 0, stays 0. The
+`EQMac` client's options are unread, so its kinds keep the values the
+servers read.
 
 ## Petitions, bug reports and feedback
 
