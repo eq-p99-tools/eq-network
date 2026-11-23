@@ -975,7 +975,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 149;
+    const KINDS: usize = 150;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1123,6 +1123,7 @@ mod tests {
             ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::RespondToPopup { .. } => 89,
             ClientCommand::InspectPlayer { .. } => 90,
+            ClientCommand::InspectSpawn { .. } => 149,
             ClientCommand::WhoFriends { .. } => 92,
             ClientCommand::Track { .. } => 103,
             ClientCommand::ChangeCoins { .. } => 93,
@@ -1839,6 +1840,11 @@ mod tests {
             ClientCommand::InspectPlayer {
                 session_id,
                 target: eq_network_game::targets::TargetState::default(),
+                created,
+            },
+            ClientCommand::InspectSpawn {
+                session_id,
+                spawn_id: 1,
                 created,
             },
             ClientCommand::WhoFriends {

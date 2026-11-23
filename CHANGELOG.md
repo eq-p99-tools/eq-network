@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `GameCommand::InspectSpawn { session_id, spawn_id, created }` inspects a
+  player by spawn ID without selecting them, for the Titanium program's
+  right-click inspect (checklist 6.644, reads R49-16 and R49-16e). It sends
+  OP_InspectRequest 0x775d {target, own} under `Capability::PlayerInspection`
+  with `InspectPlayer`'s rules (a visible player or the player's own spawn,
+  under 20 units, one outstanding request per player), and its answer comes
+  back as `WorldEvent::PlayerInspection`. EQEmu and Project 1999 offer it, as
+  they list `PlayerInspection`; TAKP and Quarm do not. Additive.
 - `Capability::BardRefreshTimers` (checklist 6.642): where the Titanium
   program's gem timers for a Bard apply (read R49-21 c). A refresh of a
   Bard's own gem (`OP_MemorizeSpell` kind 3) sets the program's wait before
