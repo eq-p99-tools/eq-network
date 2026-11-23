@@ -1610,7 +1610,7 @@ impl ServerType for EqEmu {
     }
 
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
-    /// no handler there.
+    /// no handler there and is dropped, as the official program's is.
     fn reports(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(super::reports::Reports::new(
             super::reports::Listed::EQEMU,

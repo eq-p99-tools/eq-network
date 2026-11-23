@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reports to the staff, as read R49-23 reads the Titanium program (6.511).
+  - **Titanium feedback is sent** (`OP_Feedback` 0x5306, 1148 bytes): the
+    name, an empty field, the place and rounded heading, and the text at
+    120. Stock `EQEmu` now lists `Capability::SendingFeedback`; it has no
+    handler and drops the packet, as it drops the program's own. Breaking:
+    `GameCommand::SendFeedback` has a new `place` field, and
+    `reports::feedback` takes it.
+  - **New `reports::petition_form`**: whether the generation's program takes
+    `/petition` as a window or as text, from the world's petition-window
+    byte on Titanium.
+  - **A Titanium bug report's text holds at most 1024 bytes**, as the
+    program sends (was 2049, the field's size).
+  - The fields the program fills from what this library lacks are named and
+    stay zero; the system information always stays empty.
+
 - Pet orders and charms, as read R49-22a reads the Titanium program (6.610,
   gap 3.5).
   - **An order with no pet is sent** on every server type, as the program

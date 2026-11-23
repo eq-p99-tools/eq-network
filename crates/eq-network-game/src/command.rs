@@ -269,13 +269,16 @@ pub enum GameCommand {
         /// When the player asked.
         created: std::time::Instant,
     },
-    /// Send feedback where a server reads it ([`crate::reports::feedback`]);
-    /// the session names the sender.
+    /// Send feedback ([`crate::reports::feedback`]); the session names the
+    /// sender.
     SendFeedback {
         /// Current zone admission.
         session_id: u64,
         /// What the player says.
         text: String,
+        /// Where the player stands, when the client knows; Titanium's
+        /// feedback carries it.
+        place: Option<crate::reports::BugPlace>,
         /// When the player asked.
         created: std::time::Instant,
     },
