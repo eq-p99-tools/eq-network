@@ -300,8 +300,8 @@ impl GameDialect {
     }
 
     /// The slot finder this generation's program runs for a buff landing on
-    /// the player ([`buffs::placement`]): Titanium's (program reads R3 and
-    /// R20); none for the Mac-era generation and `RoF2`, whose programs are
+    /// the player ([`buffs::placement`]): Titanium's (program reads R3, R20
+    /// and R49-22e); none for the Mac-era generation and `RoF2`, whose programs are
     /// unread, so their landings stay unslotted.
     #[must_use]
     pub fn buff_placement(self) -> Option<buffs::placement::Finder> {
@@ -485,10 +485,23 @@ mod tests {
 
     #[test]
     fn only_titanium_places_a_landing_buff() {
+        use crate::buffs::placement::{Band, Effect, Landing, Spell};
         let held = std::collections::BTreeMap::new();
-        let band = Some(crate::buffs::placement::Band::default());
+        let spell = Spell {
+            id: 278,
+            band: Some(Band::default()),
+            bard: Some(false),
+            effects: Some([Effect::default(); 12]),
+            level: None,
+        };
         let finder = GameDialect::Titanium.buff_placement().unwrap();
-        assert_eq!(finder(&held, 278, band, false), Ok(0));
+        let landing = Landing {
+            held: &held,
+            spell,
+            blocker: false,
+            others_add_no_slots: false,
+        };
+        assert_eq!(finder(&landing).map(|placed| placed.slot), Ok(0));
         assert!(GameDialect::EqMac.buff_placement().is_none());
     }
 
