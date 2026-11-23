@@ -1526,6 +1526,23 @@ pending a read of the program (checklist 6.492b). The server says its own
 line when the other player is considering another duel or the player has
 already accepted one.
 
+## Surnames
+
+Where the server type takes `/surname` (`Capability::Surnaming`: stock
+`EQEmu` so far, from its source and not yet checked live), send
+`GameCommand::Surname` with the word the player typed. It goes as typed:
+never cut, its case left for the server to set. Only what the record cannot
+carry is refused (`WorldEvent::SocialRefused`): an empty word, a space, a
+control character, anything outside ASCII, or 32 bytes and more. One request
+waits at a time, until its answer, a zone change, or 10 s. The server
+answers with `WorldEvent::SurnameAnswer` (`accepted`, and the surname it
+names) or with a line of its own for each refusal; an answer to no request
+is withheld. The name a taken surname gives the spawns comes from the zone's
+own `WorldEvent::LastName`, not from the answer. `EQMac`'s request and
+answer are built but listed by no server type, and `EQMac`'s
+`OP_GMLastName` now gives `WorldEvent::LastName` too. A surname stays for
+good, or for days, so a host sends it only on the player's own typed word.
+
 ## Resurrection and translocate consent
 
 A live session exposes `WorldEvent::Resurrection` and
