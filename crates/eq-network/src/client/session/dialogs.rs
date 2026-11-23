@@ -231,7 +231,11 @@ impl Dialogs {
 
 impl Feature for Dialogs {
     fn capabilities(&self) -> Vec<Capability> {
-        vec![Capability::ServerDialogs, Capability::PlayerInspection]
+        vec![
+            Capability::ServerDialogs,
+            Capability::PlayerInspection,
+            Capability::InspectAnswer,
+        ]
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {

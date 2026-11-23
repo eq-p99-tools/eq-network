@@ -1862,9 +1862,8 @@ impl GameCommand {
             Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
             Self::DeclineDuel { .. } => Capability::DecliningDuels,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
-            Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
-                Capability::PlayerInspection
-            }
+            Self::InspectPlayer { .. } => Capability::PlayerInspection,
+            Self::SetInspectNote { .. } => Capability::InspectAnswer,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }

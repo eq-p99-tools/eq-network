@@ -3380,6 +3380,7 @@ mod tests {
                 Capability::Shielding,
                 Capability::BazaarSearching,
                 Capability::DisciplineReuse,
+                Capability::InspectAnswer,
                 Capability::DecliningDuels
             ]
         );
