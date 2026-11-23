@@ -253,10 +253,7 @@ const ROF2: &[ServerProtocol] = &[ServerProtocol::EqEmuRof2];
 
 /// What the session leaves unread of Titanium's profile.
 const TITANIUM_PROFILE: &[Part] = &[
-    Part(
-        "alternate advancement and leadership",
-        Reason::Planned(Step::AlternateAdvancement),
-    ),
+    Part("leadership", Reason::Planned(Step::AlternateAdvancement)),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
 ];
 /// What the session leaves unread of `EQMac`'s profile.

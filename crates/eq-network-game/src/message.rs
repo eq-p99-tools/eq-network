@@ -279,9 +279,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         Err(error) => messages.push(unreadable(Part::Spells, &error)),
     }
     let message = match opcode {
-        crate::alternate_advancement::DEFINITION_OPCODE
-        | crate::alternate_advancement::SELECTIONS_OPCODE
-        | crate::alternate_advancement::CLEAR_OPCODE => {
+        opcode if crate::alternate_advancement::is_titanium(opcode) => {
             titanium_aa_message(opcode, body, &mut messages)
         }
         zoning::POINTS_OPCODE => zoning::ZonePoints::decode(body).map_or_else(
@@ -380,21 +378,28 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 fn titanium_aa_message(opcode: u16, body: &[u8], messages: &mut Vec<Message>) -> Message {
     match crate::alternate_advancement::titanium(opcode, body) {
         Ok(update) => Message::AlternateAdvancement(update),
-        Err(error) => {
-            messages.push(unreadable(Part::World, &error));
-            Message::AlternateAdvancement(crate::alternate_advancement::invalidated(opcode, body))
-        }
+        Err(error) => match crate::alternate_advancement::invalidated(opcode, body) {
+            Some(update) => {
+                messages.push(unreadable(Part::World, &error));
+                Message::AlternateAdvancement(update)
+            }
+            None => unreadable(Part::World, &error),
+        },
     }
 }
 
 fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Message {
     match crate::alternate_advancement::titanium_profile(body) {
-        Ok(update) => messages.push(Message::AlternateAdvancement(update)),
+        Ok(updates) => messages.extend(updates.map(Message::AlternateAdvancement)),
         Err(error) => {
             messages.push(unreadable(Part::World, &error));
-            messages.push(Message::AlternateAdvancement(
-                crate::alternate_advancement::Update::Selections(None),
-            ));
+            messages.extend(
+                [
+                    crate::alternate_advancement::Update::Selections(None),
+                    crate::alternate_advancement::Update::Points(None),
+                ]
+                .map(Message::AlternateAdvancement),
+            );
         }
     }
     messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
@@ -705,6 +710,32 @@ mod tests {
     }
 
     #[test]
+    fn aa_timers_and_experience_are_read_and_an_unreadable_one_says_so() {
+        use crate::alternate_advancement::{Update, PROGRESS_OPCODE, TIMER_OPCODE};
+        assert!(matches!(
+            titanium(TIMER_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::Timer(_))]
+        ));
+        assert!(matches!(
+            titanium(PROGRESS_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::Progress(Some(_)))]
+        ));
+        // A short timer is only unreadable; short experience also withdraws
+        // the last.
+        assert!(matches!(
+            &titanium(TIMER_OPCODE, &[0; 11])[..],
+            [Message::Unreadable { part: Part::World, error }] if error.ends_with("length 11")
+        ));
+        assert!(matches!(
+            &titanium(PROGRESS_OPCODE, &[0; 13])[..],
+            [
+                Message::Unreadable { part: Part::World, error },
+                Message::AlternateAdvancement(Update::Progress(None)),
+            ] if error.ends_with("length 13")
+        ));
+    }
+
+    #[test]
     fn the_profile_says_what_is_in_the_spellbook() {
         let mut profile = vec![0; 19592];
         profile[12940..12946].copy_from_slice(b"Tester");
@@ -714,6 +745,7 @@ mod tests {
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(Some(_))),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(Some(_))),
                 Message::VehicleName(None),
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
@@ -735,6 +767,7 @@ mod tests {
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(
                     None
                 )),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(None)),
                 Message::VehicleName(None),
                 Message::Unreadable {
                     part: Part::World,

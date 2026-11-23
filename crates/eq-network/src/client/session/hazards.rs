@@ -62,9 +62,15 @@ impl Observations {
             WorldEvent::SpellEffect(effect) => *own == effect.target_id,
             WorldEvent::Death(death) => death.spawn_id == u32::from(*own),
             WorldEvent::AlternateAdvancement {
-                session_id: visit, ..
+                session_id: visit,
+                updates,
+            } => {
+                *visit == *session_id
+                    && updates
+                        .iter()
+                        .any(eq_network_game::alternate_advancement::Update::changes_effects)
             }
-            | WorldEvent::DeathBind { session_id: visit }
+            WorldEvent::DeathBind { session_id: visit }
             | WorldEvent::InventoryAction {
                 session_id: visit,
                 update: Some(_),
@@ -272,6 +278,7 @@ mod tests {
 
     #[test]
     fn environmental_aa_facts_advance_only_their_current_liquid_revision() {
+        use eq_network_game::alternate_advancement::{Timer, Update};
         let mut observations = Observations {
             current: Some((5, 7, 10)),
         };
@@ -292,6 +299,20 @@ mod tests {
                 revision: 11
             })
         );
+        // Points, experience and timers change no effect, so no revision.
+        let unchanged = ClientEvent::World(WorldEvent::AlternateAdvancement {
+            session_id: 5,
+            updates: vec![
+                Update::Points(None),
+                Update::Progress(None),
+                Update::Timer(Timer {
+                    begin: 0,
+                    ability: 9,
+                    end: 1,
+                }),
+            ],
+        });
+        assert!(observations.observe(&unchanged).is_none());
     }
 
     fn report(hazard: Hazard, amount: u32) -> ClientCommand {
