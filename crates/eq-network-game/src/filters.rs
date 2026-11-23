@@ -6,12 +6,18 @@
 //! Each word's place and what its values mean to the server are read from
 //! the servers that take it: stock `EQEmu`'s `Client::ServerFilter` and its
 //! `eqFilterType`, and TAKP's `Client::ServerFilter` and
-//! `UpdateFilters_Struct`. Which of the official client's options sets each
-//! word, the values those options give it, and when the official client
-//! sends it again are not read yet (recording checklist 6.494b and c; read
-//! request R49 part 2). So the kinds are named for what the servers do with
-//! them, and `ServerFilters::default()` is the packet each generation's
-//! client is known to send today, byte for byte.
+//! `UpdateFilters_Struct`.
+//!
+//! The Titanium client's side is read (recording checklist 6.494b and c,
+//! read request R49 part 2). Its 28 filters, described by the table at
+//! eqgame.exe 0x66cd78, go as words 1 to 28 in the table's order, each the
+//! index of the choice its Options row shows (0x4966ee). Word 0 is an
+//! ini-only switch that defaults to 0 and is sent as 0 here. The client
+//! sends the packet at zone-in and again on every change in its Options
+//! window (0x53cc29 to 0x53cd7d), so [`sent_on_every_change`] holds for
+//! Titanium. `ServerFilters::default()` is that table's defaults. The `EQMac`
+//! client's side is unread: its kinds keep the values the servers read, and
+//! its default is the packet this library sent before, byte for byte.
 
 use crate::{command::EncodedCommand, GameDialect};
 use anyhow::{bail, Result};
@@ -79,6 +85,15 @@ pub enum FilterCategory {
     PetSpells,
     /// Heals over time. Only Titanium's packet has it.
     HealOverTime,
+    /// Lines an item speaks. Only Titanium's packet has it.
+    ItemSpeech,
+    /// Strikethrough hits. Only Titanium's packet has it.
+    Strikethrough,
+    /// Stun lines. Only Titanium's packet has it.
+    Stuns,
+    /// Swarm pets' deaths. Only Titanium's packet has it; the Titanium
+    /// client keeps it with no Options row.
+    SwarmPetDeath,
 }
 
 /// What the server does with one kind of message.
@@ -98,8 +113,11 @@ pub enum FilterMode {
 use FilterCategory as C;
 use FilterMode::{GroupOnly, Hide, MineOnly, Show};
 
+// Each list is in the order of its values, which on Titanium is the order of
+// the row's choices in the client, so a mode's place is its index.
+
 /// A word the server reads as "1 shows, 0 hides".
-const ONE_SHOWS: &[(FilterMode, u32)] = &[(Show, 1), (Hide, 0)];
+const ONE_SHOWS: &[(FilterMode, u32)] = &[(Hide, 0), (Show, 1)];
 /// A word the server reads as "0 shows, anything else hides".
 const ZERO_SHOWS: &[(FilterMode, u32)] = &[(Show, 0), (Hide, 1)];
 /// Other players' spells: 0 shows, 1 hides, 2 shows the group's.
@@ -108,13 +126,10 @@ const GROUP_SPELLS: &[(FilterMode, u32)] = &[(Show, 0), (Hide, 1), (GroupOnly, 2
 const SONGS: &[(FilterMode, u32)] = &[(Show, 0), (MineOnly, 1), (GroupOnly, 2), (Hide, 3)];
 /// Crits and spell damage: 0 shows, 1 the player's own, 2 hides.
 const MINE: &[(FilterMode, u32)] = &[(Show, 0), (MineOnly, 1), (Hide, 2)];
-/// Titanium's damage over time: `EQEmu` reads 0 as the player's own (for a
-/// client before `SoD`) and anything else as hidden.
-const TITANIUM_DOT: &[(FilterMode, u32)] = &[(MineOnly, 0), (Hide, 1)];
 
 impl FilterCategory {
     /// Every kind, in the order a file or a list shows them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 28] = [
         C::GuildChat,
         C::Socials,
         C::GroupChat,
@@ -139,6 +154,10 @@ impl FilterCategory {
         C::FocusEffects,
         C::PetSpells,
         C::HealOverTime,
+        C::ItemSpeech,
+        C::Strikethrough,
+        C::Stuns,
+        C::SwarmPetDeath,
     ];
 
     /// The kind's stable name, as a file or a command spells it.
@@ -169,6 +188,10 @@ impl FilterCategory {
             C::FocusEffects => "focus_effects",
             C::PetSpells => "pet_spells",
             C::HealOverTime => "heal_over_time",
+            C::ItemSpeech => "item_speech",
+            C::Strikethrough => "strikethrough",
+            C::Stuns => "stuns",
+            C::SwarmPetDeath => "swarm_pet_death",
         }
     }
 
@@ -178,13 +201,13 @@ impl FilterCategory {
         Self::ALL.into_iter().find(|category| category.key() == key)
     }
 
-    /// The mode the client is known to send today, which
-    /// `ServerFilters::default()` keeps: shown, except damage over time,
-    /// whose Titanium 0 `EQEmu` reads as the player's own.
+    /// The kind's default, which `ServerFilters::default()` keeps: the
+    /// Titanium table's default (eqgame.exe 0x66cd78), which shows every
+    /// kind but bad words. The bad-word filter starts on (its index 0).
     #[must_use]
     pub const fn default_mode(self) -> FilterMode {
         match self {
-            C::DamageOverTime => MineOnly,
+            C::BadWords => Hide,
             _ => Show,
         }
     }
@@ -202,8 +225,9 @@ impl FilterCategory {
     }
 
     /// Titanium's 29 words, as `EQEmu`'s `eqFilterType` places them and its
-    /// `Client::ServerFilter` reads them. Word 0 and words 25 to 28 are
-    /// named by no kind here and stay 0.
+    /// `Client::ServerFilter` reads them. Each value is the index of the
+    /// choice the Titanium client's Options row shows, in that row's order.
+    /// Word 0, the ini-only switch, is named by no kind and stays 0.
     const fn titanium_word(self) -> (usize, &'static [(FilterMode, u32)]) {
         match self {
             C::GuildChat => (1, ONE_SHOWS),
@@ -224,12 +248,18 @@ impl FilterCategory {
             C::OthersHits => (16, ONE_SHOWS),
             C::MissedMe => (17, ONE_SHOWS),
             C::DamageShields => (18, ZERO_SHOWS),
-            C::DamageOverTime => (19, TITANIUM_DOT),
+            // The client's choices are shown (0) and hidden (1); `EQEmu`
+            // reads 0 from a client before `SoD` as the player's own.
+            C::DamageOverTime => (19, ZERO_SHOWS),
             C::PetHits => (20, ZERO_SHOWS),
             C::PetMisses => (21, ZERO_SHOWS),
             C::FocusEffects => (22, ZERO_SHOWS),
             C::PetSpells => (23, ZERO_SHOWS),
             C::HealOverTime => (24, ZERO_SHOWS),
+            C::ItemSpeech => (25, ZERO_SHOWS),
+            C::Strikethrough => (26, ZERO_SHOWS),
+            C::Stuns => (27, ZERO_SHOWS),
+            C::SwarmPetDeath => (28, ZERO_SHOWS),
         }
     }
 
@@ -261,7 +291,11 @@ impl FilterCategory {
             | C::PetMisses
             | C::FocusEffects
             | C::PetSpells
-            | C::HealOverTime => return None,
+            | C::HealOverTime
+            | C::ItemSpeech
+            | C::Strikethrough
+            | C::Stuns
+            | C::SwarmPetDeath => return None,
         })
     }
 
@@ -296,9 +330,20 @@ impl FilterMode {
     }
 }
 
+/// Whether the generation's client sends the filters again on every change,
+/// as well as at zone-in. The Titanium client does (eqgame.exe 0x53cc29
+/// saves the changed row and 0x53cd7d sends the packet again). The `EQMac`
+/// client's side is unread, so a change waits for the next zone-in there.
+#[must_use]
+pub const fn sent_on_every_change(dialect: GameDialect) -> bool {
+    match dialect {
+        GameDialect::Titanium => true,
+        GameDialect::EqMac | GameDialect::Rof2 => false,
+    }
+}
+
 /// A mode for every kind of message: what the client asks the server.
-/// Kinds left unset keep [`FilterCategory::default_mode`], so the default
-/// is the packet sent today.
+/// Kinds left unset keep [`FilterCategory::default_mode`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerFilters {
@@ -403,13 +448,15 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_the_packets_each_generation_sends_today() {
-        // Titanium: the stock client's packet, words 1-7 and 14-17 set.
+    fn the_defaults_are_the_tables_and_the_packet_eqmac_sent_before() {
+        // Titanium: the table's default indices (eqgame.exe 0x66cd78), the
+        // channel rows 1 and every other row 0, bad words included (its
+        // filter starts on). Word 0 is the ini-only switch's default.
         let titanium = encode(GameDialect::Titanium, &ServerFilters::default()).unwrap();
         assert_eq!(titanium.opcode, 0x6563);
         assert_eq!(titanium.body.len(), 116);
         for index in 0..29 {
-            let set = (1..=7).contains(&index) || (14..=17).contains(&index);
+            let set = (1..=6).contains(&index) || (14..=17).contains(&index);
             assert_eq!(word(&titanium.body, index), u32::from(set), "word {index}");
         }
         // EQMac: words 5-14 set.
@@ -435,10 +482,13 @@ mod tests {
         filters.set(C::MeleeCrits, Hide);
         filters.set(C::DamageShields, Hide);
         filters.set(C::DamageOverTime, Hide);
+        filters.set(C::BadWords, Show);
+        filters.set(C::Stuns, Hide);
+        filters.set(C::SwarmPetDeath, Hide);
         let titanium = encode(GameDialect::Titanium, &filters).unwrap().body;
         assert_eq!(
-            [1, 8, 10, 12, 18, 19].map(|index| word(&titanium, index)),
-            [0, 2, 1, 2, 1, 1]
+            [1, 7, 8, 10, 12, 18, 19, 25, 27, 28].map(|index| word(&titanium, index)),
+            [0, 1, 2, 1, 2, 1, 1, 0, 1, 1]
         );
         let eqmac = encode(GameDialect::EqMac, &filters).unwrap().body;
         assert_eq!(
@@ -456,7 +506,7 @@ mod tests {
         assert!(filters.check(GameDialect::Titanium).is_err());
         assert!(filters.check(GameDialect::EqMac).is_err());
         let mut filters = ServerFilters::default();
-        filters.set(C::DamageOverTime, Show);
+        filters.set(C::DamageOverTime, MineOnly);
         assert!(filters.check(GameDialect::Titanium).is_err());
         // A kind the packet lacks takes any mode.
         assert!(filters.check(GameDialect::EqMac).is_ok());
@@ -475,7 +525,7 @@ mod tests {
         assert!(titanium.check(GameDialect::Titanium).is_ok());
         // EQMac has no damage-over-time word: back to the default.
         let eqmac = filters.fitted(GameDialect::EqMac);
-        assert_eq!(eqmac.get(C::DamageOverTime), MineOnly);
+        assert_eq!(eqmac.get(C::DamageOverTime), Show);
         assert!(eqmac.check(GameDialect::EqMac).is_ok());
         assert_eq!(filters.fitted(GameDialect::Rof2), ServerFilters::default());
     }
@@ -498,6 +548,37 @@ mod tests {
         }
         assert_eq!(C::SpellDamage.modes(GameDialect::EqMac), Vec::new());
         assert_eq!(C::BardSongs.modes(GameDialect::EqMac).len(), 4);
+        assert_eq!(C::Stuns.modes(GameDialect::EqMac), Vec::new());
+        // The Titanium choices are listed in the client's own order, so a
+        // mode's place is its index.
+        assert_eq!(
+            C::BardSongs.modes(GameDialect::Titanium),
+            [Show, MineOnly, GroupOnly, Hide]
+        );
+        assert_eq!(
+            C::PcSpells.modes(GameDialect::Titanium),
+            [Show, Hide, GroupOnly]
+        );
+        assert_eq!(C::Ooc.modes(GameDialect::Titanium), [Hide, Show]);
+        assert_eq!(C::BadWords.modes(GameDialect::Titanium), [Hide, Show]);
+        assert_eq!(C::DamageOverTime.modes(GameDialect::Titanium), [Show, Hide]);
+    }
+
+    #[test]
+    fn each_titanium_mode_goes_as_its_place_in_the_list() {
+        for category in FilterCategory::ALL {
+            let (_, values) = category.word(GameDialect::Titanium).unwrap();
+            for (place, (_, value)) in values.iter().enumerate() {
+                assert_eq!(usize::try_from(*value).unwrap(), place, "{category:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_titanium_sends_on_every_change() {
+        assert!(sent_on_every_change(GameDialect::Titanium));
+        assert!(!sent_on_every_change(GameDialect::EqMac));
+        assert!(!sent_on_every_change(GameDialect::Rof2));
     }
 
     #[test]
