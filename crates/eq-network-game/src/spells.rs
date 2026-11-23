@@ -480,24 +480,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
                 success: body[4] != 0,
             }
         }
-        0x0b97 => {
-            // Titanium InterruptCast_Struct has two words and an optional
-            // NUL-terminated label: the caster's name, sent to those nearby.
-            ensure!(
-                body.len() >= 8 && (body.len() == 8 || body.last() == Some(&0)),
-                "invalid cast-interruption length or label"
-            );
-            let label = body
-                .get(8..body.len().saturating_sub(1))
-                .unwrap_or_default();
-            ensure!(label.is_ascii(), "cast-interruption label is not ASCII");
-            SpellUpdate::Interrupted {
-                caster_id: word(0),
-                message_id: word(4),
-                caster_name: (!label.is_empty())
-                    .then(|| String::from_utf8_lossy(label).into_owned()),
-            }
-        }
+        0x0b97 => interrupted(body)?,
         0x3990 => {
             ensure!(body.len() == 8, "invalid begin-cast length");
             SpellUpdate::Began {
@@ -533,6 +516,38 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
         }
         _ => return Ok(None),
     }))
+}
+
+/// Decodes `InterruptCast_Struct`, which stock `EQEmu` sends Titanium and
+/// `RoF2` alike, with no encoder for either: two words and an optional
+/// NUL-terminated label, the caster's name, sent to those nearby
+/// (`Mob::InterruptSpell` in `zone/spells.cpp`).
+///
+/// # Errors
+/// Rejects a body shorter than 8 bytes, a label without its terminator, and
+/// one that is not ASCII.
+pub(crate) fn interrupted(body: &[u8]) -> Result<SpellUpdate> {
+    ensure!(
+        body.len() >= 8 && (body.len() == 8 || body.last() == Some(&0)),
+        "invalid cast-interruption length or label"
+    );
+    let word = |offset: usize| {
+        u32::from_le_bytes([
+            body[offset],
+            body[offset + 1],
+            body[offset + 2],
+            body[offset + 3],
+        ])
+    };
+    let label = body
+        .get(8..body.len().saturating_sub(1))
+        .unwrap_or_default();
+    ensure!(label.is_ascii(), "cast-interruption label is not ASCII");
+    Ok(SpellUpdate::Interrupted {
+        caster_id: word(0),
+        message_id: word(4),
+        caster_name: (!label.is_empty()).then(|| String::from_utf8_lossy(label).into_owned()),
+    })
 }
 
 #[cfg(test)]
