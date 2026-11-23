@@ -1005,11 +1005,14 @@ mod shared {
 /// (recording checklist 6.332 for falls, 6.491 for drowning and lava; its
 /// first use there is the attended liquid row). R25's door contact report
 /// is not sent (6.491).
-const TITANIUM_HAZARDS: [Hazard; 4] = [
+const TITANIUM_HAZARDS: [Hazard; 5] = [
     Hazard::Falling,
     Hazard::Drowning,
     Hazard::Lava,
     Hazard::ZoneHeat,
+    // Velious water's cold, type 246, by the lava tick (reads R49-3 b and
+    // R49-26; checklist 6.491d). `EQEmu` applies 246 like any other type.
+    Hazard::Freezing,
 ];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`
@@ -2548,7 +2551,8 @@ mod tests {
                     [
                         Capability::EnvironmentalDamage,
                         Capability::Drowning,
-                        Capability::LavaHeat
+                        Capability::LavaHeat,
+                        Capability::ColdWater
                     ],
                     "{protocol:?} local {local_only}"
                 );

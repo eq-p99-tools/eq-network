@@ -5,6 +5,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Velious water's cold as the Titanium program reports it (reads R49-3 b and
+  R49-26; checklist 6.491d). New `LiquidHazard::Cold`, sent as type 246
+  (`Hazard::Freezing`) with its damage record, on the lava's feet tick, and
+  `Capability::ColdWater`, offered on every Titanium session. **Breaking:**
+  both enums are exhaustive, and `Capability::ALL` grows to 91.
 - Slower water's own set in the swim grant, as read R49-26 reads the Titanium
   region classifier (0x435ec9; checklist 6.483).
   - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for

@@ -1934,6 +1934,7 @@ mod tests {
             let capabilities = features.capabilities();
             assert_eq!(capabilities.contains(&Capability::Drowning), taken);
             assert_eq!(capabilities.contains(&Capability::LavaHeat), taken);
+            assert_eq!(capabilities.contains(&Capability::ColdWater), taken);
             let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
                 out.log.send(ClientEvent::World(WorldEvent::Entered {
                     capabilities,
@@ -3171,6 +3172,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One list of every offer, read top to bottom.
     fn a_titanium_zone_reports_everything_its_features_offer() {
         use crate::world::Capability;
         let features = |protocol| {
@@ -3263,7 +3265,11 @@ mod tests {
         )
         .capabilities();
         assert!(local.contains(&Capability::GroundDropping));
-        for liquid in [Capability::Drowning, Capability::LavaHeat] {
+        for liquid in [
+            Capability::Drowning,
+            Capability::LavaHeat,
+            Capability::ColdWater,
+        ] {
             assert!(p99.contains(&liquid));
             assert!(eqemu.contains(&liquid));
             assert!(local.contains(&liquid));

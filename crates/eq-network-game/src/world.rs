@@ -745,12 +745,15 @@ pub enum Capability {
     /// Titanium's `/sheathe` and `/aggressive`
     /// ([`crate::command::GameCommand::ToggleStance`]).
     WeaponStances,
+    /// The Titanium client can report Velious water's cold through
+    /// environmental damage ([`crate::hazards::LiquidHazard::Cold`]).
+    ColdWater,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 90] = [
+    pub const ALL: [Self; 91] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -841,6 +844,7 @@ impl Capability {
         Self::UsingPotionBelt,
         Self::DisciplineReuse,
         Self::WeaponStances,
+        Self::ColdWater,
     ];
 }
 
@@ -2942,6 +2946,7 @@ mod tests {
             Capability::UsingPotionBelt => 87,
             Capability::DisciplineReuse => 88,
             Capability::WeaponStances => 89,
+            Capability::ColdWater => 90,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

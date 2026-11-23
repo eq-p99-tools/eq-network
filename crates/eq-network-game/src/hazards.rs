@@ -81,6 +81,10 @@ pub enum LiquidHazard {
     /// reports as its own type and works out from disease resist (read
     /// R49-3 b).
     ZoneHeat,
+    /// The body origin was in Velious water (region kind 8, `VW`), which the
+    /// program's liquid routine reports as cold, type 246, by the same
+    /// tick as lava (reads R49-3 b and R49-26).
+    Cold,
 }
 
 /// The session view used when the host sampled a liquid hazard.
