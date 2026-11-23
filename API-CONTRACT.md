@@ -538,6 +538,71 @@ Quarm shares the decoding, assumed as TAKP, but isn't offered it until its
 own attended row; remote TAKP waits for the local row. An unreadable Mac
 packet withdraws as its Titanium kind does, and a timer withdraws nothing.
 
+Since checklist 6.556 the session can send Titanium's AA requests, though
+no server type lists them yet: `Capability::AlternateAdvancement` waits for
+its local EQEmu live row, and until then the three commands are refused as
+not offered. `ClientCommand::TrainAlternateAdvancement { rank_id }` buys a
+rank, `ActivateAlternateAdvancement { rank_id, target }` uses an owned
+rank's ability, and `SetAlternateAdvancementSplit { percentage }` sets the
+share of experience that goes to AAs, each as one 16-byte `OP_AAAction`
+0x0681 {action, ability, target, exp}: train is action 3 with the rank id,
+activate action 0 with the owned rank id and the target's spawn or 0, a
+split of 1 to 100 action 1, and 0 action 2 (off). Which ids and actions the
+program itself sends is read R49-39, inferred until then.
+
+The session checks each request against a bounded, never published view of
+what this admission's facts said: the definitions offered (at most 4096;
+one past that is not kept, so a train for it is refused), the latest
+selections and the latest unspent points (`Update::Points` or
+`Update::Progress`, whichever came last). It follows every withdrawal and a
+new admission starts it afresh. Each check is one EQEmu makes too, and what
+is not known refuses. A train goes only for an offered rank the player does
+not own, whose rank before it the table shows owned, which costs no more
+than the unspent points, whose level is no higher than the player's current
+level and whose class mask has the player's class. EQEmu's table offers each
+ability's owned rank and the next, or its first, so a rank another offered
+rank follows is owned; otherwise the selections name it, by exact id in
+`OP_RespondAA` and by an ability's first rank in the profile. So a maxed
+ability above rank one, which has no following rank in the table and which
+the profile names only by its first rank, reads as not owned until an
+`OP_RespondAA` names its exact rank: until then it can't be activated. The
+local live row checks that the zone entry brings an `OP_RespondAA` (our
+client sends `OP_UpdateAA`); if it brings none, the offer waits on a fix.
+Prerequisite abilities are left to the server. One train is in flight at a time, until
+EQEmu's answer (`OP_RespondAA`, then `OP_AAExpUpdate`) or 5 seconds. An
+activation goes for an owned rank with an ability (`spellid` not -1), at
+most one a second; a split change at most one a second, and above 100 is
+refused where EQEmu would quietly set 0. The waits and paces are ours,
+inferred. A refusal is `WorldEvent::AlternateAdvancementRefused
+{ session_id, reason, refusal }`: `refusal` is an
+`alternate_advancement::Refusal` for the host to word, and None where the
+session refused the command as it refuses any (an earlier admission, not
+offered); `reason` says the same in this library's words. The server's own
+answers (the gain line, the reuse wait, the split's on and off lines) reach
+the host as its other lines do.
+
+Since checklist 6.562 the same three commands also encode for the `EQMac`
+generation, still listed by no server type: TAKP's `OP_AAAction` 0x1442 is
+256 bytes of text, NUL-padded and built from fixed words and numbers only:
+`buy N`, `activate N` (N the Mac AA id, 1 to 226, as `Update::MacRanks`
+names it; TAKP picks the rank to buy itself), `on N` for a split of 1 to
+100 and `off` for 0. The exact bytes are read R49-41a, inferred until then.
+On `EQMac` the session sends only the split for now. TAKP's buy checks
+neither level nor class, which the Mac client keeps itself (read R49-41b),
+so a train is refused as `Refusal::Unknown` until the session has the
+client's AA data; an activation is refused the same way, since which ids
+are passive is that data too and TAKP answers a passive one with a line
+while the player sits, feigns or rides a boat. An activation's `target`
+must be None on `EQMac`, refused as `Refusal::OutOfRange` otherwise: TAKP's
+text names no target and uses the server's stored one, which the session's
+own selection does not prove. Turning the split on needs a known level of
+51 or more (`Refusal::LevelTooLow`, or `Refusal::Unknown` when the level
+isn't known): TAKP takes `on N` at any level and turns it off again below
+51 at the next experience change, so ours is 51, inferred until R49-41.
+Turning it off goes at any level. The capability waits for a local TAKP
+live row; Quarm, assumed as TAKP, waits for its own attended row, and P99
+is never offered it.
+
 Malformed packets withdraw their affected observation. An unreadable
 profile withdraws its points with its selections (`Update::Points(None)`),
 unreadable experience withdraws the last (`Update::Progress(None)`), and an
@@ -1864,8 +1929,9 @@ for a spawn that is not a player the session saw turn their trader sign on
 (`OP_BecomeTrader`) or a search answer named as a trader since the zone-in,
 and has not seen leave; beyond the generation's merchant reach, or 20 in
 3-D where that is unread (inferred, R49-42 d; `EQEmu` checks no distance);
-while a browse or a merchant's window is open; while another click waits
-(10 s); and within 1 s of the last click (ours, inferred). A merchant may
+while a browse or a merchant's window is open, or a merchant's opening
+waits for its answer; while another click waits (10 s); and within 1 s of
+the last click (ours, inferred). A merchant may
 not open while a browse is open or a click waits. `EQEmu` does not check
 that the spawn clicked is a trader, and records the player as their one
 customer until the browse ends, which is why the session clicks only known
@@ -1881,13 +1947,19 @@ one out (`OP_TraderDelItem`, or a price of 0). Outside a browse these
 packets stay the merchant's, unchanged. `GameCommand::EndBrowse` sends
 `OP_Trader` (0x524e) action 4 as `Trader_ShowItems_Struct`, 20 bytes, which
 the server does not answer, and `BazaarEvent::BrowseEnded { trader }`
-follows at once. A browse also ends, without our end, when the server's
-`OP_ShopEnd` says the trader left trader mode, when their sign goes off or
-they despawn, and on a zone change or new admission (the server forgets the
-customer with the zone, inferred). A list past 80 items or an item that
-cannot be read is a gap and ends the browse with our end, so no half list
-is kept. An admission no click asked for is withheld and a gap; an approval
-that comes after its click stopped waiting is ended at once.
+follows at once. A zone offer, answer or handoff also ends an open browse
+with our end, sent while this zone's connection still carries it, since a
+refused zone change keeps the player as the trader's customer; a click in
+flight then stops waiting. A browse ends without our end when the server's
+`OP_ShopEnd` says the trader left trader mode (our end would free the
+trader's next customer), when their sign goes off or they despawn, and at a
+new admission (the server forgets the customer with the zone, inferred). A
+list past 80 items or an item that cannot be read is a gap and ends the
+browse with our end, so no half list is kept. An admission no click asked
+for is withheld and a gap; an approval that comes after its click stopped
+waiting is ended at once. After either approval, the run of merchant item
+packets that follows is that trader's list: it is withheld, and told once
+as a gap.
 
 Other players' signs come as `BazaarEvent::TraderSign { spawn, on }`; their
 name is not read. Titanium's spawn records carry no trader flag, so a
