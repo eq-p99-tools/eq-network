@@ -251,13 +251,13 @@ pub(super) trait ServerType: Sync {
         false
     }
 
-    /// Whether this server type is known to read a server filter change
-    /// mid-zone, so the session sends one at once
-    /// ([`crate::world::Capability::ServerFiltersAtOnce`]). Elsewhere a
-    /// change waits for the next zone-in, until when the official client
-    /// sends one is read (6.494c) and checked live there (6.494e).
+    /// Whether the session sends a server filter change at once
+    /// ([`crate::world::Capability::ServerFiltersAtOnce`]): where the
+    /// generation's official client sends it again on every change
+    /// ([`eq_network_game::filters::sent_on_every_change`]), whatever the
+    /// server. Elsewhere a change waits for the next zone-in.
     fn server_filters_at_once(&self) -> bool {
-        false
+        eq_network_game::filters::sent_on_every_change(self.wire().dialect())
     }
 
     /// Whether this server policy recognizes P99 list notices and supports
@@ -1323,12 +1323,6 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
-    /// Stock `EQEmu` reads the filters while connected as well as while
-    /// connecting (`Client::Handle_OP_SetServerFilter`), with no reply.
-    fn server_filters_at_once(&self) -> bool {
-        true
-    }
-
     /// `EQEmu`'s world offers its chat server (`ucs`) when one runs. Project
     /// 1999 keeps the default, no link: withheld until Adam has attended a
     /// session there (his choice, 11-23), and it is not known to offer one.

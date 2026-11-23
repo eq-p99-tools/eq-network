@@ -16,6 +16,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     two sets' caps on each axis (`WetCaps::covering`), which widens it only
     in poearthb. Breaking: a new required field.
 
+- Keep the Titanium server filters as the program keeps them (read R49-2,
+  checklist 6.494b and c). The client's 28 filters (eqgame.exe table
+  0x66cd78) go as words 1 to 28, each the index of its Options row's
+  choice; word 0, an ini-only switch, stays 0, its default. The Titanium
+  client sends the packet at zone-in and again on every Options change
+  (0x53cc29 to 0x53cd7d), so every Titanium server type now offers
+  `Capability::ServerFiltersAtOnce`, Project 1999 included; its first use
+  there is attended. The `EQMac` client's side is unread and keeps the
+  zone-in send.
+  - New: `FilterCategory::{ItemSpeech, Strikethrough, Stuns,
+    SwarmPetDeath}` (Titanium words 25 to 28) and
+    `filters::sent_on_every_change(dialect)`.
+  - `FilterCategory::modes(Titanium)` lists each row's choices in the
+    client's order, so a mode's place is its index.
+  - **Breaking:** `FilterCategory::ALL` has 28 kinds, and matches on
+    `FilterCategory` gain four arms.
+  - **Breaking:** the default bad-word mode is `Hide` (index 0, the
+    program's default: its filter starts on), so the default Titanium
+    packet's word 7 is 0. Titanium damage over time takes `Show` (0) and
+    `Hide` (1), the client's choices, for the default `Show`; stock
+    `EQEmu` reads 0 from a client before `SoD` as the player's own.
 - Pet orders and charms, as read R49-22a reads the Titanium program (6.610,
   gap 3.5).
   - **An order with no pet is sent** on every server type, as the program
