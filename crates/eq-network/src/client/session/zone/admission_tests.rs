@@ -835,6 +835,7 @@ impl Script {
             .chain(rof2_buffs())
             .chain(rof2_spellbook())
             .chain(rof2_pools())
+            .chain(rof2_world())
         {
             script.packet(opcode, body);
         }
@@ -1089,6 +1090,50 @@ fn rof2_pools() -> Vec<(u16, Vec<u8>)> {
         (0x5f42, pool(200, 900)),
         (0x2404, [&77u16.to_le_bytes()[..], &[40]].concat()),
         (0x1c81, [&77u16.to_le_bytes()[..], &[60]].concat()),
+    ]
+}
+
+/// A door table of one door, its move, a ground object, its click, the
+/// zone-in weather and a weather change, as stock `EQEmu` writes them for
+/// `RoF2` (6.539), with filler where the encoders write nothing from the
+/// server.
+fn rof2_world() -> Vec<(u16, Vec<u8>)> {
+    let mut door = vec![0xa5; 100];
+    door[..32].fill(0);
+    door[..10].copy_from_slice(b"TESTDOOR01");
+    for (at, value) in [(32, -12.5f32), (36, 27.25), (40, 9.0), (44, 128.0)] {
+        door[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    door[48..52].copy_from_slice(&0u32.to_le_bytes());
+    door[52..56].copy_from_slice(&100u32.to_le_bytes());
+    door[60..64].copy_from_slice(&[7, 58, 0, 0]);
+    door[64..68].copy_from_slice(&0u32.to_le_bytes());
+    door[80..87].copy_from_slice(&[0, 1, 0, 1, 0, 0, 0]);
+    let floats: Vec<u8> = [256.0f32, 0.5, -0.25, 1.0, -40.5, 120.25, 3.75]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    let object = [
+        &4321u32.to_le_bytes()[..],
+        b"IT63_ACTORDEF\0",
+        &54u16.to_le_bytes(),
+        &0u16.to_le_bytes(),
+        &4321u32.to_le_bytes(),
+        &0u32.to_le_bytes(),
+        &floats,
+        &1u32.to_le_bytes(),
+        &[0x5a; 52],
+    ]
+    .concat();
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    vec![
+        (0x7291, door),
+        (0x08e8, vec![7, 2]),
+        (0x6fca, object),
+        (0x4aa1, words(&[4321, 4321])),
+        (0x661e, words(&[0, 5, 0])),
+        (0x661e, words(&[1, 3])),
     ]
 }
 
@@ -1590,6 +1635,50 @@ fn an_admitted_rof2_session_hands_the_host_its_mana_and_endurance_pools() {
         .unwrap();
     assert!(resources < pool);
     for opcode in ["0x3791", "0x5f42", "0x2404", "0x1c81"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_doors_objects_and_weather() {
+    use eq_network_game::{clock::Weather, doors::DoorUpdate, objects::ObjectUpdate};
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let world: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Doors(DoorUpdate::Spawn(doors))
+                if doors.len() == 1
+                    && doors[0].id == 7
+                    && doors[0].model == "TESTDOOR01"
+                    && doors[0].size == 100
+                    && doors[0].open_type == 58 =>
+            {
+                Some("doors")
+            }
+            WorldEvent::Doors(DoorUpdate::Move { id: 7, action: 2 }) => Some("move"),
+            WorldEvent::Objects(ObjectUpdate::Spawn(object))
+                if object.drop_id == 4321
+                    && object.model == "IT63_ACTORDEF"
+                    && object.object_type == 1 =>
+            {
+                Some("object")
+            }
+            WorldEvent::Objects(ObjectUpdate::Remove {
+                drop_id: 4321,
+                taken_by: Some(4321),
+            }) => Some("click"),
+            WorldEvent::Weather(Weather::Snow { intensity: 3 }) => Some("weather"),
+            WorldEvent::Weather(_) => Some("other weather"),
+            _ => None,
+        })
+        .collect();
+    // The zone-in form gives nothing, as on Titanium.
+    assert_eq!(world, ["doors", "move", "object", "click", "weather"]);
+    for opcode in ["0x7291", "0x08e8", "0x6fca", "0x4aa1", "0x661e"] {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"
