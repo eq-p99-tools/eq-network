@@ -3275,11 +3275,11 @@ mod tests {
     }
 
     #[test]
-    fn every_zone_keeps_the_filters_and_only_eqemu_takes_a_change_at_once() {
+    fn every_zone_keeps_the_filters_and_titanium_sends_a_change_at_once() {
         use crate::world::Capability;
         for (protocol, at_once) in [
             (crate::client::ServerProtocol::EqEmu, true),
-            (crate::client::ServerProtocol::Project1999, false),
+            (crate::client::ServerProtocol::Project1999, true),
             (crate::client::ServerProtocol::Quarm, false),
             (crate::client::ServerProtocol::Takp, false),
         ] {

@@ -167,12 +167,23 @@ mod tests {
     }
 
     #[test]
+    fn a_titanium_change_goes_at_once_on_every_server_type() {
+        // The Titanium client sends the packet again on every change
+        // (eqgame.exe 0x53cc29 to 0x53cd7d), whatever the server.
+        let kept = RefCell::default();
+        let command = ClientCommand::SetServerFilters {
+            session_id: 7,
+            filters: hidden_ooc(),
+        };
+        let (sent, _) = run_set(ServerProtocol::Project1999, &command, &kept);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, 0x6563);
+    }
+
+    #[test]
     fn elsewhere_a_change_waits_for_the_next_zone_in() {
-        for protocol in [
-            ServerProtocol::Project1999,
-            ServerProtocol::Quarm,
-            ServerProtocol::Takp,
-        ] {
+        // The EQMac client's side is unread.
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let kept = RefCell::default();
             let command = ClientCommand::SetServerFilters {
                 session_id: 7,
@@ -237,7 +248,7 @@ mod tests {
         assert!(choose_on(3, hidden_ooc(), &kept, &mut log));
         assert_eq!(*kept.borrow(), hidden_ooc());
         let mut bad = ServerFilters::default();
-        bad.set(FilterCategory::DamageOverTime, FilterMode::Show);
+        bad.set(FilterCategory::DamageOverTime, FilterMode::MineOnly);
         assert!(choose_on(3, bad, &kept, &mut log));
         assert_eq!(*kept.borrow(), hidden_ooc());
         assert!(!choose(
