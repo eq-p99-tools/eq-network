@@ -181,13 +181,22 @@ impl Expansions {
     }
 }
 
+/// The length of P99's `OP_ExpansionInfo`, capture-derived: the mask, then
+/// 28 bytes that differ per session and 14 zero bytes, all left unread.
+pub const P99_EXPANSIONS_LENGTH: usize = 46;
+
 /// Reads `OP_ExpansionInfo`, the same in both generations
-/// (`ExpansionInfo_Struct`): the expansions as one 32-bit mask.
+/// (`ExpansionInfo_Struct`): the expansions as one 32-bit mask, the body's
+/// first word. `EQEmu` sends the 4-byte mask alone; P99 sends it in a
+/// 46-byte body (capture-derived), whose other bytes are not read.
 ///
 /// # Errors
-/// Rejects any length but 4.
+/// Rejects any length but 4 and 46.
 pub fn expansions(body: &[u8]) -> Result<Expansions> {
-    ensure!(body.len() == 4, "invalid expansion mask length");
+    ensure!(
+        body.len() == 4 || body.len() == P99_EXPANSIONS_LENGTH,
+        "invalid expansion mask length"
+    );
     Ok(Expansions(word(body, 0)))
 }
 
@@ -307,5 +316,19 @@ mod tests {
         assert!(Expansions(1 << 31).includes(32));
         assert!(expansions(&[0; 3]).is_err());
         assert!(expansions(&[0; 5]).is_err());
+        assert!(expansions(&[0; 45]).is_err());
+        assert!(expansions(&[0; 47]).is_err());
+    }
+
+    #[test]
+    fn p99s_longer_body_gives_its_first_word() {
+        // The shape a P99 recording shows: Kunark and Velious, then bytes
+        // that vary per session (made up here), then zeros.
+        let mut body = [0_u8; P99_EXPANSIONS_LENGTH];
+        body[..4].copy_from_slice(&3_u32.to_le_bytes());
+        body[4..32].fill(0xa5);
+        let owned = expansions(&body).unwrap();
+        assert_eq!(owned, Expansions(3));
+        assert!(owned.includes(1) && owned.includes(2) && !owned.includes(3));
     }
 }
