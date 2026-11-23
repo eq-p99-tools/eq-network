@@ -1541,10 +1541,9 @@ impl ServerType for EqEmu {
     }
 
     /// The Titanium program's duel (R49-6 a, e, h), from the read; not
-    /// yet checked live (checklist 6.492). P99 waits for an attended row,
-    /// and TAKP and Quarm for theirs (11g).
+    /// yet checked live (checklist 6.492). P99 waits for an attended row.
     fn duel(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::<super::duel::TitaniumDuel>::default())
+        offer(Box::<super::duel::ProgramDuel>::default())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -2051,6 +2050,17 @@ impl ServerType for Quarm {
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::translocate(EQMAC_CONSENT_WINDOW))
     }
+
+    /// The `EQMac` program's duel (TAKP program reads 11g and 11h, 6.622),
+    /// source-derived, not live. Quarm's own handlers (fc75fcf) keep the
+    /// duel themselves: `Handle_OP_RequestDuel` swaps the two ids and
+    /// passes a new challenge on, `Handle_OP_DuelResponse2` starts it and
+    /// sends the challenger the accepter's `OP_RequestDuel`, and
+    /// `Handle_OP_DuelResponse` ends both sides and tells the challenger
+    /// with a line. The duel-won word 0x415e has no handler there.
+    fn duel(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::duel::ProgramDuel::eqmac()))
+    }
 }
 
 /// How long the session leaves a Mac server's question open before it
@@ -2260,6 +2270,16 @@ impl ServerType for Takp {
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::translocate(EQMAC_CONSENT_WINDOW))
+    }
+
+    /// The `EQMac` program's duel (TAKP program reads 11g and 11h, 6.622),
+    /// source-derived, not live. TAKP's own handlers (44afcbf) relay the
+    /// clients' packets: `Handle_OP_RequestDuel` and
+    /// `Handle_OP_DuelResponse` pass them to the other player, and
+    /// `Handle_OP_DuelAccept` starts the duel. The duel-won word 0x415e has
+    /// no handler there.
+    fn duel(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::duel::ProgramDuel::eqmac()))
     }
 
     /// `/who all` and friends in the `EQMac` program's packets
@@ -2895,11 +2915,12 @@ mod tests {
         // sacrifice answers (6.596), training (6.597), tradeskills and
         // world containers (6.598), `/disc` and `/shield` (6.603), and emotes,
         // yells, buff cancels, book edits, surnames, petitions and bug reports
-        // (6.604), and inspection answers from the program's own reply
-        // (6.621). Other features await their own evidence.
+        // (6.604), inspection answers from the program's own reply
+        // (6.621), and the program's duel (6.622). Other features await
+        // their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 36);
+        assert_eq!(quarm.features(&setup).len(), 37);
         assert_eq!(
             offers(quarm),
             [
@@ -2946,6 +2967,7 @@ mod tests {
                 Capability::Splitting,
                 Capability::Yelling,
                 Capability::ApplyingPoison,
+                Capability::Dueling,
                 Capability::Surnaming,
                 Capability::Petitioning,
                 Capability::ReportingBugs,
@@ -2953,10 +2975,11 @@ mod tests {
                 Capability::BazaarSearching,
                 Capability::DisciplineReuse,
                 Capability::InspectAnswer,
+                Capability::DecliningDuels,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 38);
+        assert_eq!(takp.features(&setup).len(), 39);
         // TAKP offers what Quarm does, and the bleed-out report after the
         // environmental damage.
         let mut expected = offers(quarm);

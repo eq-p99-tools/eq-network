@@ -758,12 +758,15 @@ pub enum Capability {
     /// and on TAKP and Quarm with the worn items as well, which the `EQMac`
     /// program sends itself.
     InspectAnswer,
+    /// `EQMac`'s `/decline` of a waiting duel challenge
+    /// ([`crate::command::GameCommand::DeclineDuel`]).
+    DecliningDuels,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 93] = [
+    pub const ALL: [Self; 94] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -857,6 +860,7 @@ impl Capability {
         Self::Melody,
         Self::ColdWater,
         Self::InspectAnswer,
+        Self::DecliningDuels,
     ];
 }
 
@@ -2997,6 +3001,7 @@ mod tests {
             Capability::Melody => 90,
             Capability::ColdWater => 91,
             Capability::InspectAnswer => 92,
+            Capability::DecliningDuels => 93,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
