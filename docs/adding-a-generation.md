@@ -111,6 +111,13 @@ unreachable because validation refuses the generation:
   another spawn. With no feature offered, a spawn read during the entry reaches no one yet.
   The motion deltas, animation and angle are not read, and velocity and forward input stay
   zero.
+- Its spawns' movement and removal (`rof2_player::position` and `despawn`, 6.514): stock
+  `EQEmu` sends the server's 24-byte `PlayerPositionUpdateServer_Struct` unencoded under
+  `OP_ClientUpdate`, its five words laid out as the spawn record's position, which one table
+  reads for both; the velocity and forward input are Titanium's scales, inferred. The 5-byte
+  `OP_DeleteSpawn` gives the spawn id; its last byte is the encoder's constant. The delta
+  heading and the vehicle id are not read. `OP_MobUpdate` and `OP_NPCMoveUpdate` stay unlisted,
+  since stock `EQEmu` sends neither.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

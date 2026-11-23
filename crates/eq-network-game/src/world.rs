@@ -2395,11 +2395,11 @@ fn money_update(body: &[u8]) -> Result<Coins> {
 /// EQ units per second for one unit of a Titanium motion delta: the program
 /// reads each as 1/64 of a unit per 50 ms (Titanium read R2 of 10-31, the
 /// decoder 0x465304, 0x645ef8), so 20 / 64 a second.
-const DELTA_UNITS_PER_SECOND: f32 = 20.0 / 64.0;
+pub(crate) const DELTA_UNITS_PER_SECOND: f32 = 20.0 / 64.0;
 
 /// The Titanium program's forward input for one unit of a report's
 /// animation value: 1/40 (Titanium read R2 of 10-31, 0x641094).
-const ANIMATION_INPUT: f32 = 0.025;
+pub(crate) const ANIMATION_INPUT: f32 = 0.025;
 
 /// EQ units per second for one unit of a moving spawn's animation value, which
 /// is its speed: `EQEmu` moves NPCs `speed * 0.4 * 1.45` units per second

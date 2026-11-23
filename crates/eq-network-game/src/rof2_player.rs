@@ -597,34 +597,174 @@ fn flagged(read: &mut Cursor<'_>, present: bool) -> Result<String> {
     text(part)
 }
 
-/// The packed position, from the active `Spawn_Struct_Position` in
-/// `common/patches/rof2_structs.h` (the second definition; the first is
-/// commented out). Its five words, lowest bit first:
+/// One field of the packed position: its word, its lowest bit and its
+/// width.
+#[derive(Clone, Copy, Debug)]
+struct Field {
+    word: usize,
+    shift: u32,
+    width: u32,
+}
+
+/// The packed position's fields, one table for the spawn record's
+/// `Spawn_Struct_Position` and the update's
+/// `PlayerPositionUpdateServer_Struct`, whose five words lay them out the
+/// same (`common/patches/rof2_structs.h`, the active definitions;
+/// `common/eq_packet_structs.h` for the update, which `RoF2` has no
+/// encoder for). Lowest bit first:
 ///
-/// - word 0: the angle (bits 0 to 11), y (12 to 30), padding (31);
+/// - word 0: the angle, or padding in the update (bits 0 to 11), y (12 to
+///   30), padding (31);
 /// - word 1: delta z (0 to 12), delta x (13 to 25), padding (26 to 31);
 /// - word 2: x (0 to 18), the heading (19 to 30), padding (31);
 /// - word 3: delta heading (0 to 9), z (10 to 28), padding (29 to 31);
-/// - word 4: the animation (0 to 9), delta y (10 to 22), padding (23 to 31).
+/// - word 4: the animation (0 to 9), delta y (10 to 22), padding (23 to
+///   31).
+mod packed {
+    use super::Field;
+    pub(super) const Y: Field = Field {
+        word: 0,
+        shift: 12,
+        width: 19,
+    };
+    pub(super) const DELTA_Z: Field = Field {
+        word: 1,
+        shift: 0,
+        width: 13,
+    };
+    pub(super) const DELTA_X: Field = Field {
+        word: 1,
+        shift: 13,
+        width: 13,
+    };
+    pub(super) const X: Field = Field {
+        word: 2,
+        shift: 0,
+        width: 19,
+    };
+    pub(super) const HEADING: Field = Field {
+        word: 2,
+        shift: 19,
+        width: 12,
+    };
+    pub(super) const Z: Field = Field {
+        word: 3,
+        shift: 10,
+        width: 19,
+    };
+    pub(super) const ANIMATION: Field = Field {
+        word: 4,
+        shift: 0,
+        width: 10,
+    };
+    pub(super) const DELTA_Y: Field = Field {
+        word: 4,
+        shift: 10,
+        width: 13,
+    };
+}
+
+/// A field's bits, unsigned.
+fn bits(words: &[u32; 5], field: Field) -> u32 {
+    (words[field.word] >> field.shift) & ((1 << field.width) - 1)
+}
+
+/// A field's bits as a two's complement value.
+#[allow(clippy::cast_possible_wrap)]
+fn signed(words: &[u32; 5], field: Field) -> i32 {
+    let unused = 32 - field.width;
+    ((bits(words, field) << unused) as i32) >> unused
+}
+
+/// A signed field of at most 16 bits: a delta or the animation.
+fn small(words: &[u32; 5], field: Field) -> f32 {
+    f32::from(i16::try_from(signed(words, field)).expect("at most 16 bits"))
+}
+
+/// The packed position.
 ///
 /// x, y and z are signed 19-bit values in eighths of a unit, and the
-/// heading 12 bits in quarters of the 512-unit turn: `Mob::FillSpawnStruct`
-/// (`zone/mob.cpp`) fills them with `FloatToEQ19` and `FloatToEQ12`, whose
-/// inverses are `EQ19toFloat` and `EQ12toFloat` (`common/misc_functions.cpp`).
-/// The struct declares the heading signed, but `FloatToEQ12` never writes
-/// past 2047, so it is read as unsigned 12 bits, as Titanium's is. From
-/// integers no value can be non-finite. The angle, the deltas and the
-/// animation are not read: stock `EQEmu` sends a spawn's deltas and
-/// animation as zero (`EntityList::SendZoneSpawnsBulk` clears the record
-/// and `FillSpawnStruct` sets neither), and how the `RoF2` program takes
-/// them is not read (6.510).
+/// heading 12 bits in quarters of the 512-unit turn: `Mob::FillSpawnStruct`,
+/// `Mob::MakeSpawnUpdate` and `Mob::SentPositionPacket` (`zone/mob.cpp`)
+/// fill them with `FloatToEQ19` and `FloatToEQ12`, whose inverses are
+/// `EQ19toFloat` and `EQ12toFloat` (`common/misc_functions.cpp`). The spawn
+/// record's struct declares the heading signed, but `FloatToEQ12` never
+/// writes past 2047, so it is read as unsigned 12 bits, as Titanium's is
+/// and as the update's struct declares it. From integers no value can be
+/// non-finite. The angle is not read. A spawn record's deltas and animation
+/// are not read either: stock `EQEmu` sends them as zero
+/// (`EntityList::SendZoneSpawnsBulk` clears the record and
+/// `FillSpawnStruct` sets neither), and how the `RoF2` program takes them is
+/// not read (6.510).
+#[allow(clippy::cast_precision_loss)]
 fn packed_position(words: [u32; 5]) -> Position {
+    // A 19-bit value is exact in an f32.
+    let coordinate = |field| signed(&words, field) as f32 / 8.0;
     Position {
-        x: crate::world::signed_position(words[2]),
-        y: crate::world::signed_position(words[0] >> 12),
-        z: crate::world::signed_position(words[3] >> 10),
-        heading: f32::from(u16::try_from((words[2] >> 19) & 0xfff).expect("twelve bits")) / 4.0,
+        x: coordinate(packed::X),
+        y: coordinate(packed::Y),
+        z: coordinate(packed::Z),
+        heading: f32::from(u16::try_from(bits(&words, packed::HEADING)).expect("twelve bits"))
+            / 4.0,
     }
+}
+
+/// `OP_ClientUpdate` from the zone: a spawn's position and motion
+/// (`utils/patches/patch_RoF2.conf`; inferred, 6.514).
+pub const POSITION_OPCODE: u16 = 0x7dfc;
+/// `OP_DeleteSpawn`: a spawn leaving the zone
+/// (`utils/patches/patch_RoF2.conf`; inferred, 6.514).
+pub const DESPAWN_OPCODE: u16 = 0x7280;
+
+/// A spawn's position update, as stock `EQEmu` sends it: `RoF2` has no
+/// encoder for `OP_ClientUpdate`, so the server's 24-byte
+/// `PlayerPositionUpdateServer_Struct` goes out as it is. Its spawn id and
+/// vehicle id are followed by the five words of the packed position.
+///
+/// The velocity is the three deltas and the forward input the animation,
+/// on Titanium's scales (1/64 of a unit per 50 ms, and 1/40), inferred for
+/// `RoF2` (6.514): `Mob::MakeSpawnUpdate` and `Mob::SentPositionPacket` fill
+/// both generations' updates from the same values with `FloatToEQ13`, and
+/// only the Titanium program's reading of them is known (Titanium read
+/// R2). They only carry other spawns between updates and never feed
+/// anything the player sends. The delta heading and the vehicle id are not
+/// read (6.514). An update for the player's own id is a position like any
+/// other, as on Titanium.
+///
+/// # Errors
+/// Refuses any length but 24 and a spawn id of zero.
+pub fn position(body: &[u8]) -> Result<crate::world::WorldEvent> {
+    ensure!(body.len() == 24, "invalid RoF2 position update length");
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(spawn_id != 0, "invalid RoF2 position update spawn ID");
+    let mut words = [0; 5];
+    for (word, bytes) in words.iter_mut().zip(body[4..].as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*bytes);
+    }
+    Ok(crate::world::WorldEvent::Position {
+        spawn_id,
+        position: packed_position(words),
+        velocity: [packed::DELTA_X, packed::DELTA_Y, packed::DELTA_Z]
+            .map(|field| small(&words, field) * crate::world::DELTA_UNITS_PER_SECOND),
+        forward: small(&words, packed::ANIMATION) * crate::world::ANIMATION_INPUT,
+    })
+}
+
+/// A spawn leaving the zone: `ENCODE(OP_DeleteSpawn)` writes the spawn id
+/// and a byte it always sets to 1, whatever the server's decay flag, so
+/// the byte is not read (inferred, 6.514). One naming the player's own id
+/// is a removal like any other, as Titanium's decoder gives it.
+///
+/// # Errors
+/// Refuses any length but 5 and a spawn id that is zero or past 16 bits.
+pub fn despawn(body: &[u8]) -> Result<crate::world::WorldEvent> {
+    ensure!(body.len() == 5, "invalid RoF2 despawn length");
+    let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+    let spawn_id = u16::try_from(id)
+        .ok()
+        .filter(|id| *id != 0)
+        .context("invalid RoF2 despawn spawn ID")?;
+    Ok(crate::world::WorldEvent::Despawn(spawn_id))
 }
 
 /// Another spawn from its record: a player, a creature, a corpse, a
