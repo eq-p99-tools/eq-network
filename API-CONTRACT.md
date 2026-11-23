@@ -26,8 +26,13 @@ program's own line (R49-3 e). `record` says whether the damage record
 followed, so a front end can expect its echo.
 
 Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
-`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
-sends it yet, since cold is unwired until R49-26.
+`LavaHeat`. Velious water's cold is `LiquidHazard::Cold`, sent as
+`Hazard::Freezing`, Titanium type 246, under the new `Capability::ColdWater`.
+It's offered on every Titanium session and shares the feet tick with lava
+(reads R49-3 b and R49-26: region kind 8, `VW`, at the origin). The host
+works out the amount, 50 − cold resist / 3 with a floor of 10. TAKP and Quarm
+don't offer it until a Mac read. **Breaking:** `LiquidHazard::Cold` and
+`Capability::ColdWater` on exhaustive enums; `Capability::ALL` grows to 91.
 
 **Breaking:**
 - `WorldEvent::HazardReported`;

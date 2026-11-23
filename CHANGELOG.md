@@ -128,7 +128,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the inventory whenever it arrives (read R49-36 a). Whether it clears the
   last zone's items at zone-in is still unread, so that the original client
   then holds nothing stays inferred.
-
+- Velious water's cold as the Titanium program reports it (reads R49-3 b and
+  R49-26; checklist 6.491d). New `LiquidHazard::Cold`, sent as type 246
+  (`Hazard::Freezing`) with its damage record, on the lava's feet tick, and
+  `Capability::ColdWater`, offered on every Titanium session. **Breaking:**
+  both enums are exhaustive, and `Capability::ALL` grows to 92.
+  - `ItemBonuses::cold_resistance`, from field 16 of the Titanium item
+    record (`None` on `EQMac`), and
+    `TitaniumEnvironment::base_cold_resistance`, the profile dword at byte
+    12872 that the program's cold base reads (read R49-3c). **Breaking:**
+    both structs gain a public field.
 - Slower water's own set in the swim grant, as read R49-26 reads the Titanium
   region classifier (0x435ec9; checklist 6.483).
   - New `water::WetKind` (`Normal` for `WT`, `W2` and `W3`; `Slower` for

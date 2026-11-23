@@ -750,6 +750,9 @@ pub enum Capability {
     /// the server type takes it. It sends nothing the session doesn't
     /// already take: `StopSong`, then a gem's `CastSpell`.
     Melody,
+    /// The Titanium client can report Velious water's cold through
+    /// environmental damage ([`crate::hazards::LiquidHazard::Cold`]).
+    ColdWater,
     /// Answering another player's inspection of the player: on Titanium
     /// with the player's inspect message (the server fills the equipment),
     /// and on TAKP and Quarm with the worn items as well, which the `EQMac`
@@ -760,7 +763,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 92] = [
+    pub const ALL: [Self; 93] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -852,6 +855,7 @@ impl Capability {
         Self::DisciplineReuse,
         Self::WeaponStances,
         Self::Melody,
+        Self::ColdWater,
         Self::InspectAnswer,
     ];
 }
@@ -2983,7 +2987,8 @@ mod tests {
             Capability::DisciplineReuse => 88,
             Capability::WeaponStances => 89,
             Capability::Melody => 90,
-            Capability::InspectAnswer => 91,
+            Capability::ColdWater => 91,
+            Capability::InspectAnswer => 92,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

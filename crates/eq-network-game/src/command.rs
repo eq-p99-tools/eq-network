@@ -1785,6 +1785,7 @@ impl GameCommand {
                 crate::hazards::LiquidHazard::Lava | crate::hazards::LiquidHazard::ZoneHeat => {
                     Capability::LavaHeat
                 }
+                crate::hazards::LiquidHazard::Cold => Capability::ColdWater,
             },
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,
