@@ -70,7 +70,11 @@ pub struct TitaniumEnvironment {
     /// Titanium `eqgame.exe`'s profile routine copies the dword at byte
     /// 12872 (0x4b9741), and its base getter 0x4188ef reads it for the
     /// cold total 0x41897d (read R49-3c). The cited encoder's constant
-    /// block puts 1050 there. Server-side resist is separate.
+    /// block puts 1050 there, so on stock `EQEmu` the cold total is far
+    /// past 120 and every cold tick is the floor of 10: that is what the
+    /// program reports with the same profile, so it's parity, not a fault.
+    /// This field retains the received value. Server-side resist is
+    /// separate.
     pub base_cold_resistance: i32,
     /// A rank is present in the profile's alternate advancement array.
     pub has_alternate_advancement: bool,
