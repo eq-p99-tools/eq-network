@@ -51,6 +51,13 @@ pub const EQMAC_LAST_NAME_OPCODE: u16 = 0x6e41;
 pub const SURNAME_OPCODE: u16 = 0x4668;
 /// `EQMac`'s `OP_Surname`.
 pub const EQMAC_SURNAME_OPCODE: u16 = 0xc441;
+/// Titanium's `OP_RequestTitles`: the player asks which titles they may
+/// choose.
+pub const REQUEST_TITLES_OPCODE: u16 = 0x5eba;
+/// Titanium's `OP_SendTitleList`: the titles the player may choose.
+pub const TITLE_LIST_OPCODE: u16 = 0x3e89;
+/// Titanium's `OP_SetTitle`: the player's choice of title or suffix.
+pub const SET_TITLE_OPCODE: u16 = 0x1f22;
 
 /// The surname record (`Surname_Struct`), alike on both generations: the
 /// player's name in 64 bytes, a word, and the surname in 32.
@@ -172,6 +179,88 @@ pub fn surname_request(player: &str, surname: &str) -> Result<Vec<u8>> {
     body[..player.len()].copy_from_slice(player.as_bytes());
     body[SURNAME_AT..SURNAME_AT + surname.len()].copy_from_slice(surname.as_bytes());
     Ok(body)
+}
+
+/// A title the player may choose, as the server lists it: its number, and
+/// the title before the name and the suffix after it it gives, either
+/// empty.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TitleChoice {
+    /// The server's number for it, never 0.
+    pub id: u32,
+    /// The title before the name it gives; empty for none.
+    pub prefix: String,
+    /// The suffix after the name it gives; empty for none.
+    pub suffix: String,
+}
+
+/// The longest title or suffix text the list may carry, in bytes, its end
+/// apart: well past the 31 the zone's change of it carries
+/// ([`TITLE`]), so any list `EQEmu` builds from its title table fits.
+const TITLE_TEXT_LONGEST: usize = 63;
+
+/// Decodes `OP_SendTitleList` (`EQEmu`'s `TitleManager::MakeTitlesPacket`,
+/// which Titanium's wire carries as built): a 32-bit count, then for each
+/// title its 32-bit number, its prefix and its suffix, each ended by a NUL
+/// within 64 bytes. Text is read as [`WorldEvent::TitleChanged`]'s is. A
+/// number listed again keeps its first entry.
+///
+/// # Errors
+/// Rejects a short body, a count the body cannot hold, a string with no end
+/// within its length, a title numbered 0 and bytes after the last title.
+pub(crate) fn title_list(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() >= 4, "title list without its count");
+    let count = usize::try_from(word(body, 0)).context("title count out of range")?;
+    // Each title takes at least its number and two ends.
+    ensure!(
+        count <= (body.len() - 4) / 6,
+        "title count past the list's end"
+    );
+    let mut at = 4;
+    let string = |at: &mut usize| -> Result<String> {
+        let rest = &body[*at..];
+        let end = rest
+            .iter()
+            .take(TITLE_TEXT_LONGEST + 1)
+            .position(|byte| *byte == 0)
+            .context("title text without its end within its length")?;
+        *at += end + 1;
+        Ok(String::from_utf8_lossy(&rest[..end]).into_owned())
+    };
+    let mut titles = Vec::with_capacity(count);
+    for _ in 0..count {
+        ensure!(body.len() >= at + 4, "title without its number");
+        let id = word(body, at);
+        ensure!(id != 0, "title numbered 0");
+        at += 4;
+        let prefix = string(&mut at)?;
+        let suffix = string(&mut at)?;
+        // A number listed again keeps its first entry.
+        if titles.iter().all(|title: &TitleChoice| title.id != id) {
+            titles.push(TitleChoice { id, prefix, suffix });
+        }
+    }
+    ensure!(at == body.len(), "bytes after the title list");
+    Ok(WorldEvent::TitleList(titles))
+}
+
+/// The length of the list's record, as [`title_list`] reads it.
+#[must_use]
+pub fn title_list_length(titles: &[TitleChoice]) -> usize {
+    4 + titles
+        .iter()
+        .map(|title| 6 + title.prefix.len() + title.suffix.len())
+        .sum::<usize>()
+}
+
+/// Builds `OP_SetTitle`'s choice (`SetTitle_Struct`, 8 bytes): 0 for a
+/// title or 1 for a suffix, then the title's number, 0 to clear it
+/// (`EQEmu`'s `Client::Handle_OP_SetTitle`).
+#[must_use]
+pub fn set_title(title_id: u32, suffix: bool) -> Vec<u8> {
+    let mut body = u32::from(suffix).to_le_bytes().to_vec();
+    body.extend_from_slice(&title_id.to_le_bytes());
+    body
 }
 
 /// Decodes the server's answer in `OP_Surname`: the request's record sent
@@ -315,6 +404,7 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         TITLE_OPCODE => Some(titanium_title(body)?),
         SURNAME_OPCODE => Some(surname_answer(body)?),
+        TITLE_LIST_OPCODE => Some(title_list(body)?),
         _ => None,
     })
 }
@@ -596,5 +686,86 @@ mod tests {
         assert!(eqmac_last_name(&[0; 196]).is_err());
         // A 200-byte record is Titanium's, not EQMac's.
         assert!(eqmac_last_name(&[0; 200]).is_err());
+    }
+
+    #[test]
+    fn title_lists_carry_each_title_and_its_parts() {
+        let mut body = 3_u32.to_le_bytes().to_vec();
+        for (id, prefix, suffix) in [
+            (7_u32, "Lord", ""),
+            (9, "", "the Synthetic"),
+            (12, "Sir", "of Tests"),
+        ] {
+            body.extend_from_slice(&id.to_le_bytes());
+            body.extend_from_slice(prefix.as_bytes());
+            body.push(0);
+            body.extend_from_slice(suffix.as_bytes());
+            body.push(0);
+        }
+        let choice = |id, prefix: &str, suffix: &str| TitleChoice {
+            id,
+            prefix: prefix.into(),
+            suffix: suffix.into(),
+        };
+        assert_eq!(
+            crate::world::titanium_update(TITLE_LIST_OPCODE, &body).unwrap(),
+            Some(WorldEvent::TitleList(vec![
+                choice(7, "Lord", ""),
+                choice(9, "", "the Synthetic"),
+                choice(12, "Sir", "of Tests"),
+            ]))
+        );
+        assert_eq!(
+            title_list(&0_u32.to_le_bytes()).unwrap(),
+            WorldEvent::TitleList(Vec::new())
+        );
+        // Short, cut, a count past the end, bytes after, and a title 0.
+        assert!(title_list(&[0; 3]).is_err());
+        assert!(title_list(&body[..body.len() - 1]).is_err());
+        let mut more = body.clone();
+        more[0] = 4;
+        assert!(title_list(&more).is_err());
+        let mut huge = body.clone();
+        huge[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(title_list(&huge).is_err());
+        let mut trailing = body.clone();
+        trailing.push(0);
+        assert!(title_list(&trailing).is_err());
+        let mut zero = body.clone();
+        zero[4..8].fill(0);
+        assert!(title_list(&zero).is_err());
+        let WorldEvent::TitleList(read) = title_list(&body).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(title_list_length(&read), body.len());
+
+        // A text past 63 bytes, and a number listed twice.
+        let entry = |id: u32, prefix: &str| {
+            let mut entry = id.to_le_bytes().to_vec();
+            entry.extend_from_slice(prefix.as_bytes());
+            entry.extend([0, 0]);
+            entry
+        };
+        let mut long = 1_u32.to_le_bytes().to_vec();
+        long.extend(entry(7, &"a".repeat(64)));
+        assert!(title_list(&long).is_err());
+        let mut fits = 1_u32.to_le_bytes().to_vec();
+        fits.extend(entry(7, &"a".repeat(63)));
+        assert!(title_list(&fits).is_ok());
+        let mut twice = 2_u32.to_le_bytes().to_vec();
+        twice.extend(entry(7, "First"));
+        twice.extend(entry(7, "Second"));
+        assert_eq!(
+            title_list(&twice).unwrap(),
+            WorldEvent::TitleList(vec![choice(7, "First", "")])
+        );
+    }
+
+    #[test]
+    fn a_title_choice_names_its_kind_then_its_number() {
+        assert_eq!(set_title(7, false), [0, 0, 0, 0, 7, 0, 0, 0]);
+        assert_eq!(set_title(9, true), [1, 0, 0, 0, 9, 0, 0, 0]);
+        // 0 clears it.
+        assert_eq!(set_title(0, true), [1, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

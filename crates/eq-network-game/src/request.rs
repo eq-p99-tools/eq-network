@@ -189,6 +189,15 @@ pub enum Request {
     },
     /// Ask for this last name: `/surname` ([`crate::names::surname_request`]).
     Surname(String),
+    /// Ask which titles the player may choose.
+    RequestTitles,
+    /// Choose a title before the name, or a suffix after it; 0 clears it.
+    SetTitle {
+        /// The title's number, from the server's list; 0 to clear.
+        title_id: u32,
+        /// Whether it is the suffix.
+        suffix: bool,
+    },
     /// Emote, in the player's own words.
     Emote(String),
     /// A social emote's text, sent as the program builds it.
@@ -571,6 +580,16 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::Surname(surname) => EncodedCommand {
             opcode: crate::names::SURNAME_OPCODE,
             body: crate::names::surname_request(sender.name, surname)?,
+        },
+        // `EQEmu`'s handler reads no body; the program's is not read yet
+        // (inferred empty, program read R49-14b).
+        Request::RequestTitles => EncodedCommand {
+            opcode: crate::names::REQUEST_TITLES_OPCODE,
+            body: Vec::new(),
+        },
+        Request::SetTitle { title_id, suffix } => EncodedCommand {
+            opcode: crate::names::SET_TITLE_OPCODE,
+            body: crate::names::set_title(*title_id, *suffix),
         },
         Request::Emote(text) => socials::emote(text)?,
         Request::SocialEmote(text) => socials::social_emote(text)?,
@@ -955,6 +974,33 @@ mod tests {
         }
         assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
         assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_asks_for_and_chooses_titles() {
+        let asked = titanium(&Request::RequestTitles, PLAYER).unwrap();
+        assert_eq!((asked.opcode, asked.body.len()), (0x5eba, 0));
+        let chosen = titanium(
+            &Request::SetTitle {
+                title_id: 7,
+                suffix: true,
+            },
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!(
+            (chosen.opcode, chosen.body),
+            (0x1f22, vec![1, 0, 0, 0, 7, 0, 0, 0])
+        );
+        assert!(eqmac(&Request::RequestTitles, PLAYER).is_err());
+        assert!(eqmac(
+            &Request::SetTitle {
+                title_id: 7,
+                suffix: false
+            },
+            PLAYER
+        )
+        .is_err());
     }
 
     #[test]

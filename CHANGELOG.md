@@ -5,6 +5,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Ask for and choose a title (gap 3.6, checklist 6.516). Stock `EQEmu`
+  offers the new `Capability::Titling`; P99, TAKP and Quarm do not, and
+  `EQMac` and RoF2 build neither request (RoF2's numbers are owed, inferred
+  for RoF2, 6.489). `GameCommand::RequestTitles` sends `OP_RequestTitles`
+  (0x5eba) with an empty body (inferred, pending read R49-14b), one at a
+  time with a 10 s lapse and the session's 500 ms settling after an answer.
+  The answer, `OP_SendTitleList` (0x3e89), is read into
+  `WorldEvent::TitleList` of `names::TitleChoice` (id, prefix, suffix): the
+  count is bounded by the body before anything is allocated, each text is
+  capped at 63 bytes, a repeated id keeps its first entry, and a zero id, a
+  missing NUL, a short body or trailing bytes refuse the whole list to the
+  gap log. A list no request asked for is withheld and logged as a gap.
+  `GameCommand::SetTitle` sends `OP_SetTitle` (0x1f22, 8 bytes, the kind as
+  0 or 1 then the id) only for an id on this admission's latest list with
+  text of that kind, or 0 to clear either kind; anything else is refused,
+  nothing sent. A new admission forgets the list and the request in flight.
+  Coverage lists 0x3e89 as read by the zone decoder. Nothing in a client
+  calls `SetTitle` yet: the title window waits for read R49-14.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request`,
+  `WorldEvent` and `Capability` (`Capability::ALL` holds 78).
 - Read RoF2's spawn movement and removal as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.514). `rof2_player::position` reads the
   24-byte `OP_ClientUpdate` (0x7dfc), which RoF2 gets unencoded, into

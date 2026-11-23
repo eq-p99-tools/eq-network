@@ -867,6 +867,23 @@ pub enum GameCommand {
         /// The surname: one word of printable ASCII, sent as typed.
         surname: String,
     },
+    /// Ask which titles the player may choose; the server answers with
+    /// [`crate::world::WorldEvent::TitleList`].
+    RequestTitles {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Choose a title before the name, or a suffix after it, from the
+    /// server's latest list; 0 clears it. The server tells the zone of the
+    /// change ([`crate::world::WorldEvent::TitleChanged`]).
+    SetTitle {
+        /// Current zone admission.
+        session_id: u64,
+        /// The title's number from the list; 0 to clear.
+        title_id: u32,
+        /// Whether it is the suffix.
+        suffix: bool,
+    },
     /// Emote, in the player's own words: `/emote`.
     Emote {
         /// Current zone admission.
@@ -1260,6 +1277,8 @@ impl GameCommand {
             Self::ShowHelm { .. } => "ShowHelm",
             Self::Random { .. } => "Random",
             Self::Surname { .. } => "Surname",
+            Self::RequestTitles { .. } => "RequestTitles",
+            Self::SetTitle { .. } => "SetTitle",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1392,6 +1411,8 @@ impl GameCommand {
             | Self::ShowHelm { session_id, .. }
             | Self::Random { session_id, .. }
             | Self::Surname { session_id, .. }
+            | Self::RequestTitles { session_id }
+            | Self::SetTitle { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1551,6 +1572,7 @@ impl GameCommand {
             Self::ShowHelm { .. } => Capability::ShowingHelm,
             Self::Random { .. } => Capability::Rolling,
             Self::Surname { .. } => Capability::Surnaming,
+            Self::RequestTitles { .. } | Self::SetTitle { .. } => Capability::Titling,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1619,6 +1641,8 @@ impl GameCommand {
             | Self::ShowHelm { .. }
             | Self::Random { .. }
             | Self::Surname { .. }
+            | Self::RequestTitles { .. }
+            | Self::SetTitle { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -1938,6 +1962,8 @@ pub fn encode(
         | GameCommand::ShowHelm { .. }
         | GameCommand::Random { .. }
         | GameCommand::Surname { .. }
+        | GameCommand::RequestTitles { .. }
+        | GameCommand::SetTitle { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }

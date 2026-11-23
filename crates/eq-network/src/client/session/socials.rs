@@ -339,10 +339,247 @@ impl Feature for Surnames {
     }
 }
 
+/// How long a request for the title list waits for its answer before
+/// another may go (inferred: `EQEmu` always answers, so this only frees a
+/// request whose answer was lost).
+const TITLES_WAIT: Duration = Duration::from_secs(10);
+/// The least time between an answered request for the list, which draws an
+/// answer of any size, and the next: the session's usual settling.
+const TITLES_SETTLING: Duration = super::listing::SETTLING;
+
+/// Choosing a title or suffix: asking for the list the player may choose
+/// from, and choosing from it. `EQEmu` answers the request with the list
+/// (`Client::Handle_OP_RequestTitles`) and ignores, with no line, a choice
+/// of a title the character may not have (`Client::Handle_OP_SetTitle`), so
+/// the session sends only a title this admission's latest list named, of a
+/// kind it has text for, or 0 to clear either kind. A list nobody asked for
+/// is withheld and told as a gap. Only stock `EQEmu` lists it, from source,
+/// not yet checked live; nothing in a front end calls it until the program's
+/// title window is read (R49-14).
+#[derive(Default)]
+pub(super) struct Titles {
+    asked: Option<Instant>,
+    answered: Option<Instant>,
+    listed: Option<Vec<eq_network_game::names::TitleChoice>>,
+    unasked: Option<usize>,
+}
+
+impl Titles {
+    fn waiting(&self) -> bool {
+        self.asked
+            .is_some_and(|asked| asked.elapsed() < TITLES_WAIT)
+    }
+
+    fn settling(&self) -> bool {
+        self.answered
+            .is_some_and(|answered| answered.elapsed() < TITLES_SETTLING)
+    }
+}
+
+impl Feature for Titles {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::Titling]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::RequestTitles { .. } | ClientCommand::SetTitle { .. }
+        )
+    }
+
+    /// A new admission forgets the list and any request in flight.
+    fn admitted(&mut self, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+        *self = Self::default();
+        Ok(())
+    }
+
+    fn explain(&mut self, message: &mut Message, _world: &World) {
+        match message {
+            Message::ZoneOffer(_) | Message::ZoneAnswer(_) | Message::Handoff(_) => {
+                self.asked = None;
+            }
+            Message::Event(WorldEvent::TitleList(titles)) => {
+                if self.waiting() {
+                    self.listed = Some(titles.clone());
+                    self.answered = Some(Instant::now());
+                } else {
+                    self.unasked = Some(eq_network_game::names::title_list_length(titles));
+                    *message = Message::Withheld;
+                }
+                self.asked = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn tick(&mut self, _now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(length) = self.unasked.take() {
+            out.log.gap_unsampled(
+                eq_network_game::names::TITLE_LIST_OPCODE,
+                Some("OP_SendTitleList"),
+                length,
+                crate::client::GapKind::Unread {
+                    reason: "a title list no request asked for".to_owned(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match command {
+            ClientCommand::RequestTitles { .. } => {
+                if self.waiting() || self.settling() {
+                    return actions::refuse(command, "Wait for the list of titles.", out.log);
+                }
+                out.request(&Request::RequestTitles)?;
+                self.asked = Some(Instant::now());
+                Ok(())
+            }
+            ClientCommand::SetTitle {
+                title_id, suffix, ..
+            } => {
+                let has_text = |title: &eq_network_game::names::TitleChoice| {
+                    title.id == *title_id
+                        && !if *suffix {
+                            &title.suffix
+                        } else {
+                            &title.prefix
+                        }
+                        .is_empty()
+                };
+                let listed = self
+                    .listed
+                    .as_ref()
+                    .is_some_and(|listed| listed.iter().any(has_text));
+                if *title_id != 0 && !listed {
+                    return actions::refuse(
+                        command,
+                        "Choose a title from the latest list, of a kind it has.",
+                        out.log,
+                    );
+                }
+                out.request(&Request::SetTitle {
+                    title_id: *title_id,
+                    suffix: *suffix,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{feature::testing, ClientEvent};
     use super::*;
+
+    #[test]
+    fn titles_are_asked_for_once_and_chosen_only_from_the_latest_list() {
+        use eq_network_game::names::{set_title, TitleChoice};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut feature = Titles::default();
+        let refused = |outcome: &testing::Outcome<Result<()>>| {
+            outcome.sent.is_empty()
+                && outcome.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::SocialRefused { session_id: 5, .. })
+                    )
+                })
+        };
+        let choose = |feature: &mut Titles, world: &mut World, title_id, suffix| {
+            let command = ClientCommand::SetTitle {
+                session_id: 5,
+                title_id,
+                suffix,
+            };
+            testing::run(|out| feature.handle(&command, world, out))
+        };
+        // Nothing listed yet: only clearing goes, of either kind.
+        assert!(refused(&choose(&mut feature, &mut world, 7, false)));
+        for suffix in [false, true] {
+            let cleared = choose(&mut feature, &mut world, 0, suffix);
+            assert_eq!(cleared.sent[0].body, set_title(0, suffix));
+        }
+
+        // A list nobody asked for is withheld, names nothing, and is a gap.
+        let list = || {
+            Message::Event(WorldEvent::TitleList(vec![TitleChoice {
+                id: 7,
+                prefix: "Lord".into(),
+                suffix: String::new(),
+            }]))
+        };
+        let mut unasked = list();
+        feature.explain(&mut unasked, &world);
+        assert!(matches!(unasked, Message::Withheld));
+        let told = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+        assert!(told
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::Gap(_))));
+        assert!(refused(&choose(&mut feature, &mut world, 7, false)));
+
+        let ask = ClientCommand::RequestTitles { session_id: 5 };
+        let asked = testing::run(|out| feature.handle(&ask, &mut world, out));
+        assert_eq!(
+            (asked.sent[0].opcode, asked.sent[0].body.len()),
+            (eq_network_game::names::REQUEST_TITLES_OPCODE, 0)
+        );
+        // A second waits for the answer.
+        assert!(refused(&testing::run(
+            |out| feature.handle(&ask, &mut world, out)
+        )));
+        let mut answer = list();
+        feature.explain(&mut answer, &world);
+        assert!(matches!(answer, Message::Event(_)));
+        // Answered, the next still waits out the settling.
+        assert!(refused(&testing::run(
+            |out| feature.handle(&ask, &mut world, out)
+        )));
+        let chosen = choose(&mut feature, &mut world, 7, false);
+        assert_eq!(
+            (chosen.sent[0].opcode, &chosen.sent[0].body),
+            (
+                eq_network_game::names::SET_TITLE_OPCODE,
+                &set_title(7, false)
+            )
+        );
+        // Not listed, or a kind the title has no text for.
+        assert!(refused(&choose(&mut feature, &mut world, 9, false)));
+        assert!(refused(&choose(&mut feature, &mut world, 7, true)));
+
+        // Settled, a fresh request goes; one whose answer never comes lapses.
+        feature.answered = Instant::now().checked_sub(TITLES_SETTLING);
+        assert_eq!(
+            testing::run(|out| feature.handle(&ask, &mut world, out))
+                .sent
+                .len(),
+            1
+        );
+        assert!(refused(&testing::run(
+            |out| feature.handle(&ask, &mut world, out)
+        )));
+        feature.asked = Instant::now().checked_sub(TITLES_WAIT);
+        assert_eq!(
+            testing::run(|out| feature.handle(&ask, &mut world, out))
+                .sent
+                .len(),
+            1
+        );
+        // A new admission forgets the list and the request in flight.
+        testing::run(|out| feature.admitted(&mut world, out));
+        assert!(feature.listed.is_none() && feature.asked.is_none() && feature.answered.is_none());
+        assert!(refused(&choose(&mut feature, &mut world, 7, false)));
+    }
 
     #[test]
     fn a_surname_goes_to_the_server_as_typed_one_at_a_time() {

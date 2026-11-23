@@ -51,7 +51,7 @@ use super::{
     raids::Raids,
     reading::Reading,
     resurrection::Resurrection,
-    socials::{Socials, Surnames},
+    socials::{Socials, Surnames, Titles},
     spellbook::{Edits, Spellbook},
     talk::Talk,
     targeting::Targeting,
@@ -494,6 +494,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Asking for the titles the player may choose, and choosing one.
+    fn titles(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -611,6 +616,7 @@ pub(super) trait ServerType: Sync {
             self.listing(setup),
             self.socials(setup),
             self.surnames(setup),
+            self.titles(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
@@ -1504,6 +1510,13 @@ impl ServerType for EqEmu {
     /// answer are built and listed by no server type.
     fn surnames(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Surnames>::default())
+    }
+
+    /// Asked and chosen as `Client::Handle_OP_RequestTitles` and
+    /// `Handle_OP_SetTitle` read them, from source; not yet checked live.
+    /// P99, TAKP and Quarm have no title list.
+    fn titles(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Titles>::default())
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -2539,7 +2552,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 48),
+            (ServerProtocol::EqEmu, 49),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2603,6 +2616,22 @@ mod tests {
                     "{protocol:?} {capability:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn only_eqemu_lists_the_title_list_and_choice() {
+        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Titling));
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::Titling),
+                "{protocol:?}"
+            );
         }
     }
 

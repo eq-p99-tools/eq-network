@@ -676,12 +676,16 @@ pub enum Capability {
     /// Destroying coins from the cursor
     /// ([`crate::command::GameCommand::DestroyCoins`]).
     DestroyingCoins,
+    /// Asking which titles the player may choose, and choosing one or a
+    /// suffix ([`crate::command::GameCommand::RequestTitles`],
+    /// [`crate::command::GameCommand::SetTitle`]).
+    Titling,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 78] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -759,6 +763,7 @@ impl Capability {
         Self::SendingFeedback,
         Self::ChatChannels,
         Self::DestroyingCoins,
+        Self::Titling,
     ];
 }
 
@@ -1289,6 +1294,10 @@ pub enum WorldEvent {
         /// The new last name; empty when it was taken away.
         last_name: String,
     },
+    /// The titles the player may choose, as the server listed them in
+    /// answer to [`crate::command::GameCommand::RequestTitles`]
+    /// ([`crate::names::title_list`]).
+    TitleList(Vec<crate::names::TitleChoice>),
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
@@ -2603,6 +2612,7 @@ mod tests {
             Capability::SendingFeedback => 74,
             Capability::ChatChannels => 75,
             Capability::DestroyingCoins => 76,
+            Capability::Titling => 77,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

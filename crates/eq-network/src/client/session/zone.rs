@@ -943,7 +943,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 123;
+    const KINDS: usize = 125;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1010,6 +1010,8 @@ mod tests {
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
             ClientCommand::DestroyCoins { .. } => 122,
+            ClientCommand::RequestTitles { .. } => 123,
+            ClientCommand::SetTitle { .. } => 124,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1590,6 +1592,12 @@ mod tests {
             ClientCommand::Surname {
                 session_id,
                 surname: "Exemplum".into(),
+            },
+            ClientCommand::RequestTitles { session_id },
+            ClientCommand::SetTitle {
+                session_id,
+                title_id: 7,
+                suffix: false,
             },
             ClientCommand::Emote {
                 session_id,
