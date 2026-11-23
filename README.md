@@ -125,8 +125,9 @@ Some capabilities depend on the session, not only on the server type:
   across zones, and returning to character selection restores the startup
   option. Replies wait 3 to 60 seconds and never join a list; whether the
   deployed server accepts them is still unverified.
-- `Drowning` and `LavaHeat`: offered on every Titanium session, EQEmu and
-  P99, as the Titanium program reports them on any server.
+- `Drowning`, `LavaHeat` and `ColdWater`: offered on every Titanium
+  session, EQEmu and P99, as the Titanium program reports them on any
+  server.
 - `GroundDropping`: offered on a stock EQEmu session only when it is
   restricted to the local network.
 - `RaidGroupLeaders`: not offered by any server type yet.
