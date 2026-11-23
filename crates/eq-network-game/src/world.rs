@@ -1328,6 +1328,13 @@ pub enum WorldEvent {
     /// ([`crate::command::GameCommand::BazaarSearch`],
     /// [`crate::command::GameCommand::BazaarWelcome`]).
     Bazaar(crate::bazaar::BazaarEvent),
+    /// The player's four bandolier sets, as the profile at admission keeps
+    /// them; each `None` where it is empty
+    /// ([`crate::bandolier::titanium_profile`]).
+    Bandoliers(Box<[Option<crate::bandolier::BandolierSet>; crate::bandolier::SETS]>),
+    /// The player's four potion belt slots, as the profile at admission
+    /// keeps them; each `None` where it is empty.
+    PotionBelt(Box<[Option<crate::bandolier::BeltItem>; crate::bandolier::BELT_SLOTS]>),
     /// A Bazaar search or welcome request was not sent, and why.
     BazaarRefused {
         /// Admission from the request.

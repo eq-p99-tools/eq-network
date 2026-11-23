@@ -453,6 +453,14 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         |error| unreadable(Part::World, &error),
         |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
     ));
+    // A bad set or belt field withdraws only these two (6.559).
+    match crate::bandolier::titanium_profile(body) {
+        Ok((sets, belt)) => messages.extend([
+            Message::Event(WorldEvent::Bandoliers(Box::new(sets))),
+            Message::Event(WorldEvent::PotionBelt(Box::new(belt))),
+        ]),
+        Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
     messages.push(crate::money::titanium_elsewhere(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |(cursor, bank)| {
@@ -747,6 +755,46 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_bandolier_field_withdraws_only_the_sets_and_belt() {
+        let has = |messages: &[Message], test: fn(&WorldEvent) -> bool| {
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::Event(event) if test(event)))
+        };
+        let profile = vec![0; 19592];
+        let read = titanium(PROFILE_OPCODE, &profile);
+        assert!(has(
+            &read,
+            |event| matches!(event, WorldEvent::Bandoliers(sets) if sets.iter().all(Option::is_none))
+        ));
+        assert!(has(&read, |event| matches!(
+            event,
+            WorldEvent::PotionBelt(_)
+        )));
+        let unreadable = |messages: &[Message]| {
+            messages
+                .iter()
+                .filter(|message| matches!(message, Message::Unreadable { .. }))
+                .count()
+        };
+        let before = unreadable(&read);
+        // The first set's name with no end within its 32 bytes.
+        let mut bad = profile;
+        bad[6164..6196].fill(b'a');
+        let read = titanium(PROFILE_OPCODE, &bad);
+        assert_eq!(unreadable(&read), before + 1);
+        assert!(!has(&read, |event| matches!(
+            event,
+            WorldEvent::Bandoliers(_) | WorldEvent::PotionBelt(_)
+        )));
+        assert!(has(&read, |event| matches!(event, WorldEvent::Coins(_))));
+        assert!(has(&read, |event| matches!(
+            event,
+            WorldEvent::BuffSnapshot(_)
+        )));
+    }
+
+    #[test]
     fn a_bazaar_answer_is_an_event_nothing_a_kind_or_unreadable() {
         let mut done = vec![0; 20];
         done[0] = 12;
@@ -846,6 +894,8 @@ mod tests {
                 Message::Event(WorldEvent::Coins(_)),
                 Message::Event(WorldEvent::AutoSplit(true)),
                 Message::Event(WorldEvent::Nourishment(_)),
+                Message::Event(WorldEvent::Bandoliers(_)),
+                Message::Event(WorldEvent::PotionBelt(_)),
                 Message::Event(WorldEvent::CoinsElsewhere { .. }),
                 Message::Event(WorldEvent::BoundIn { zone_id: 0 }),
                 Message::Event(WorldEvent::SpellBook(book)),
@@ -863,6 +913,10 @@ mod tests {
                 )),
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(None)),
                 Message::VehicleName(None),
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
                 Message::Unreadable {
                     part: Part::World,
                     ..

@@ -7,6 +7,8 @@ pub mod alternate_advancement;
 /// How spawns look: worn gear, features, lights and the like, and the
 /// updates, states and illusions that change them.
 pub mod appearance;
+/// The player's bandolier sets and potion belt, from the Titanium profile.
+pub mod bandolier;
 /// A banker's change of the purse's and the bank's coins into the fewest
 /// coins of the largest kinds.
 pub mod banker;

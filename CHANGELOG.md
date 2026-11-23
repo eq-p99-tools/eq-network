@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read the player's bandolier sets and potion belt from the Titanium
+  profile (6.559, slice 1). The new `bandolier` module reads the four sets
+  (a name and four items) and four belt slots into the new
+  `WorldEvent::Bandoliers` and `WorldEvent::PotionBelt`, on every Titanium
+  server. A bad field withdraws only these two events. Nothing is sent.
+  **Breaking:** new `WorldEvent` variants.
 - Search the Bazaar on stock `EQEmu`, read only (6.550, slice 1). The new
   `bazaar` module builds `OP_BazaarSearch` (0x1ee9) searches and welcome
   requests and reads the results, the search's end and the welcome.
