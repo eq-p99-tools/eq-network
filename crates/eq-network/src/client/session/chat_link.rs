@@ -713,6 +713,46 @@ mod tests {
     }
 
     #[test]
+    fn a_camp_or_the_character_list_ends_the_link_and_its_thread() {
+        let config = crate::client::ClientConfig::for_protocol(
+            crate::client::ServerProtocol::EqEmu,
+            "ACCOUNT",
+            "PASSWORD",
+            "Test Server",
+            "Tester",
+        );
+        let identity = crate::client::ClientIdentity::new("example-host", "example-user");
+        let credentials = super::super::login::Credentials {
+            account: "LS#1".into(),
+            key: *b"0123456789",
+        };
+        let stop = crate::client::CancellationToken::default();
+        let mut session = super::super::CharacterSession::new(
+            &config,
+            &identity,
+            &credentials,
+            &stop,
+            None,
+            None,
+        );
+        let (link, sent, _) = link(Some(Stub::Stalls));
+        session.chat = Arc::clone(&link);
+        link.open(login(), false);
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(link.running());
+        // A zone change keeps it.
+        session.on_zone_exit(&super::super::ZoneExit::Direct(Vec::new()));
+        assert!(link.running());
+        session.on_zone_exit(&super::super::ZoneExit::CharacterSelect);
+        assert!(!link.running());
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(opcode, _)| *opcode == CLOSED));
+    }
+
+    #[test]
     fn full_queues_drop_the_oldest_inbound_and_refuse_outbound() {
         let (link, _, _) = link(Some(Stub::Floods));
         link.open(login(), false);
