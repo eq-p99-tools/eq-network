@@ -5,6 +5,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Word a spoken tongue's skill as the Titanium program does (6.495, reads
+  R49-4 and R49-4b), for the client's languages slice.
+  - **Breaking:** `Tongue::spoken` takes a `chat::Speaker` (the game master
+    flag and whether log-server word 0 is set), and `Tongue::skill()` is now
+    the wire's `u32`.
+  - The skill is the profile's less intoxication >> 2, floored at 0, language
+    0 included; 100 for a game master, or -1 under log-server word 0. New
+    `Tongue::unslurred` gives the away reply's raw skill.
+  - New `PlayerState::intoxication` (Titanium u32 at 128, `EQMac` byte at
+    4968). The program's own offset is in its memory copy, so the match to
+    the profile field is inferred. No later change is decoded.
+  - New `WorldRules::listener_garble`: Titanium's `OP_LogServer` word at 16,
+    the switch for the listener's garble stage. `EQEmu` (1d9cb5c) never sets
+    it.
+  - `EQMac` writes the skill cut to 16 bits (inferred; the Mac program isn't
+    read).
+
 - Offer emotes, yells, buff cancels, book deletes and moves, surnames,
   petitions and bug reports on Quarm and TAKP (6.604 E1 to E6), from each
   server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is

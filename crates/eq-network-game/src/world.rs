@@ -96,6 +96,14 @@ pub struct PlayerState {
     /// room for 32 (`common/patches/mac.cpp`). Skill updates for skill
     /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
     pub languages: Option<Vec<u8>>,
+    /// How drunk the player is, by the profile's `intoxication`
+    /// (`common/patches/titanium_structs.h`'s u32 at 128; TAKP's `EQMac`
+    /// `PlayerProfile_Struct` byte at 4968), when decoded. Read R49-4 takes
+    /// the value the program shifts right by two and takes off a spoken
+    /// tongue's skill as this one (inferred: the program reads it from its
+    /// own copy of the profile). No later change of it is decoded, so it
+    /// holds until the next zone-in.
+    pub intoxication: Option<u32>,
     /// The disciplines the player knows, by spell ID, in the list's slots
     /// (100, and `RoF2`'s 300), 0 for an empty one, when decoded: Titanium's
     /// profile, which
@@ -2330,6 +2338,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         ),
         practice_points: Some(word(profile, 2224)),
         languages: Some(profile[TITANIUM_LANGUAGES].to_vec()),
+        intoxication: Some(word(profile, 128)),
         disciplines: Some(crate::disciplines::titanium_list(
             &profile[TITANIUM_DISCIPLINES],
         )?),

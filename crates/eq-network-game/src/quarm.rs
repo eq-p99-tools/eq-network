@@ -531,6 +531,9 @@ fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
     Ok(crate::group::profile_members(&data[PROFILE_GROUP], &player))
 }
 
+/// Where the profile keeps the player's intoxication, one byte (TAKP's
+/// `PlayerProfile_Struct` `intoxication`).
+const PROFILE_INTOXICATION: usize = 4968;
 /// Where the profile lists the player's languages: the 26 TAKP and Quarm
 /// fill (`MAX_PP_LANGUAGE`; `common/patches/mac.cpp` copies 26) of the
 /// field's room for 32, whose comment says the client uses the first 25.
@@ -590,6 +593,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         // `points` (i16 at 156); a negative count is none left.
         practice_points: Some(u32::try_from(signed_attribute(data, 156)).unwrap_or(0)),
         languages: Some(data[PROFILE_LANGUAGES].to_vec()),
+        intoxication: Some(u32::from(data[PROFILE_INTOXICATION])),
         disciplines: None,
         // What is left of each gem's reuse timer, in milliseconds
         // (`spellSlotRefresh`).

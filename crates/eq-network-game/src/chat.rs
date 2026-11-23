@@ -156,15 +156,19 @@ impl OutboundChat {
 }
 
 /// The tongue a message is spoken in, by the servers' number for it (0 the
-/// common tongue, 1 to 24 the others the profile lists), and the speaker's
-/// skill in it.
+/// common tongue, 1 to 24 the others the profile lists), and the skill the
+/// message carries in it.
 ///
-/// `EQEmu` and TAKP take the language from the packet but ignore its skill,
-/// using the speaker's own from their records, and both turn out-of-
-/// character, GM, broadcast and petition chat back to the common tongue
-/// themselves (`Client::ChannelMessageReceived`). What the official client
-/// writes in the skill field is inferred to be the speaker's skill, pending
-/// program read R49-4b.
+/// What the Titanium program writes is read (R49-4b, 0x497be2 and
+/// 0x5ed550): the speaker's skill byte less the intoxication shifted right
+/// by two, never below 0; 100 for a game master, and -1 (all bits set) for a
+/// game master when the world's log-server word 0 is nonzero. The same
+/// language and skill go out on every channel. `EQEmu` and TAKP take the
+/// language from the packet but ignore its skill, using the speaker's own
+/// from their records, and both turn out-of-character, GM, broadcast and
+/// petition chat back to the common tongue themselves
+/// (`Client::ChannelMessageReceived`). The `EQMac` program is not read: its
+/// field is written the same way, cut to 16 bits (inferred).
 ///
 /// A tongue is only ever the common one or one the player's profile gives
 /// them skill in ([`Tongue::spoken`]): no caller names a language or a
@@ -173,8 +177,21 @@ impl OutboundChat {
 pub struct Tongue {
     /// The language, by the servers' number.
     language: u8,
-    /// The speaker's skill in it, 1 to 100.
-    skill: u8,
+    /// The skill the message carries, as the wire's word.
+    skill: u32,
+}
+
+/// What the program knows of the speaker beyond the profile when it words a
+/// tongue's skill (read R49-4b).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Speaker {
+    /// The player's own spawn carries the GM flag (Titanium's spawn +0x256,
+    /// as read R49-4 takes it).
+    pub game_master: bool,
+    /// The world's log-server word 0 is nonzero
+    /// ([`crate::rules::WorldRules::language_zero_selector`]), which turns a
+    /// game master's skill to -1.
+    pub log_server_word_zero: bool,
 }
 
 impl Tongue {
@@ -191,22 +208,65 @@ impl Tongue {
         self.language
     }
 
-    /// The speaker's skill in it.
+    /// The skill the message carries, as the wire's word (`u32::MAX` for
+    /// -1).
     #[must_use]
-    pub const fn skill(self) -> u8 {
+    pub const fn skill(self) -> u32 {
         self.skill
     }
 
-    /// The tongue the player speaks a language in: their skill from the
-    /// profile. None when the profile has no languages, lacks this one, or
-    /// holds no skill in it.
+    /// The tongue the player speaks a language in, as the program words it
+    /// for a typed line: the profile's skill less the intoxication shifted
+    /// right by two, floored at 0, or a game master's 100 or -1. Language 0
+    /// is worded the same way. None when the profile has no languages,
+    /// lacks this one, or holds no skill in it.
     #[must_use]
-    pub fn spoken(player: &crate::world::PlayerState, language: u8) -> Option<Self> {
+    pub fn spoken(
+        player: &crate::world::PlayerState,
+        language: u8,
+        speaker: Speaker,
+    ) -> Option<Self> {
+        let drunk = player.intoxication.unwrap_or(0) >> 2;
+        Self::worded(player, language, speaker, drunk)
+    }
+
+    /// The tongue the program's automatic away reply goes in: the profile's
+    /// skill as it is, with no intoxication taken off, or a game master's
+    /// 100 (read R49-4b). None as for [`Tongue::spoken`].
+    #[must_use]
+    pub fn unslurred(
+        player: &crate::world::PlayerState,
+        language: u8,
+        game_master: bool,
+    ) -> Option<Self> {
+        let speaker = Speaker {
+            game_master,
+            log_server_word_zero: false,
+        };
+        Self::worded(player, language, speaker, 0)
+    }
+
+    fn worded(
+        player: &crate::world::PlayerState,
+        language: u8,
+        speaker: Speaker,
+        drunk: u32,
+    ) -> Option<Self> {
         let skill = *player.languages.as_ref()?.get(usize::from(language))?;
-        (skill > 0).then_some(Self {
-            language,
-            skill: skill.min(100),
-        })
+        if skill == 0 {
+            return None;
+        }
+        let skill = match speaker {
+            Speaker {
+                game_master: true,
+                log_server_word_zero: true,
+            } => u32::MAX,
+            Speaker {
+                game_master: true, ..
+            } => 100,
+            Speaker { .. } => u32::from(skill).saturating_sub(drunk),
+        };
+        Some(Self { language, skill })
     }
 }
 
@@ -370,12 +430,13 @@ pub fn encode_outbound_in(
         Layout::Titanium => {
             body[128..132].copy_from_slice(&u32::from(tongue.language).to_le_bytes());
             body[132..136].copy_from_slice(&u32::from(message.channel()).to_le_bytes());
-            body[144..148].copy_from_slice(&u32::from(tongue.skill).to_le_bytes());
+            body[144..148].copy_from_slice(&tongue.skill.to_le_bytes());
         }
         Layout::EqMac => {
             body[128..130].copy_from_slice(&u16::from(tongue.language).to_le_bytes());
             body[130..132].copy_from_slice(&message.channel().to_le_bytes());
-            body[134..136].copy_from_slice(&u16::from(tongue.skill).to_le_bytes());
+            // The EQMac field is 16 bits: the word cut to them (inferred).
+            body[134..136].copy_from_slice(&tongue.skill.to_le_bytes()[..2]);
         }
     }
     body[header..header + wire_text.len()].copy_from_slice(wire_text.as_bytes());
@@ -1344,20 +1405,64 @@ mod tests {
         spawn[0x57] = 100;
         let mut player = crate::world::titanium_player(&vec![0; 19592], &spawn, 256.0).unwrap();
         player.languages = Some(vec![100, 0, 0, 25]);
-        assert_eq!(Tongue::spoken(&player, 0), Some(Tongue::COMMON));
+        let sober = Speaker::default();
+        assert_eq!(Tongue::spoken(&player, 0, sober), Some(Tongue::COMMON));
         assert_eq!(
-            Tongue::spoken(&player, 3),
+            Tongue::spoken(&player, 3, sober),
             Some(Tongue {
                 language: 3,
                 skill: 25
             })
         );
-        assert_eq!(Tongue::spoken(&player, 1), None);
-        assert_eq!(Tongue::spoken(&player, 9), None);
-        player.languages.as_mut().unwrap()[3] = 200;
-        assert_eq!(Tongue::spoken(&player, 3).unwrap().skill, 100);
+        assert_eq!(Tongue::spoken(&player, 1, sober), None);
+        assert_eq!(Tongue::spoken(&player, 9, sober), None);
         player.languages = None;
-        assert_eq!(Tongue::spoken(&player, 0), None);
+        assert_eq!(Tongue::spoken(&player, 0, sober), None);
+    }
+
+    #[test]
+    fn a_spoken_tongue_is_worded_as_the_program_words_it() {
+        let mut spawn = vec![0; 385];
+        spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        let mut player = crate::world::titanium_player(&vec![0; 19592], &spawn, 256.0).unwrap();
+        player.languages = Some(vec![100, 0, 0, 25]);
+        let skill = |player: &crate::world::PlayerState, language, speaker| {
+            Tongue::spoken(player, language, speaker).unwrap().skill()
+        };
+        let sober = Speaker::default();
+        // Intoxication 9 takes 9 >> 2 = 2 off, language 0 included.
+        player.intoxication = Some(9);
+        assert_eq!(skill(&player, 3, sober), 23);
+        assert_eq!(skill(&player, 0, sober), 98);
+        // Never below 0.
+        player.intoxication = Some(400);
+        assert_eq!(skill(&player, 3, sober), 0);
+        // The away reply takes none off.
+        assert_eq!(Tongue::unslurred(&player, 3, false).unwrap().skill(), 25);
+        assert_eq!(Tongue::unslurred(&player, 3, true).unwrap().skill(), 100);
+        // A game master speaks at 100, or -1 under log-server word 0.
+        let gm = Speaker {
+            game_master: true,
+            log_server_word_zero: false,
+        };
+        assert_eq!(skill(&player, 3, gm), 100);
+        let gm_zero = Speaker {
+            game_master: true,
+            log_server_word_zero: true,
+        };
+        assert_eq!(skill(&player, 3, gm_zero), u32::MAX);
+        // Word 0 alone changes nothing.
+        let zero = Speaker {
+            game_master: false,
+            log_server_word_zero: true,
+        };
+        assert_eq!(skill(&player, 3, zero), 0);
+        let say = OutboundChat::Say("hail".into());
+        let tongue = Tongue::spoken(&player, 3, gm_zero).unwrap();
+        let body = encode_outbound_in(GameDialect::Titanium, &say, "Example", tongue).unwrap();
+        assert_eq!(u32_at(&body, 144), u32::MAX);
+        let body = encode_outbound_in(GameDialect::EqMac, &say, "Example", tongue).unwrap();
+        assert_eq!(u16_at(&body, 134), u16::MAX);
     }
 
     #[test]
