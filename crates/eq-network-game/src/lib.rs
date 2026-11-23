@@ -223,6 +223,22 @@ impl GameDialect {
         }
     }
 
+    /// Whether a position update carries the player's own vertical speed
+    /// in the air on land: Titanium's update reads its actor's velocity
+    /// fields (0x465244, read R49-27 (c)), and its kept recordings show
+    /// the speed at the moment of each update, and 0 on the ground and on
+    /// landing (checklist 6.617, capture-derived). `RoF2` takes Titanium's,
+    /// inferred (6.489). The Mac-era program's is unread, so it keeps
+    /// sending 0 there (6.617).
+    #[must_use]
+    pub const fn sends_airborne_speed(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::Rof2 => Self::Titanium.sends_airborne_speed(),
+            Self::EqMac => false,
+        }
+    }
+
     /// Whether carrying capacity depends on the current fatigue and stamina.
     #[must_use]
     pub const fn uses_fatigue_for_carry_capacity(self) -> bool {

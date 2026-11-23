@@ -824,15 +824,15 @@ fn falls_need_permission_and_carry_their_descent_speed() {
         .is_err());
     // Jumps share the falls' client-side physics and permission.
     assert!(session.jump().is_err());
-    let mut session = setup(start).with_falls(true);
+    let mut session = setup(start).with_falls(true).with_airborne_speed(true);
     assert!(session.jump().is_ok());
+    // The host falling at 40 a second sends 2 a tick, as the program's
+    // update carries the actor's own vertical speed (R49-27 (c), 6.617).
+    let fall = fall.airborne_at(-40.0);
     session
         .send_move(&fall, now, |packet| {
             let body = &packet.body[..];
-            // 4 down in 0.1 s: 40 a second, 2 a tick, as the program's
-            // update carries the actor's own vertical speed (R49-27 (c),
-            // 6.617).
-            assert!((f32::from_bits(word(body, 8)) + 2.0).abs() < 0.0001);
+            assert_eq!(word(body, 8), (-40.0f32 * 0.05).to_bits());
             assert_eq!(word(body, 28), (-4.0f32).to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 12);
             Ok(())
@@ -1248,7 +1248,7 @@ fn a_generation_may_fall_faster_than_the_provisional_limit() {
 }
 #[test]
 fn a_fast_fall_keeps_its_sign_on_each_generations_wire() {
-    // 10 down in 0.1 s, 100 units a second: 5 a tick (6.617). Titanium's
+    // Falling at 100 units a second: 5 a tick (6.617). Titanium's
     // field is a float and holds it; the Mac-era client packs sixteenths of
     // a tick in 11 signed bits, -64 to 63, and holds it too.
     let start = Instant::now();
@@ -1256,8 +1256,10 @@ fn a_fast_fall_keeps_its_sign_on_each_generations_wire() {
     let mut fall = request(now, 0.0);
     fall.mode = MovementMode::Fall;
     fall.position.z = -10.0;
+    let fall = fall.airborne_at(-100.0);
     let mut session = setup(start)
         .with_falls(true)
+        .with_airborne_speed(true)
         .with_fall_speed(Some(super::super::EQMAC_FALL_SPEED));
     let mut sent = None;
     session
@@ -1288,6 +1290,121 @@ fn a_fast_fall_keeps_its_sign_on_each_generations_wire() {
     assert_eq!(packed_z(&beyond), -64 * 16);
     assert_eq!(word(&beyond.encode().unwrap(), 8), (-200.0f32).to_bits());
 }
+/// A session that sends the host's speed in the air, with the read jump
+/// and the fall limit at the default gravity, as a zone session sets them.
+fn airborne(start: Instant) -> MotionSession {
+    setup(start)
+        .with_falls(true)
+        .with_airborne_speed(true)
+        .with_fall_speed(Some(super::super::fall_speed(None)))
+        .with_jump(Some((
+            super::super::JUMP_SPEED,
+            super::super::gravity_per_second(None),
+        )))
+}
+
+/// The vertical speed field each request sends, as the wire carries it.
+fn sent_vertical(session: &mut MotionSession, requests: &[MovementRequest]) -> Vec<u32> {
+    let mut sent = Vec::new();
+    for request in requests {
+        session
+            .send_move(request, request.created, |packet| {
+                sent.push(word(&packet.body, 8));
+                Ok(())
+            })
+            .unwrap();
+    }
+    sent
+}
+
+#[test]
+fn a_recorded_jump_and_fall_send_the_speed_of_the_moment_and_0_on_landing() {
+    // A kept official recording's jump sends +1.968 a tick, then -0.341,
+    // then 0 on the landing update; its walk-off fall -0.238, -2.499, then
+    // 0 (capture-derived, 6.617). The host's speeds are those, a second.
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let step = |ms, z: f32, speed: Option<f32>| {
+        let mut request = request(at(ms), 0.0);
+        request.mode = MovementMode::Fall;
+        request.position.z = z;
+        request.vertical_speed = speed.map(|tick: f32| tick * 20.0);
+        request
+    };
+    let mut jump = airborne(start);
+    jump.jumped();
+    let sent = sent_vertical(
+        &mut jump,
+        &[
+            step(50, 2.03, Some(1.968)),
+            step(300, 6.17, Some(-0.341)),
+            step(550, 0.0, None),
+        ],
+    );
+    let wire = |tick: f32| (tick * 20.0 * 0.05).to_bits();
+    assert_eq!(sent, [wire(1.968), wire(-0.341), 0.0f32.to_bits()]);
+    assert!((f32::from_bits(sent[0]) - 1.968).abs() < 1e-6);
+    assert!((f32::from_bits(sent[1]) + 0.341).abs() < 1e-6);
+    let mut fall = airborne(start);
+    let sent = sent_vertical(
+        &mut fall,
+        &[
+            step(100, -0.5, Some(-0.238)),
+            step(300, -4.5, Some(-2.499)),
+            step(500, -9.0, None),
+        ],
+    );
+    assert_eq!(sent, [wire(-0.238), wire(-2.499), 0.0f32.to_bits()]);
+}
+
+#[test]
+fn the_hosts_vertical_speed_is_bounded_by_what_the_program_could_reach() {
+    // Up to the read jump's take-off speed, down to the fall's limit (6.617);
+    // nothing up without a read jump; a non-number is refused.
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut fall = request(now, 0.0);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -1.0;
+    let sent = |session: &mut MotionSession, speed: f32| {
+        sent_vertical(session, &[fall.clone().airborne_at(speed)])[0]
+    };
+    assert_eq!(
+        sent(&mut airborne(start), 1000.0),
+        (super::super::JUMP_SPEED * 0.05).to_bits()
+    );
+    assert_eq!(
+        sent(&mut airborne(start), -5000.0),
+        (-super::super::fall_speed(None) * 0.05).to_bits()
+    );
+    let mut unread = setup(start).with_falls(true).with_airborne_speed(true);
+    assert_eq!(sent(&mut unread, 30.0), 0.0f32.to_bits());
+    let mut session = airborne(start);
+    assert!(session
+        .send_move(&fall.clone().airborne_at(f32::NAN), now, |_| panic!(
+            "a non-number is sent"
+        ))
+        .is_err());
+}
+
+#[test]
+fn a_generation_that_does_not_send_its_vertical_speed_sends_0() {
+    // The Mac-era program's field is unread, so it keeps sending 0 on land
+    // (6.617).
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut fall = request(now, 0.0);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -1.0;
+    let mut session = setup(start).with_falls(true);
+    assert_eq!(
+        sent_vertical(&mut session, &[fall.airborne_at(-20.0)]),
+        [0.0f32.to_bits()]
+    );
+    assert!(!crate::GameDialect::EqMac.sends_airborne_speed());
+    assert!(crate::GameDialect::Titanium.sends_airborne_speed());
+}
+
 #[test]
 fn a_jump_rises_past_a_step_once_the_session_announces_it() {
     let start = Instant::now();
@@ -1305,14 +1422,7 @@ fn a_jump_rises_past_a_step_once_the_session_announces_it() {
         .send_move(&rise, now, |_| panic!("no jump was announced"))
         .is_err());
     session.jumped();
-    session
-        .send_move(&rise, now, |packet| {
-            // The rise's own speed, 2.03 in 50 ms: 40.6 a second, 2.03 a
-            // tick (6.617).
-            assert!((f32::from_bits(word(&packet.body, 8)) - 2.03).abs() < 0.0001);
-            Ok(())
-        })
-        .unwrap();
+    session.send_move(&rise, now, |_| Ok(())).unwrap();
     assert_eq!(session.position().z.to_bits(), 2.03f32.to_bits());
     // Without the generation's jump read, the announcement admits nothing.
     let mut unread = setup(start).with_falls(true);

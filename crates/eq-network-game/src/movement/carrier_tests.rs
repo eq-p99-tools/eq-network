@@ -481,7 +481,10 @@ fn a_jump_on_a_boat_sends_only_its_own_rise() {
         super::super::JUMP_SPEED,
         super::super::gravity_per_second(None),
     ));
-    let mut session = setup(start).with_falls(true).with_jump(jump);
+    let mut session = setup(start)
+        .with_falls(true)
+        .with_jump(jump)
+        .with_airborne_speed(true);
     let mut local = attach(&mut session, start);
     let at = start + Duration::from_millis(150);
     let boat = Position {
@@ -492,7 +495,8 @@ fn a_jump_on_a_boat_sends_only_its_own_rise() {
     };
     local.z += 2.03;
     session.jumped();
-    let mut rise = request(start, at, boat, local);
+    // The host's own speed: 2.03 a tick, 40.6 a second.
+    let mut rise = request(start, at, boat, local).airborne_at(40.6);
     rise.mode = MovementMode::Fall;
     session.allow_carrier(Some((sample(start, at), boat)));
     session

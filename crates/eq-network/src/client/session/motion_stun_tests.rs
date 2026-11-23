@@ -54,6 +54,7 @@ fn request(created: Instant, position: Position) -> MovementRequest {
         created,
         position,
         support: None,
+        vertical_speed: None,
     }
 }
 

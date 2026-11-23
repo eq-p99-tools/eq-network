@@ -7,12 +7,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A jump or fall on land sends the player's own vertical speed, as the
   Titanium program's update does (0x465244, read R49-27 (c), checklist
-  6.617). Other clients draw our jumps and falls from it. Until now they saw
-  only the height change, with a vertical speed of 0, and drew us standing.
-  Ground steps, slopes, flight and a still rider still send 0, and a rider's
-  speed leaves out the boat. The value is the sample's mean vertical speed
-  over its interval, where the program sends the instant's value
-  (inferred). The change applies on every server type, P99 included.
+  6.617). Other clients draw our jumps and falls from it. Until now we sent
+  a vertical speed of 0, so they drew us standing.
+  - **Breaking:** `MovementRequest` gains `vertical_speed: Option<f32>`
+    (with the builder `airborne_at`). It is the host's own vertical speed at
+    the sample, in units a second, up positive, and none on the ground and
+    on landing.
+  - The session sends that speed, bounded by the read jump's take-off speed
+    and the derived fall limit, and 0 when none is given. This is
+    capture-derived: the official recordings show the speed at each update,
+    and 0 on the ground and on landing.
+  - New `GameDialect::sends_airborne_speed` and
+    `MotionSession::with_airborne_speed`. Titanium sends the speed, and RoF2
+    is inferred to. The Mac-era field is unread, so the Mac era keeps
+    sending 0.
+  - Departures, labelled: 0 over bumpy ground, where the program sends
+    small values, and 0 in flight, which is unread.
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
   192-byte body with the event's reason at +4, carrying where the player
