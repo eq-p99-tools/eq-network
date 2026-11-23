@@ -1839,9 +1839,11 @@ impl ServerType for Quarm {
     /// faction admits the player; `OPGMTrainSkill` raises a skill by the
     /// 12-byte practice and says so with a silent skill update, and takes
     /// the scaled cost and a point without a word, which the session
-    /// projects as the server takes them. Languages are held until the
-    /// `EQMac` program's rule is read (6.597a). Source-derived, not live
-    /// (6.597).
+    /// projects as the server takes them. A language practice runs the
+    /// `EQMac` program's own gate and is resolved at once, as the program
+    /// does, since `IncreaseLanguageSkill` answers with only string 449;
+    /// without the installed program's language table it stays shut.
+    /// Source-derived, not live (6.597); the first public use is attended.
     fn training(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Training::eqmac()))
     }
@@ -2361,8 +2363,10 @@ impl ServerType for Takp {
     /// at EQMacEmu/Server 44afcbf, which match Quarm's: the 244-byte
     /// request and answer, the 12-byte practice answered by a silent skill
     /// update, the scaled cost and the point taken without a word, and the
-    /// 4-byte goodbye. Languages are held until the `EQMac` program's rule
-    /// is read (6.597a). Source-derived, not live (6.597).
+    /// 4-byte goodbye. Languages train as on Quarm, through the `EQMac`
+    /// program's gate and its at-once resolve (TAKP 44afcbf
+    /// `IncreaseLanguageSkill`). Source-derived, not live (6.597); the first
+    /// public use is attended.
     fn training(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Training::eqmac()))
     }
