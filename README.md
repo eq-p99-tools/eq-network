@@ -97,6 +97,9 @@ each.
 | `Rolling` | `/random` | Yes | Yes | – | – |
 | `Emoting` | `/emote` | Yes | Yes | – | – |
 | `Assisting` | `/assist` | Yes | Yes | – | – |
+| `Petitioning` | Petitions to the server's staff | – | Yes | – | – |
+| `ReportingBugs` | Bug reports | – | Yes | – | – |
+| `SendingFeedback` | Feedback, which only TAKP-family servers read | – | – | – | – |
 | `PlayerInspection` | Inspecting other players | Yes | Yes | – | – |
 | `GuildRoster` | A guild member's side of a guild | Yes | Yes | – | – |
 | `GuildManagement` | An officer's and a leader's side of a guild | Yes | Yes | – | – |
@@ -123,6 +126,9 @@ Some capabilities depend on the session, not only on the server type:
 - `Drowning`, `LavaHeat` and `GroundDropping`: offered on a stock EQEmu session
   only when it is restricted to the local network.
 - `RaidGroupLeaders`: not offered by any server type yet.
+- `SendingFeedback`, and petitions and bug reports on Quarm and TAKP: built
+  and tested, and listed by no server type until each has its own live check,
+  since a person reads every report.
 
 On P99 the map is left to the player: the session runs it but lists it among
 the player's choices. The world is also told what machine the player entered

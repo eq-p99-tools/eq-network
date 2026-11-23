@@ -204,6 +204,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::YellForHelp { .. }
         // A challenge holds nothing; the duel feature paces it.
         | ClientCommand::ChallengeDuel { .. }
+        // A report to the staff holds nothing back either.
+        | ClientCommand::SendPetition { .. }
+        | ClientCommand::ReportBug { .. }
+        | ClientCommand::SendFeedback { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::SelectTarget { .. }
@@ -416,6 +420,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Surname { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::ChallengeDuel { session_id, .. }
+        | ClientCommand::SendPetition { session_id, .. }
+        | ClientCommand::ReportBug { session_id, .. }
+        | ClientCommand::SendFeedback { session_id, .. }
         | ClientCommand::EmoteAnimation { session_id, .. }
         | ClientCommand::Emote { session_id, .. }
         | ClientCommand::SocialEmote { session_id, .. }
@@ -623,6 +630,21 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             session_id,
             reason,
             string_id: None,
+        },
+        ClientCommand::SendPetition { .. } => WorldEvent::ReportRefused {
+            session_id,
+            report: eq_network_game::reports::ReportKind::Petition,
+            reason,
+        },
+        ClientCommand::ReportBug { .. } => WorldEvent::ReportRefused {
+            session_id,
+            report: eq_network_game::reports::ReportKind::Bug,
+            reason,
+        },
+        ClientCommand::SendFeedback { .. } => WorldEvent::ReportRefused {
+            session_id,
+            report: eq_network_game::reports::ReportKind::Feedback,
+            reason,
         },
         ClientCommand::Random { .. }
         | ClientCommand::Surname { .. }
