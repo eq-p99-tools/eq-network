@@ -505,9 +505,10 @@ impl Casting {
             return out.log.diagnostic("No song is playing".into());
         };
         if !class_song(song, world) {
+            // Not a song by the program's test (0x40db0b), so 0x40f06d
+            // takes its non-song path: no send and no line (read R49-21e).
             self.song = None;
             self.item_cast = false;
-            self.report_song_stopped(song, world, out)?;
             return out
                 .log
                 .diagnostic("A song not of the class stops here only; nothing is sent".into());
@@ -615,7 +616,13 @@ impl Casting {
             || item_cast
         {
             self.song = None;
-            return Some(song);
+            // The program's stop (0x40f06d, mode 3) says its line only for
+            // a song, or for another class's player; a Bard's non-song, the
+            // item cast's end among them, clears it with no line (read
+            // R49-21e). A Bard's memorized spell is taken as a song ([I],
+            // 6.442), another spell as not.
+            let sung = spell == u32::MAX || song.spell == spell || class_spell || !bard;
+            return sung.then_some(song);
         }
         None
     }

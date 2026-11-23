@@ -75,7 +75,11 @@ a Bard sings, that is, while the session keeps a song of the class's spell
   `WorldEvent::SongStopped` carries the song's spell and `string_id`
   0x318f. That covers the player's stop (`StopSong`, a Bard's
   `StopCasting`, a gem click while singing, a forget's answer) and the
-  server's cast update ending the song. The read has the program print it
+  server's cast update ending the song for the song's own spell, the
+  current one, or a memorized spell (taken as a song). A stop the
+  program's non-song path makes says nothing: another class's song stopped
+  here, or a Bard's other spell, such as a timed item cast, ending the
+  song (read R49-21e). Of these the host hears only `Singing` none. The read has the program print it
   unless its Bard songs filter holds 1 (mine only, in read R49-2's values);
   the host decides by its own filter. The
   program's mode-1 stops (its own interrupt roll on a hit, and two

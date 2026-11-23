@@ -371,6 +371,29 @@ fn an_item_cast_goes_alongside_the_song_and_its_end_follows_the_item_flag() {
     let output = bard.hear(&mana_ended(TIMED_ITEM));
     assert_eq!(output.sent, []);
     assert_eq!(bard.casting.song, None);
+    // The program's non-song path says no line (read R49-21e): of the
+    // song, the host hears only that it ended (the item cast's own release
+    // comes as ever).
+    let told: Vec<_> = output
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                ClientEvent::World(WorldEvent::Singing { .. } | WorldEvent::SongStopped { .. })
+            )
+        })
+        .collect();
+    assert!(
+        matches!(
+            told[..],
+            [ClientEvent::World(WorldEvent::Singing {
+                spell_id: None,
+                ..
+            })]
+        ),
+        "{told:?}"
+    );
 }
 
 #[test]
