@@ -834,6 +834,7 @@ impl Script {
             .chain(rof2_casting())
             .chain(rof2_buffs())
             .chain(rof2_spellbook())
+            .chain(rof2_pools())
         {
             script.packet(opcode, body);
         }
@@ -1069,6 +1070,25 @@ fn rof2_spellbook() -> Vec<(u16, Vec<u8>)> {
             0x3358,
             [&650u16.to_le_bytes()[..], &[0, 0, 1, 0, 0, 0]].concat(),
         ),
+    ]
+}
+
+/// The player's mana and endurance pools, and a group member's two
+/// percents (6.538), as `RoF2` messages.
+fn rof2_pools() -> Vec<(u16, Vec<u8>)> {
+    let pool = |current: u32, maximum: u32| {
+        [
+            &current.to_le_bytes()[..],
+            &maximum.to_le_bytes(),
+            &4321u16.to_le_bytes(),
+        ]
+        .concat()
+    };
+    vec![
+        (0x3791, pool(300, 1200)),
+        (0x5f42, pool(200, 900)),
+        (0x2404, [&77u16.to_le_bytes()[..], &[40]].concat()),
+        (0x1c81, [&77u16.to_le_bytes()[..], &[60]].concat()),
     ]
 }
 
@@ -1498,6 +1518,78 @@ fn an_admitted_rof2_session_hands_the_host_its_spell_book_and_gems() {
         .iter()
         .any(|event| matches!(event, WorldEvent::SpellBook(_) | WorldEvent::BookAction(_))));
     for opcode in ["0x217c", "0x0efa", "0x3358"] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_mana_and_endurance_pools() {
+    use eq_network_game::rof2_pools::Pool;
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let pools: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::ResourcePool {
+                spawn_id: 4321,
+                pool: Pool::Mana,
+                current: 300,
+                maximum: 1200,
+            } => Some("mana"),
+            WorldEvent::ResourcePool {
+                spawn_id: 4321,
+                pool: Pool::Endurance,
+                current: 200,
+                maximum: 900,
+            } => Some("endurance"),
+            WorldEvent::ResourcePercent {
+                spawn_id: 77,
+                pool: Pool::Mana,
+                percent: 40,
+            } => Some("mana percent"),
+            WorldEvent::ResourcePercent {
+                spawn_id: 77,
+                pool: Pool::Endurance,
+                percent: 60,
+            } => Some("endurance percent"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pools,
+        ["mana", "endurance", "mana percent", "endurance percent"]
+    );
+    // RoF2 gets OP_ManaChange's current pair too, for the same change, and
+    // both reach the host, in order.
+    let resources = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                WorldEvent::Resources {
+                    mana: 300,
+                    endurance: 200
+                }
+            )
+        })
+        .unwrap();
+    let pool = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                WorldEvent::ResourcePool {
+                    pool: Pool::Mana,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(resources < pool);
+    for opcode in ["0x3791", "0x5f42", "0x2404", "0x1c81"] {
         assert!(
             !diagnostics.iter().any(|line| line.contains(opcode)),
             "{opcode}: {diagnostics:?}"

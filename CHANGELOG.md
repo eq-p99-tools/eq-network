@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's mana and endurance pools as stock `EQEmu` sends them,
+  labelled inferred for RoF2 (6.538). The new `rof2_pools` module reads
+  `OP_ManaUpdate` (0x3791) and `OP_EnduranceUpdate` (0x5f42), the server's
+  10 bytes with the maximum, into the new `WorldEvent::ResourcePool`, and
+  `OP_MobManaUpdate` (0x2404) and `OP_MobEnduranceUpdate` (0x1c81), 3
+  bytes with a percent up to 100, into the new
+  `WorldEvent::ResourcePercent`, each naming a `rof2_pools::Pool`. Titanium is
+  sent none of the four. Coverage lists them. An admitted RoF2 session
+  hands the host each and still sends and offers nothing.
 - Cap the reconnect loop and drop what was queued before it (gap 3.11,
   checklist 6.534). With `RunOptions::reconnect` on (the default),
   `RunOptions::reconnect_attempts` (default 5, our bound, 6.534) limits the

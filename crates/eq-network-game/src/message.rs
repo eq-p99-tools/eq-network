@@ -128,7 +128,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 34] = [
+pub const ROF2_READS: [u16; 38] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -163,14 +163,18 @@ pub const ROF2_READS: [u16; 34] = [
     crate::rof2_spellbook::MEMORIZE_OPCODE,
     crate::rof2_spellbook::SWAP_OPCODE,
     crate::rof2_spellbook::DELETE_OPCODE,
+    crate::rof2_pools::MANA_OPCODE,
+    crate::rof2_pools::ENDURANCE_OPCODE,
+    crate::rof2_pools::MANA_PERCENT_OPCODE,
+    crate::rof2_pools::ENDURANCE_PERCENT_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
 /// spawns' movement and removal (6.514), how they look and how hurt they
 /// are (6.518), the player's own news and the combat records (6.519), and
-/// casting, stuns and illusions (6.522), buffs (6.527), and the spell book
-/// and gems (6.532) are read yet; a body a reader refuses is unreadable,
-/// told by its opcode and length only.
+/// casting, stuns and illusions (6.522), buffs (6.527), the spell book and
+/// gems (6.532), and the mana and endurance pools (6.538) are read yet; a
+/// body a reader refuses is unreadable, told by its opcode and length only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -206,6 +210,7 @@ fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
     events(crate::rof2_news::read(opcode, body), Part::World)
         .or_else(|| one(crate::rof2_looks::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_buffs::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_pools::read(opcode, body), Part::World))
         .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
         .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
 }
