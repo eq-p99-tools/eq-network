@@ -245,6 +245,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Surname { .. }
         | ClientCommand::RequestTitles { .. }
         | ClientCommand::SetTitle { .. }
+        | ClientCommand::BazaarSearch { .. }
+        | ClientCommand::BazaarWelcome { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -437,6 +439,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Surname { session_id, .. }
         | ClientCommand::RequestTitles { session_id }
         | ClientCommand::SetTitle { session_id, .. }
+        | ClientCommand::BazaarSearch { session_id, .. }
+        | ClientCommand::BazaarWelcome { session_id }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
         | ClientCommand::AcceptTask { session_id, .. }
@@ -703,6 +707,9 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             arguments: Vec::new(),
         },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
+        ClientCommand::BazaarSearch { .. } | ClientCommand::BazaarWelcome { .. } => {
+            WorldEvent::BazaarRefused { session_id, reason }
+        }
         ClientCommand::AcceptTask { .. }
         | ClientCommand::DeclineTasks { .. }
         | ClientCommand::CancelTask { .. }

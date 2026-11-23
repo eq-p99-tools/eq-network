@@ -7,9 +7,9 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
-    BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
-    MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
+    BAZAAR_SEARCH, BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK,
+    MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
+    RENAME, REWARD, SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TASK_HISTORY, TASK_OFFERS,
     TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
 };
 
@@ -124,7 +124,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1db5 => sent("OP_AdventureInfo", EQEMU, planned(LaterSystems)),
         0x1dde => sent("OP_OnLevelMessage", EQEMU, Partly(&[Zone], POPUP)),
         0x1e51 => sent("OP_Stun", EQEMU, Read(&[Zone])),
-        0x1ee9 => sent("OP_BazaarSearch", EQEMU, planned(Bazaar)),
+        // The search's results, end and welcome (6.550); P99 has no Bazaar.
+        0x1ee9 => sent_private("OP_BazaarSearch", EQEMU, Partly(&[Zone], BAZAAR_SEARCH)),
         0x1f21 => sent(
             "OP_RaidUpdate",
             EQEMU,
@@ -155,7 +156,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x267c => sent("OP_MoneyUpdate", EQEMU, Read(&[Zone])),
         0x26ab => sent("OP_PlayMP3", EQEMU, Read(&[Zone])),
         0x27b3 => sent("OP_TributeMoney", EQEMU, unasked(LaterSystems)),
-        0x2844 => sent("OP_BecomeTrader", EQEMU, planned(Bazaar)),
+        0x2844 => sent_private("OP_BecomeTrader", EQEMU, planned(Bazaar)),
         0x28aa => sent("OP_DzCompass", EQEMU, planned(LaterSystems)),
         0x28e1 => sent("OP_RequestDuel", EQEMU, Partly(&[Zone], DUEL_REQUEST)),
         0x2acf => sent("OP_Animation", EQEMU, Read(&[Zone])),
@@ -187,7 +188,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         ),
         0x34c1 => sent("OP_TradeCoins", EQEMU, Read(&[Zone])),
         0x358e => sent("OP_LevelAppearance", EQEMU, Read(&[Zone])),
-        0x35e8 => sent("OP_TraderShop", EQEMU, planned(Bazaar)),
+        0x35e8 => sent_private("OP_TraderShop", EQEMU, planned(Bazaar)),
         // Read on a local session; off one, dropped until the AA offer lifts
         // (6.547 follow-up row).
         0x367d => sent("OP_SendAATable", EQEMU, Read(&[Zone])),
@@ -246,7 +247,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x4f37 => sent("OP_DeleteSpell", EQEMU, Read(&[Zone])),
         0x4fb6 => sent("OP_InspectBuffs", EQEMU, planned(AlternateAdvancement)),
         0x512e => sent("OP_OpenTributeMaster", EQEMU, unasked(LaterSystems)),
-        0x524e => sent("OP_Trader", EQEMU, planned(Bazaar)),
+        0x524e => sent_private("OP_Trader", EQEMU, planned(Bazaar)),
         0x52a4 => sent("OP_PostEnterWorld", EQEMU, Read(&[World])),
         0x5394 => sent("OP_CharInventory", EQEMU, Read(&[Zone])),
         0x53df => sent(
@@ -337,7 +338,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x6a93 => sent("OP_SkillUpdate", EQEMU, Read(&[Zone])),
         0x6cd5 => sent("OP_RandomReply", EQEMU, Read(&[Zone])),
         0x6d44 => sent("OP_LevelUpdate", EQEMU, Read(&[Zone])),
-        0x6dd8 => sent("OP_TraderBuy", EQEMU, planned(Bazaar)),
+        0x6dd8 => sent_private("OP_TraderBuy", EQEMU, planned(Bazaar)),
         0x6f6c => sent("OP_TributeItem", EQEMU, unasked(LaterSystems)),
         0x6f90 => sent("OP_LootRequest", EQEMU, Read(&[Zone])),
         0x700d => sent("OP_MoveDoor", EQEMU, Read(&[Zone])),
@@ -362,7 +363,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             planned(AlternateAdvancement),
         ),
         0x7441 => sent("OP_WearChange", EQEMU, Read(&[Zone])),
-        0x7460 => sent("OP_Barter", EQEMU, planned(Bazaar)),
+        0x7460 => sent_private("OP_Barter", EQEMU, planned(Bazaar)),
         0x754e => sent("OP_GuildMemberAdd", EQEMU, Partly(&[Zone], MEMBER_ADD)),
         0x757b => sent("OP_WhoAllResponse", EQEMU, Read(&[Zone])),
         0x75df => sent(

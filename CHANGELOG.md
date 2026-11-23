@@ -21,6 +21,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handlers; declining sends nothing (inferred). Both new coverage rows keep
   no sample. **Breaking:** the new `News`, `Request`, `GameCommand`,
   `WorldEvent` and `Capability` variants.
+- Search the Bazaar on stock `EQEmu`, read only (6.550, slice 1). The new
+  `bazaar` module builds `OP_BazaarSearch` (0x1ee9) searches and welcome
+  requests and reads the results, the search's end and the welcome.
+  `GameCommand::BazaarSearch` and `BazaarWelcome` go only in the Bazaar,
+  one at a time and 2 s apart (ours, inferred), and are refused with the
+  new `WorldEvent::BazaarRefused`; answers come as `WorldEvent::Bazaar`.
+  `Capability::BazaarSearching` is offered by no server type until the
+  local live row passes. Gaps of the bazaar's and traders' messages keep no
+  sample. **Breaking:** new `GameCommand`, `WorldEvent` and `Capability`
+  variants.
 - Read `EQMac`'s alternate advancement on local TAKP, read only (6.548):
   `OP_RespondAA` (0x1542) by Mac AA id, the profile's AA array and points,
   `OP_AAExpUpdate` (0x2342) and the server's reuse timers on `OP_AAAction`

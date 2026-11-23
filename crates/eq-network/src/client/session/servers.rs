@@ -509,6 +509,15 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Searching the Bazaar, read only. Stock `EQEmu` alone has it on
+    /// Titanium; P99's era has no Bazaar, and TAKP's, Quarm's and `RoF2`'s
+    /// searches are other records. No server offers it until the local
+    /// live row passes (6.550a); then stock `EQEmu` offers
+    /// `offer(Box::<Bazaar>::default())`.
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -644,6 +653,7 @@ pub(super) trait ServerType: Sync {
             self.surnames(setup),
             self.shielding(setup),
             self.titles(setup),
+            self.bazaar(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
@@ -2768,6 +2778,28 @@ mod tests {
                 "{protocol:?}"
             );
         }
+    }
+
+    #[test]
+    fn no_server_offers_the_bazaar_search_before_its_live_row() {
+        // Built and tested from source (6.550); stock EQEmu offers it once
+        // the local live row passes.
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::BazaarSearching),
+                "{protocol:?}"
+            );
+        }
+        assert_eq!(
+            super::super::bazaar::Bazaar::default().capabilities(),
+            [Capability::BazaarSearching]
+        );
     }
 
     #[test]

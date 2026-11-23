@@ -944,7 +944,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 132;
+    const KINDS: usize = 134;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1015,11 +1015,13 @@ mod tests {
             ClientCommand::Shield { .. } => 124,
             ClientCommand::RequestTitles { .. } => 125,
             ClientCommand::SetTitle { .. } => 126,
-            ClientCommand::AcceptTask { .. } => 127,
-            ClientCommand::DeclineTasks { .. } => 128,
-            ClientCommand::CancelTask { .. } => 129,
-            ClientCommand::AskTaskHistory { .. } => 130,
-            ClientCommand::ListTaskTimers { .. } => 131,
+            ClientCommand::BazaarSearch { .. } => 127,
+            ClientCommand::BazaarWelcome { .. } => 128,
+            ClientCommand::AcceptTask { .. } => 129,
+            ClientCommand::DeclineTasks { .. } => 130,
+            ClientCommand::CancelTask { .. } => 131,
+            ClientCommand::AskTaskHistory { .. } => 132,
+            ClientCommand::ListTaskTimers { .. } => 133,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1641,6 +1643,11 @@ mod tests {
                 title_id: 7,
                 suffix: false,
             },
+            ClientCommand::BazaarSearch {
+                session_id,
+                criteria: eq_network_game::bazaar::BazaarCriteria::default(),
+            },
+            ClientCommand::BazaarWelcome { session_id },
             ClientCommand::Emote {
                 session_id,
                 text: "waves.".into(),
@@ -2091,6 +2098,17 @@ mod tests {
                 assert!(!servers.iter().any(|features| features
                     .capabilities()
                     .contains(&crate::world::Capability::SendingFeedback)));
+                continue;
+            }
+            if matches!(
+                command,
+                ClientCommand::BazaarSearch { .. } | ClientCommand::BazaarWelcome { .. }
+            ) {
+                // Built and tested, and listed by no server type until its
+                // local live row (6.550a).
+                assert!(!servers.iter().any(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::BazaarSearching)));
                 continue;
             }
             if Features::is_departure(&command) {

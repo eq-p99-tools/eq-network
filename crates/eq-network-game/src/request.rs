@@ -200,6 +200,11 @@ pub enum Request {
         /// Whether it is the suffix.
         suffix: bool,
     },
+    /// Search the Bazaar ([`crate::bazaar::search`]).
+    BazaarSearch(crate::bazaar::BazaarCriteria),
+    /// Ask how many traders and items the Bazaar has
+    /// ([`crate::bazaar::welcome`]).
+    BazaarWelcome,
     /// Emote, in the player's own words.
     Emote(String),
     /// A social emote's text, sent as the program builds it.
@@ -607,6 +612,14 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::RequestTitles => EncodedCommand {
             opcode: crate::names::REQUEST_TITLES_OPCODE,
             body: Vec::new(),
+        },
+        Request::BazaarSearch(criteria) => EncodedCommand {
+            opcode: crate::bazaar::SEARCH_OPCODE,
+            body: crate::bazaar::search(criteria)?,
+        },
+        Request::BazaarWelcome => EncodedCommand {
+            opcode: crate::bazaar::SEARCH_OPCODE,
+            body: crate::bazaar::welcome(),
         },
         Request::SetTitle { title_id, suffix } => EncodedCommand {
             opcode: crate::names::SET_TITLE_OPCODE,
@@ -1050,6 +1063,28 @@ mod tests {
         }
         assert!(titanium(&Request::Surname("Ex ample".into()), PLAYER).is_err());
         assert!(eqmac(&Request::Surname(String::new()), PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_searches_the_bazaar() {
+        let criteria = crate::bazaar::BazaarCriteria::default();
+        let searched = titanium(&Request::BazaarSearch(criteria.clone()), PLAYER).unwrap();
+        assert_eq!(
+            (searched.opcode, searched.body.len()),
+            (0x1ee9, crate::bazaar::SEARCH_LENGTH)
+        );
+        let welcomed = titanium(&Request::BazaarWelcome, PLAYER).unwrap();
+        assert_eq!(
+            (welcomed.opcode, welcomed.body),
+            (0x1ee9, crate::bazaar::welcome())
+        );
+        let long = crate::bazaar::BazaarCriteria {
+            name: "a".repeat(64),
+            ..criteria.clone()
+        };
+        assert!(titanium(&Request::BazaarSearch(long), PLAYER).is_err());
+        assert!(eqmac(&Request::BazaarSearch(criteria), PLAYER).is_err());
+        assert!(eqmac(&Request::BazaarWelcome, PLAYER).is_err());
     }
 
     #[test]

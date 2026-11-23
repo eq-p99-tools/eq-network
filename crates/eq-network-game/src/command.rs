@@ -899,6 +899,22 @@ pub enum GameCommand {
         /// Whether it is the suffix.
         suffix: bool,
     },
+    /// Search the Bazaar for traders' items; the server answers with
+    /// [`crate::bazaar::BazaarEvent::Results`] when anything matched, then
+    /// [`crate::bazaar::BazaarEvent::SearchDone`]. Only in the Bazaar, and
+    /// one at a time.
+    BazaarSearch {
+        /// Current zone admission.
+        session_id: u64,
+        /// What to look for.
+        criteria: crate::bazaar::BazaarCriteria,
+    },
+    /// Ask how many traders and items the Bazaar has; the server answers
+    /// with [`crate::bazaar::BazaarEvent::Welcome`].
+    BazaarWelcome {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Emote, in the player's own words: `/emote`.
     Emote {
         /// Current zone admission.
@@ -1356,6 +1372,8 @@ impl GameCommand {
             Self::Surname { .. } => "Surname",
             Self::RequestTitles { .. } => "RequestTitles",
             Self::SetTitle { .. } => "SetTitle",
+            Self::BazaarSearch { .. } => "BazaarSearch",
+            Self::BazaarWelcome { .. } => "BazaarWelcome",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1497,6 +1515,8 @@ impl GameCommand {
             | Self::Surname { session_id, .. }
             | Self::RequestTitles { session_id }
             | Self::SetTitle { session_id, .. }
+            | Self::BazaarSearch { session_id, .. }
+            | Self::BazaarWelcome { session_id }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1664,6 +1684,7 @@ impl GameCommand {
             Self::Random { .. } => Capability::Rolling,
             Self::Surname { .. } => Capability::Surnaming,
             Self::RequestTitles { .. } | Self::SetTitle { .. } => Capability::Titling,
+            Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1735,6 +1756,8 @@ impl GameCommand {
             | Self::Surname { .. }
             | Self::RequestTitles { .. }
             | Self::SetTitle { .. }
+            | Self::BazaarSearch { .. }
+            | Self::BazaarWelcome { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -2069,6 +2092,8 @@ pub fn encode(
         | GameCommand::Surname { .. }
         | GameCommand::RequestTitles { .. }
         | GameCommand::SetTitle { .. }
+        | GameCommand::BazaarSearch { .. }
+        | GameCommand::BazaarWelcome { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }
