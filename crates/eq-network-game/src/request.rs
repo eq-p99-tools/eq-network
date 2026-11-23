@@ -853,6 +853,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::FeignDeathPosture => abilities::eqmac::feign_posture(sender.spawn()),
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Jump => Ok(crate::quarm::jump()),
+        Request::Random { low, high } => Ok(socials::eqmac_random(*low, *high)),
+        Request::Assist(spawn_id) => Ok(socials::eqmac_assist(*spawn_id)),
+        Request::SplitCoins(coins) => crate::split::eqmac_split(*coins),
+        Request::AutoSplit(on) => crate::split::eqmac_auto_split(sender.spawn(), *on),
         Request::SetAnonymity(anonymity) => {
             crate::listing::eqmac_anonymity(sender.spawn(), *anonymity)
         }

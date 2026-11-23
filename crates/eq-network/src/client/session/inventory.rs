@@ -1407,6 +1407,8 @@ impl Feature for Belongings {
                 tell_coins(world, purse, out)?;
             }
         }
+        // TAKP's and Quarm's answer to a split, once its addition is in.
+        self.sharing.eqmac_answer(message, world, out)?;
         match message {
             Message::MerchantScoped {
                 merchant_id,
@@ -3745,6 +3747,162 @@ mod tests {
             [&InventoryUpdate::Invalidated]
         );
         assert!(world.inventory.stale());
+    }
+
+    /// A grouped player on TAKP or Quarm with `purse`, splitting `asked`;
+    /// what the split sent.
+    fn eqmac_split(
+        purse: Coins,
+        asked: Coins,
+    ) -> (
+        Belongings,
+        World,
+        Vec<eq_network_game::command::EncodedCommand>,
+    ) {
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.splitting = true;
+        world.grouped = true;
+        world.coins.0.purse = Some(purse);
+        let command = ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: asked,
+        };
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&command, &mut world, out)
+        });
+        outcome.result.unwrap();
+        (belongings, world, outcome.sent)
+    }
+
+    /// Hears what TAKP or Quarm sends back, in order.
+    fn eqmac_answers(
+        belongings: &mut Belongings,
+        world: &mut World,
+        messages: &[Message],
+    ) -> Vec<ClientEvent> {
+        let mut events = Vec::new();
+        for message in messages {
+            let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+                belongings.observe(message, world, out)
+            });
+            outcome.result.unwrap();
+            events.extend(outcome.events);
+        }
+        events
+    }
+
+    /// The four additions, platinum to copper, each of its own kind.
+    fn additions(platinum: u32, gold: u32, silver: u32, copper: u32) -> Vec<Message> {
+        [
+            Coins {
+                platinum,
+                ..Coins::default()
+            },
+            Coins {
+                gold,
+                ..Coins::default()
+            },
+            Coins {
+                silver,
+                ..Coins::default()
+            },
+            Coins {
+                copper,
+                ..Coins::default()
+            },
+        ]
+        .into_iter()
+        .map(Message::PurseAdded)
+        .collect()
+    }
+
+    const fn coins(platinum: u32, gold: u32, silver: u32, copper: u32) -> Coins {
+        Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        }
+    }
+
+    #[test]
+    fn an_eqmac_split_goes_on_the_mac_opcode() {
+        let (_, world, sent) = eqmac_split(coins(1, 2, 3, 4), coins(1, 0, 0, 4));
+        assert_eq!(
+            sent,
+            [eq_network_game::split::eqmac_split(coins(1, 0, 0, 4)).unwrap()]
+        );
+        // The program takes the coins first.
+        assert_eq!(world.coins.purse, Some(coins(0, 2, 3, 0)));
+    }
+
+    #[test]
+    fn an_eqmac_split_that_made_change_ends_at_the_servers_take_plus_the_share() {
+        // 1 platinum from 500 copper and 2 platinum: the server takes the
+        // copper and 500 more, keeping 1 platinum and 5 gold, then pays the
+        // splitter's share of 1 platinum (2 in the group, the remainder).
+        let (mut belongings, mut world, _) = eqmac_split(coins(2, 0, 0, 500), coins(1, 0, 0, 0));
+        let answers = additions(1, 0, 0, 0);
+        eqmac_answers(&mut belongings, &mut world, &answers[..3]);
+        // Not settled until all four are in.
+        assert_eq!(world.coins.purse, Some(coins(2, 0, 0, 500)));
+        let events = eqmac_answers(&mut belongings, &mut world, &answers[3..]);
+        assert_eq!(world.coins.purse, Some(coins(2, 5, 0, 0)));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Coins(told)) if *told == coins(2, 5, 0, 0)
+        )));
+        // Settled: the wait ends without making the purse unknown.
+        belongings.sharing.backdate(sharing::SPLIT_ANSWER);
+        testing::run(|out| belongings.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.purse, Some(coins(2, 5, 0, 0)));
+    }
+
+    #[test]
+    fn zero_additions_count_and_the_ones_after_them_still_apply() {
+        // 6 copper from 10: taken from copper alone, then a share of 3.
+        let (mut belongings, mut world, _) = eqmac_split(coins(0, 0, 0, 10), coins(0, 0, 0, 6));
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 4)));
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 3));
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 7)));
+        // The split is settled, so a later addition is the purse's alone.
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 1)[3..]);
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 8)));
+    }
+
+    #[test]
+    fn a_refused_eqmac_split_is_known_only_when_each_kind_comes_back_as_asked() {
+        let before = coins(2, 0, 0, 500);
+        let asked = coins(1, 0, 0, 0);
+        let mut answers = vec![Message::SplitRefused];
+        answers.extend(additions(1, 0, 0, 0));
+        let (mut belongings, mut world, _) = eqmac_split(before, asked);
+        eqmac_answers(&mut belongings, &mut world, &answers);
+        assert_eq!(world.coins.purse, Some(before));
+        // The server held less platinum than we asked of it, so it gave
+        // back what it held: our purse was wrong, and now is unknown.
+        let mut short = vec![Message::SplitRefused];
+        short.extend(additions(0, 0, 0, 0));
+        let (mut belongings, mut world, _) = eqmac_split(before, asked);
+        let events = eqmac_answers(&mut belongings, &mut world, &short);
+        assert_eq!(world.coins.purse, None);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PurseUncertain { .. }))));
+    }
+
+    #[test]
+    fn an_eqmac_split_with_fewer_than_four_additions_leaves_the_purse_unknown() {
+        // Quarm pays a self-found splitter nothing.
+        let (mut belongings, mut world, _) = eqmac_split(coins(0, 0, 0, 10), coins(0, 0, 0, 6));
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 0)[..2]);
+        belongings.sharing.backdate(sharing::SPLIT_ANSWER);
+        testing::run(|out| belongings.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.purse, None);
     }
 
     #[test]

@@ -1734,6 +1734,21 @@ impl ServerType for Quarm {
         offer(Box::new(PacedWho::default()))
     }
 
+    /// Rolls and assists in the `EQMac` program's packets
+    /// ([`eq_network_game::socials::eqmac_random`],
+    /// [`eq_network_game::socials::eqmac_assist`]), from Quarm's own
+    /// `Handle_OP_RandomReq` and `Handle_OP_Assist` at SecretsOTheP/EQMacEmu fc75fcf: an 8-byte
+    /// roll, answered by a 76-byte `OP_RandomReply` to the players within
+    /// 400, and a 2-byte assist, always answered on the same opcode with the
+    /// assistee's target, or the player's own spawn when it has none or
+    /// stands past 250. Ends of 0 to 32000, in order, and one assist at a
+    /// time for 5 s are the session's own ([`Socials::eqmac`]; 6.585b,
+    /// 6.585c). Emotes and yells wait for their own reads. Source-derived,
+    /// not live (6.585).
+    fn socials(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Socials::eqmac()))
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -1778,6 +1793,12 @@ impl ServerType for Quarm {
     /// Quarm's own move handlers accept the shared `EQMac` item/coin layouts.
     /// Keep the same inventory owner used for movement, with placement and
     /// banker checks, independent of merchants, meals and exchanges.
+    /// `/split` and `/autosplit` follow Quarm's own `Handle_OP_Split` and
+    /// appearance type 28 at fc75fcf
+    /// ([`eq_network_game::split::eqmac_split`]); the purse after a split is
+    /// known only as the server's take and four additions prove it, and a
+    /// self-found splitter, whom Quarm pays nothing, is left unknown.
+    /// Source-derived, not live (6.585).
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
             self.inventory_move_rules()?,
@@ -1788,7 +1809,7 @@ impl ServerType for Quarm {
                 coins: true,
                 merchants: true,
                 meals: true,
-                splitting: false,
+                splitting: true,
                 banker_change: false,
                 destroying_coins: false,
             },
@@ -2028,12 +2049,19 @@ impl ServerType for Takp {
     /// TAKP's rules, which disconnect a player whose move they refuse, coin
     /// moves, which TAKP answers no more than `EQEmu` does, merchants, whose
     /// lists TAKP quotes before their rate, and eating and drinking when
-    /// TAKP's own client would.
+    /// TAKP's own client would. `/split` and `/autosplit` follow TAKP's own
+    /// `Handle_OP_Split` and appearance type 28 at 44afcbf
+    /// ([`eq_network_game::split::eqmac_split`]); the purse after a split is
+    /// known only as the server's take and four additions prove it.
+    /// Source-derived, not live (6.585).
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
             self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
-            Allowances::STANDARD,
+            Allowances {
+                splitting: true,
+                ..Allowances::STANDARD
+            },
             setup,
         ))
     }
@@ -2098,6 +2126,21 @@ impl ServerType for Takp {
     /// of the session's own ([`PacedWho`]). Source-derived, not live (6.583).
     fn who(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(PacedWho::default()))
+    }
+
+    /// Rolls and assists in the `EQMac` program's packets
+    /// ([`eq_network_game::socials::eqmac_random`],
+    /// [`eq_network_game::socials::eqmac_assist`]), from TAKP's own
+    /// `Handle_OP_RandomReq` and `Handle_OP_Assist` at EQMacEmu/Server 44afcbf: an 8-byte
+    /// roll, answered by a 76-byte `OP_RandomReply` to the players within
+    /// 400, and a 2-byte assist, always answered on the same opcode with the
+    /// assistee's target, or the player's own spawn when it has none or
+    /// stands past 250. Ends of 0 to 32000, in order, and one assist at a
+    /// time for 5 s are the session's own ([`Socials::eqmac`]; 6.585b,
+    /// 6.585c). Emotes and yells wait for their own reads. Source-derived,
+    /// not live (6.585).
+    fn socials(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Socials::eqmac()))
     }
 
     /// Corpse looting in the `EQMac` program's packets
@@ -2550,11 +2593,11 @@ mod tests {
         // personal inventory actions, and, each from its own handlers, its
         // giving, groups, listing and translocate (6.576); both search the
         // Bazaar from source (6.580), and each answers `/who all` and friends
-        // from its own handlers (6.583). Other features await their own
-        // evidence.
+        // from its own handlers (6.583), and rolls, assists and splits the
+        // same way (6.585). Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 24);
+        assert_eq!(quarm.features(&setup).len(), 25);
         assert_eq!(
             offers(quarm),
             [
@@ -2578,18 +2621,21 @@ mod tests {
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
                 Capability::FriendsWho,
+                Capability::Splitting,
                 Capability::ApplyingPoison,
                 Capability::BazaarSearching,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 26);
+        assert_eq!(takp.features(&setup).len(), 27);
         assert_eq!(
             offers(takp),
             [
@@ -2613,6 +2659,8 @@ mod tests {
                 Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
+                Capability::Rolling,
+                Capability::Assisting,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
@@ -2620,6 +2668,7 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::FriendsWho,
+                Capability::Splitting,
                 Capability::ApplyingPoison,
                 Capability::BazaarSearching,
             ]

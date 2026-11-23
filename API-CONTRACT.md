@@ -1475,6 +1475,35 @@ row 6.583a for the program's). One asked sooner is refused and may be asked
 again. A plain `/who` stays the host's own list of the zone, as on Titanium
 (open row 6.583b).
 
+Quarm and TAKP offer `Rolling`, `Assisting` and `Splitting` the same way
+(6.585), from handlers the two servers share at Quarm fc75fcf and TAKP 44afcbf.
+- **Rolling.** A roll is Titanium's 8 bytes on the `EQMac` opcode (0xe741). Its
+  `OP_RandomReply` (0x1640) is read into the same `WorldEvent::Roll`. The
+  session sends ends of 0 to 32000, in order; that limit is ours, as P99's
+  program sets it (open row 6.585b for the `EQMac` program's).
+- **Assisting.** An assist is 2 bytes (0x0042). The server always answers on
+  the same opcode, into `WorldEvent::Assisted`, with the assistee's target, or
+  with the player's own spawn when there is none or the assistee stands past
+  250. That spawn is passed on as named (open row 6.585a). Only one assist is
+  in flight at a time, for up to 5 seconds.
+- **Emotes and yells** are not offered on these servers yet.
+- **Splitting.** `/split` is the 16-byte record on 0x3141, and `/autosplit` is
+  appearance type 28. The profile's byte at 3348 says whether automatic
+  splitting is on.
+  - Like the program, the session takes the coins from the purse first.
+  - A refusal sends its line (12328 or 13112, which arrives as
+    `Message::SplitRefused`) and then four purse additions, platinum to
+    copper, zeros included. The purse is known again only if each kind came
+    back as asked.
+  - A split that goes through takes the coins' worth from copper first and
+    makes change upward without telling the client
+    (`split::eqmac_take`). It then pays the share as the same four additions,
+    so the purse becomes what the take left plus the share.
+  - With fewer than four additions within 3 seconds, the purse is unknown.
+    Quarm pays a self-found splitter nothing.
+  - What the `EQMac` program's purse shows after a split that made change is
+    unread (open row 6.585d).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

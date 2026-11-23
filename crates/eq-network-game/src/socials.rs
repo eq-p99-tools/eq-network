@@ -84,6 +84,12 @@ pub const EQMAC_DUEL_ACCEPT_OPCODE: u16 = 0x5d41;
 pub const EQMAC_DUEL_RESPONSE_OPCODE: u16 = 0xd040;
 /// `OP_DuelDecline`: the player turns a challenge down (Titanium).
 pub const DUEL_DECLINE_OPCODE: u16 = 0x3bad;
+/// `OP_RandomReq` on TAKP and Quarm (Mac 0x41e7).
+pub const EQMAC_RANDOM_OPCODE: u16 = 0xe741;
+/// `OP_RandomReply` on TAKP and Quarm (Mac 0x4016).
+pub const EQMAC_ROLL_OPCODE: u16 = 0x1640;
+/// `OP_Assist` on TAKP and Quarm (Mac 0x4200), both ways.
+pub const EQMAC_ASSIST_OPCODE: u16 = 0x0042;
 
 /// The emote's text field; the server reads at most 512 bytes of it.
 const EMOTE_TEXT: usize = 1024;
@@ -450,6 +456,47 @@ pub fn assist(spawn_id: u16) -> EncodedCommand {
     }
 }
 
+/// Rolls a die on TAKP and Quarm: the same 8 bytes as Titanium's, low then
+/// high, on the `EQMac` opcode. Both servers' `Handle_OP_RandomReq` drop
+/// another size, order the ends, and roll 0 to 100 for two zeros (Quarm
+/// fc75fcf, TAKP 44afcbf).
+#[must_use]
+pub fn eqmac_random(low: u32, high: u32) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_RANDOM_OPCODE,
+        ..random(low, high)
+    }
+}
+
+/// Asks TAKP or Quarm for the target of the spawn assisted: the `EQMac`
+/// `EntityId_Struct`, the spawn in 2 bytes, the only size both servers'
+/// `Handle_OP_Assist` read.
+#[must_use]
+pub fn eqmac_assist(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: EQMAC_ASSIST_OPCODE,
+        body: spawn_id.to_le_bytes().to_vec(),
+    }
+}
+
+/// Reads TAKP's or Quarm's answer to an assist: the request sent back with
+/// one spawn in it. Both servers always answer: with the assistee's target
+/// when it has one and stands within 250 (any distance for a GM), else the
+/// player's own spawn, or -1 when `Combat:AssistNoTargetSelf` is off. The
+/// player's own spawn is the target named, as the server names it; -1 is
+/// none (whether the `EQMac` program treats its own spawn otherwise is
+/// unread, 6.585a).
+///
+/// # Errors
+/// Rejects any length but 2.
+pub(crate) fn eqmac_assist_answer(body: &[u8]) -> Result<Assisted> {
+    ensure!(body.len() == 2, "invalid EQMac assist length");
+    let target = u16::from_le_bytes([body[0], body[1]]);
+    Ok(Assisted {
+        target: (target != 0 && target != u16::MAX).then_some(target),
+    })
+}
+
 /// Decodes a die rolled nearby; None for any other opcode.
 ///
 /// # Errors
@@ -652,6 +699,29 @@ pub(crate) fn eqmac_refused(body: &[u8]) -> Result<DuelUpdate> {
 mod tests {
     use super::*;
     use crate::world::titanium_update;
+
+    #[test]
+    fn eqmac_rolls_and_assists_are_the_sizes_both_mac_servers_read() {
+        let roll = eqmac_random(5, 1);
+        assert_eq!(roll.opcode, 0xe741);
+        assert_eq!(roll.body, [5, 0, 0, 0, 1, 0, 0, 0]);
+        let assist = eqmac_assist(0x1234);
+        assert_eq!(assist.opcode, 0x0042);
+        assert_eq!(assist.body, [0x34, 0x12]);
+    }
+
+    #[test]
+    fn an_eqmac_assist_answer_names_a_spawn_the_player_or_none() {
+        assert_eq!(
+            eqmac_assist_answer(&[0x34, 0x12]).unwrap().target,
+            Some(0x1234)
+        );
+        // The player's own spawn, as the server names it.
+        assert_eq!(eqmac_assist_answer(&[7, 0]).unwrap().target, Some(7));
+        assert_eq!(eqmac_assist_answer(&[0xff, 0xff]).unwrap().target, None);
+        assert_eq!(eqmac_assist_answer(&[0, 0]).unwrap().target, None);
+        assert!(eqmac_assist_answer(&[1, 0, 0, 0]).is_err());
+    }
 
     #[test]
     fn a_titanium_challenge_names_the_other_player_then_the_player() {

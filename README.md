@@ -86,7 +86,7 @@ each.
 | `WorldContainers` | Combining in world containers such as forges | Yes | Yes | – | – |
 | `Reading` | Reading books and notes | Yes | Yes | Yes | Yes |
 | `BankerChange` | Changing coins at a banker | Yes | Yes | – | – |
-| `Splitting` | Sharing coin with the group | Yes | Yes | – | – |
+| `Splitting` | Sharing coin with the group (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `BazaarSearching` | Searching the Bazaar's traders, read only (source-derived on TAKP and Quarm, not yet checked live) | – | – | Yes | Yes |
 | **People** | | | | | |
 | `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
@@ -95,9 +95,9 @@ each.
 | `Grouping` | Groups | Yes | Yes | Yes | Yes |
 | `Raiding` | Raids | – | Yes | – | – |
 | `Listing` | AFK, anonymous and roleplaying | Yes | Yes | Yes | Yes |
-| `Rolling` | `/random` | Yes | Yes | – | – |
+| `Rolling` | `/random` (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Emoting` | `/emote` | Yes | Yes | – | – |
-| `Assisting` | `/assist` | Yes | Yes | – | – |
+| `Assisting` | `/assist` (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Petitioning` | Petitions to the server's staff | – | Yes | – | – |
 | `ReportingBugs` | Bug reports | – | Yes | – | – |
 | `SendingFeedback` | Feedback, which only TAKP-family servers read | – | – | – | – |

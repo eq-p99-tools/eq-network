@@ -23,6 +23,23 @@
 //! still unanswered after [`CHANGE_ANSWER`] is taken as refused, the coins
 //! as they were.
 //!
+//! TAKP and Quarm answer a split otherwise (6.585, from both servers'
+//! `Handle_OP_Split` at Quarm fc75fcf and TAKP 44afcbf). A refusal sends
+//! its line (12328 or 13112, [`Message::SplitRefused`]) and then gives the
+//! coins back as four purse additions, platinum to copper, zeros included
+//! (`Client::SendClientMoney`); a kind the server holds less of than asked
+//! comes back as its whole holding. A split that goes through takes the
+//! coins' worth from copper first, making change upward without a word
+//! ([`eq_network_game::split::eqmac_take`]), then pays the player's share
+//! as the same four additions (`Group::SplitMoney`, `AddMoneyToPP`). So
+//! once four additions follow a split:
+//! - after a refusal, the purse is known only if each kind came back as
+//!   asked;
+//! - otherwise it is what the server's take left plus the share.
+//!
+//! Anything else, or no four additions within [`SPLIT_ANSWER`], leaves the
+//! purse unknown. Quarm pays a self-found splitter nothing.
+//!
 //! Both waits are inferred (recording checklist 6.410).
 use super::{actor, purse_uncertain, tell_coins};
 use crate::client::session::{
@@ -31,6 +48,7 @@ use crate::client::session::{
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
+use eq_network_game::split::eqmac_take;
 use eq_network_game::{
     message::Message,
     money::Coin,
@@ -53,11 +71,23 @@ const NOTHING: u32 = 0x3029;
 /// purse holds (0x302c-0x302f).
 const TOO_MUCH: [u32; 4] = [0x302c, 0x302d, 0x302e, 0x302f];
 
+/// A split in flight: when it went, the purse it was taken from, what it
+/// named, and on TAKP and Quarm what has come back so far.
+#[derive(Debug)]
+struct Split {
+    sent: Instant,
+    before: Coins,
+    asked: Coins,
+    refused: bool,
+    added: Coins,
+    additions: usize,
+}
+
 /// The split and the change in flight, and the profile's automatic
 /// splitting until the admission reports it.
 #[derive(Debug, Default)]
 pub(super) struct Sharing {
-    split: Option<Instant>,
+    split: Option<Split>,
     change: Option<Instant>,
     profile_auto_split: Option<bool>,
 }
@@ -107,9 +137,10 @@ impl Sharing {
                 out.log,
             );
         }
-        let Some(mut purse) = world.coins.purse else {
+        let Some(before) = world.coins.purse else {
             return actions::refuse(command, "Your purse is not known yet.", out.log);
         };
+        let mut purse = before;
         for (coin, line) in Coin::ALL.into_iter().zip(TOO_MUCH) {
             let held = purse.of_mut(coin);
             let Some(left) = held.checked_sub(coins.of(coin)) else {
@@ -126,7 +157,14 @@ impl Sharing {
         };
         out.send(&packet)?;
         world.coins.0.purse = Some(purse);
-        self.split = Some(Instant::now());
+        self.split = Some(Split {
+            sent: Instant::now(),
+            before,
+            asked: coins,
+            refused: false,
+            added: Coins::default(),
+            additions: 0,
+        });
         tell_coins(world, true, out)
     }
 
@@ -187,7 +225,7 @@ impl Sharing {
         let expired = |since: Option<Instant>, wait| {
             since.is_some_and(|since| now.saturating_duration_since(since) >= wait)
         };
-        if expired(self.split, SPLIT_ANSWER) {
+        if expired(self.split.as_ref().map(|split| split.sent), SPLIT_ANSWER) {
             self.split = None;
             purse_uncertain(world, out)?;
         }
@@ -198,6 +236,60 @@ impl Sharing {
                 "The banker did not change your coins.",
                 out,
             )?;
+        }
+        Ok(())
+    }
+
+    /// Follows what TAKP and Quarm send back after a split, once the
+    /// addition is in the purse: a refusal's line, then four additions.
+    pub(super) fn eqmac_answer(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Some(split) = &mut self.split else {
+            return Ok(());
+        };
+        match message {
+            Message::SplitRefused => {
+                split.refused = true;
+                return Ok(());
+            }
+            Message::PurseAdded(coins) => {
+                for coin in Coin::ALL {
+                    let added = split.added.of_mut(coin);
+                    *added = added.saturating_add(coins.of(coin));
+                }
+                split.additions += 1;
+            }
+            _ => return Ok(()),
+        }
+        if split.additions < Coin::ALL.len() {
+            return Ok(());
+        }
+        let Some(split) = self.split.take() else {
+            return Ok(());
+        };
+        let settled = if split.refused {
+            // Given back as asked: the purse is as it was.
+            (split.added == split.asked).then_some(split.before)
+        } else {
+            eqmac_take(split.before, split.asked.total_copper()).map(|kept| {
+                let mut purse = kept;
+                for coin in Coin::ALL {
+                    let held = purse.of_mut(coin);
+                    *held = held.saturating_add(split.added.of(coin));
+                }
+                purse
+            })
+        };
+        let Some(purse) = settled else {
+            return purse_uncertain(world, out);
+        };
+        if world.coins.purse != Some(purse) {
+            world.coins.0.purse = Some(purse);
+            tell_coins(world, true, out)?;
         }
         Ok(())
     }
@@ -225,7 +317,13 @@ impl Sharing {
     /// Lets tests run a wait out.
     #[cfg(test)]
     pub(super) fn backdate(&mut self, by: Duration) {
-        for since in [&mut self.split, &mut self.change].into_iter().flatten() {
+        for since in [
+            self.split.as_mut().map(|split| &mut split.sent),
+            self.change.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             *since -= by;
         }
     }
