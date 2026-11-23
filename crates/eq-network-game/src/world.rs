@@ -645,12 +645,21 @@ pub enum Capability {
     /// Titanium's `/stopcast`: ending one's own cast without moving. The
     /// host must refuse it for a mounted player, as the program does.
     StoppingCasts,
+    /// Keeping the character's server filters for every zone-in
+    /// ([`crate::command::GameCommand::SetServerFilters`]); every server
+    /// type takes the set.
+    ServerFilters,
+    /// Sending a change of the server filters at once, mid-zone, where the
+    /// server type is known to read it then (`EQEmu`'s
+    /// `Client::Handle_OP_SetServerFilter`). Elsewhere a change waits for
+    /// the next zone-in (recording checklist 6.494e).
+    ServerFiltersAtOnce,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 69] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -718,6 +727,8 @@ impl Capability {
         Self::BoatRiding,
         Self::Yelling,
         Self::StoppingCasts,
+        Self::ServerFilters,
+        Self::ServerFiltersAtOnce,
     ];
 }
 
@@ -1698,6 +1709,22 @@ pub enum WorldEvent {
         /// The requested value.
         change: crate::listing::ListingChange,
     },
+    /// The character's server filters were kept: every later zone-in sends
+    /// them. `sent` says whether they also went to the zone at once; when
+    /// not, they wait for the next zone-in.
+    ServerFiltersKept {
+        /// Admission from the request; none at the character list.
+        session_id: Option<u64>,
+        /// Whether the zone was sent them now.
+        sent: bool,
+    },
+    /// A server filter change was not kept, and why; the prior set stands.
+    ServerFiltersRefused {
+        /// Admission from the request; none at the character list.
+        session_id: Option<u64>,
+        /// Why not.
+        reason: String,
+    },
     /// A listing change was not sent, and why.
     ListingRefused {
         /// Admission from the request.
@@ -2462,6 +2489,8 @@ mod tests {
             Capability::BoatRiding => 64,
             Capability::Yelling => 65,
             Capability::StoppingCasts => 66,
+            Capability::ServerFilters => 67,
+            Capability::ServerFiltersAtOnce => 68,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -42,18 +42,6 @@ impl LinkExpansion {
     }
 }
 
-/// Titanium uses mixed polarity: guild/social/group/shout/auction/OOC and
-/// melee-miss filters show messages when set to one. Most spell filters use
-/// zero. This matches the successful stock client's 29-word filter packet.
-#[must_use]
-pub fn server_filters() -> [u8; 116] {
-    let mut filters = [0; 116];
-    for index in (1..=7).chain(14..=17) {
-        filters[index * 4] = 1;
-    }
-    filters
-}
-
 /// Stable names for communication channels emitted by the client.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

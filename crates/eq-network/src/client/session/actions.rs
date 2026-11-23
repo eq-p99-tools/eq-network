@@ -256,6 +256,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::AnswerListPolls { .. }
+        | ClientCommand::ChooseServerFilters { .. }
+        | ClientCommand::SetServerFilters { .. }
         | ClientCommand::SetMovementOptions { .. }
         | ClientCommand::SetBookOptions { .. }
         | ClientCommand::BoatControl { .. }
@@ -328,6 +330,14 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
         }),
         ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
+        ClientCommand::ChooseServerFilters { .. } => WorldEvent::ServerFiltersRefused {
+            session_id: None,
+            reason: reason.into(),
+        },
+        ClientCommand::SetServerFilters { session_id, .. } => WorldEvent::ServerFiltersRefused {
+            session_id: Some(*session_id),
+            reason: reason.into(),
+        },
         ClientCommand::CastSpell { .. }
         | ClientCommand::UseKnightAbility { .. }
         | ClientCommand::UseDiscipline { .. } => {
