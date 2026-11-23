@@ -382,7 +382,7 @@ pub(super) struct Casting {
 #[derive(Default)]
 struct ItemRecasts {
     /// Each item's stamp from this session's sends, by its slot and item.
-    items: std::collections::HashMap<(InventorySlot, u32), u64>,
+    items: std::collections::BTreeMap<(InventorySlot, u32), u64>,
     /// The type timers 0-19.
     types: [u64; ITEM_RECAST_TYPES],
 }
@@ -1537,6 +1537,36 @@ mod tests {
         });
         outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
+    }
+
+    #[test]
+    fn an_item_send_stamps_the_item_and_its_type_with_its_recast() {
+        // Read R49-34 k: now plus the delay, in seconds, for the item and
+        // its recast type; another item of the type waits too.
+        let mut recasts = ItemRecasts::default();
+        let mut item = testing::item(23);
+        item.activation.effect = Some(eq_network_game::inventory::ClickEffect {
+            spell_id: 73,
+            kind: eq_network_game::inventory::ClickKind::Click,
+            required_level: 0,
+            effect_level: 1,
+            cast_time_ms: 0,
+            recast_delay_seconds: 30,
+            recast_type: 4,
+        });
+        let slot = InventorySlot(23);
+        assert_eq!(recasts.ready(slot, &item), 0);
+        recasts.sent(slot, &item, 1000);
+        assert_eq!(recasts.ready(slot, &item), 1030);
+        let mut other = item.clone();
+        other.details.id += 1;
+        assert_eq!(recasts.ready(InventorySlot(24), &other), 1030);
+        other.activation.effect.as_mut().unwrap().recast_type = 5;
+        assert_eq!(recasts.ready(InventorySlot(24), &other), 0);
+        // A type past the program's 20 keeps only the item's own stamp.
+        item.activation.effect.as_mut().unwrap().recast_type = 40;
+        recasts.sent(InventorySlot(25), &item, 2000);
+        assert_eq!(recasts.ready(InventorySlot(25), &item), 2030);
     }
 
     #[test]
