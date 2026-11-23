@@ -1,7 +1,7 @@
 //! The world server: validating the client, the character list, choosing or
 //! creating a character, and the handoff to its zone. Each client
 //! generation runs it its own way: Titanium's is here, `EQMac`'s in
-//! [`eqmac`].
+//! [`eqmac`], `RoF2`'s in [`rof2`].
 use super::{
     creation::Creating, cstr, login::Credentials, put_string, servers, servers::Shield,
     CharacterSession, ZoneDestination,
@@ -22,6 +22,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub(super) mod eqmac;
+pub(super) mod rof2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldOpcode {

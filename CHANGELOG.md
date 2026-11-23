@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Build RoF2's world stage against stock `EQEmu` from its public source,
+  labelled inferred for RoF2 (6.499): the 488-byte login info, the character
+  list into the shared selection, `OP_EnterWorld` (refusing a name it would
+  have to cut), and the handoff (`OP_ZoneServerInfo`, its address terminated
+  inside its field) or the zone-unavailable notice. Between zones it enters
+  the character in play once the world's post-entry message arrives. It
+  sends nothing stock `EQEmu` ignores. Still unreachable: a RoF2
+  configuration is refused before a socket opens, and the RoF2 handoff,
+  zone connection and admission still refuse.
+
 - Take the server filters from the host and send a change again (parity
   item 6). The filter packet (Titanium `OP_SetServerFilter` 0x6563, 29
   words; `EQMac` 0xff41, 17 words) was a fixed array sent at zone-in.
