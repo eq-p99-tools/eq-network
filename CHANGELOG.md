@@ -20,6 +20,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hero's forge model and two unknown words are not read. Coverage lists the
   eight as read by the zone decoder, and the rest stay unlisted. An admitted
   RoF2 session still sends nothing and offers nothing.
+- Say the player looks for a group with `/lfg` (gap 3.6, checklist 6.515).
+  `GameCommand::LookForGroup { session_id, on }` sends Titanium's
+  `OP_LFGCommand` (0x68ac), 80 bytes with only the flag set
+  (`listing::titanium_looking`), as `Client::Handle_OP_LFGCommand` reads
+  it, under the new `Capability::LookingForGroup`, which only stock `EQEmu`
+  lists (from source, not yet checked live). The server tells the sender
+  nothing, so the session keeps the flag from the admission's spawn record
+  and each change sent, tells a change with `ListingSet`, and paces two
+  changes 500 ms apart. `EQMac` refuses. **Breaking:** new variants on the
+  exhaustive `GameCommand`, `Request` and `Capability` (`Capability::ALL`
+  holds 78).
 - Read RoF2's spawn movement and removal as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.514). `rof2_player::position` reads the
   24-byte `OP_ClientUpdate` (0x7dfc), which RoF2 gets unencoded, into
