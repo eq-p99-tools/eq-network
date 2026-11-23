@@ -69,7 +69,9 @@ fn report(hazard: Hazard, session_id: u64) -> ClientCommand {
                 sampled_at: Instant::now(),
             },
         },
-        Hazard::Freezing => unreachable!("this fixture reports only fall, drowning and lava"),
+        Hazard::Freezing | Hazard::ZoneHeat => {
+            unreachable!("this fixture reports only fall, drowning and lava")
+        }
     }
 }
 
@@ -132,13 +134,13 @@ fn an_accepted_local_report_and_repeated_server_echo_send_only_one_stand() {
             Ok(())
         });
         outcome.result.unwrap();
-        assert_eq!(
-            outcome.sent,
-            [
-                hazards::titanium_damage(7, hazard, 13).unwrap(),
-                command::titanium_posture(7, Posture::Standing).unwrap(),
-            ]
-        );
+        // Each report is followed by the damage record (read R49-3 c, 3a).
+        let mut expected = vec![
+            hazards::titanium_damage(7, hazard, 13).unwrap(),
+            hazards::titanium_damage_record(7, hazard, 13).unwrap(),
+        ];
+        expected.push(command::titanium_posture(7, Posture::Standing).unwrap());
+        assert_eq!(outcome.sent, expected);
         assert_eq!(world.posture.current(), Some(PostureState::Standing));
         assert_eq!(
             outcome
@@ -153,5 +155,34 @@ fn an_accepted_local_report_and_repeated_server_echo_send_only_one_stand() {
             .events
             .iter()
             .any(|event| matches!(event, ClientEvent::World(WorldEvent::HitPoints { .. }))));
+    }
+}
+
+#[test]
+fn a_received_environmental_record_stands_a_seated_player_once() {
+    // The program's 0x4a56e3 stands a seated player for its own record as
+    // for a received one (read R49-3b), through the one stand-when-hit path.
+    for kind in [244, 246, 250, 251, 252, 253] {
+        let (mut world, mut features) = fixture();
+        let record = Message::Event(WorldEvent::Damage(Damage {
+            target_id: 7,
+            source_id: 0,
+            kind,
+            spell_id: None,
+            outcome: DamageOutcome::Hit(13),
+            push: None,
+        }));
+        let outcome = testing::run(|out| -> Result<()> {
+            enter(&world, &features, out)?;
+            hear(vec![record], &mut features, &mut world, out, true)?;
+            Ok(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [command::titanium_posture(7, Posture::Standing).unwrap()],
+            "type {kind}"
+        );
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
     }
 }

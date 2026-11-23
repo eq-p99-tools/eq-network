@@ -742,12 +742,15 @@ pub enum Capability {
     /// ([`crate::command::GameCommand::AskDisciplineReuse`]): `EQMac`'s
     /// bare `/disc`.
     DisciplineReuse,
+    /// Titanium's `/sheathe` and `/aggressive`
+    /// ([`crate::command::GameCommand::ToggleStance`]).
+    WeaponStances,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 89] = [
+    pub const ALL: [Self; 90] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -837,6 +840,7 @@ impl Capability {
         Self::BandolierSwap,
         Self::UsingPotionBelt,
         Self::DisciplineReuse,
+        Self::WeaponStances,
     ];
 }
 
@@ -892,6 +896,21 @@ pub enum WorldEvent {
         session_id: u64,
         /// Opaque revision to echo when reporting the sample.
         revision: u64,
+    },
+    /// The session sent a report of damage the world did to the player, as
+    /// the server type takes it. The Titanium program prints its own line
+    /// for each such report (read R49-3 e), so a front end can too.
+    HazardReported {
+        /// The admission that sent the report.
+        session_id: u64,
+        /// What did the damage.
+        hazard: crate::hazards::Hazard,
+        /// The amount reported.
+        amount: u32,
+        /// Whether the damage record followed the report (Titanium's falls,
+        /// drowning, lava and cold, R49-3a). `EQEmu` echoes the record to
+        /// its sender for every type but a fall.
+        record: bool,
     },
     /// P99 spell-table facts, delivered in world/zone receive order even
     /// before profile admission. Installed definitions and provider epochs
@@ -1726,8 +1745,29 @@ pub enum WorldEvent {
     },
     /// The server's answer to a poison put on ([`crate::poisons`]): where it
     /// sat and whether it took. The server's own inventory record removes
-    /// it.
+    /// it. The program says 0x3269 when it took, else 0x326a, in colour
+    /// 0x10e (read R49-1 d).
     PoisonAnswered(crate::poisons::PoisonAnswer),
+    /// A poison started going on (read R49-1): the player sits for it, and
+    /// its request goes out when the program's wait ends. The host says
+    /// `string_id` (0x305e).
+    PoisonStarted {
+        /// Admission from the request.
+        session_id: u64,
+        /// Where the poison sits.
+        slot: crate::inventory::InventorySlot,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
+    /// A poison waiting to go out was stopped by a posture change before
+    /// its request went (read R49-1 d); nothing was sent. The host says
+    /// `string_id` (0x30d1), in colour 0x111 (read R49-1f).
+    PoisonInterrupted {
+        /// Admission from the request.
+        session_id: u64,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// What the chat server told about its channels
     /// ([`crate::chat_server`]).
     Channel(crate::chat_server::ChannelEvent),
@@ -1819,8 +1859,9 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
         /// The official client's own words for this refusal, as an
-        /// `eqstr_us.txt` string ID; none yet (pending read R49-1, recording
-        /// checklist 6.493).
+        /// `eqstr_us.txt` string ID (read R49-1 b): 0x305f without the
+        /// Apply Poison skill, 0x305d when the player is still not sitting.
+        /// None where the refusal is this library's own.
         string_id: Option<u32>,
     },
     /// The player used an ability; its timer runs this long before the
@@ -2074,6 +2115,9 @@ pub enum WorldEvent {
     Duel(crate::socials::DuelUpdate),
     /// A challenge to a duel the player may accept or decline, once.
     DuelOffer(crate::socials::DuelQuestion),
+    /// What a Titanium duel means to the player, as the official program
+    /// words it (R49-6 a, e, h); the session tells it.
+    DuelNews(crate::socials::DuelNews),
     /// An answer to a duel was not sent, and why.
     DuelRefused {
         /// The offer the command named.
@@ -2232,10 +2276,10 @@ pub enum WorldEvent {
         /// New server skill value.
         value: u32,
     },
-    /// A quest's word on the player's base stats: each stat's new value or
-    /// its rise, which the record does not tell apart ([`crate::stats`]);
-    /// the next profile has them as the server keeps them.
-    StatsChanged(crate::stats::StatChange),
+    /// A word on a spawn's base stat, as the Titanium program reads it
+    /// ([`crate::stats`], read R49-6f). `EQEmu`'s own 141-byte form is
+    /// unreadable here, as it is to the program, and counted as a gap.
+    StatsChanged(crate::stats::StatIncrease),
     /// A skill's button is ready again, by the servers' number for the
     /// skill: `EQMac`'s servers' word, before the official client's own
     /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
@@ -2559,7 +2603,7 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::stats::INCREASE_STATS_OPCODE => {
             return Ok(Some(WorldEvent::StatsChanged(
-                crate::stats::titanium_change(body)?,
+                crate::stats::titanium_increase(body)?,
             )));
         }
         crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
@@ -2882,6 +2926,7 @@ mod tests {
             Capability::BandolierSwap => 86,
             Capability::UsingPotionBelt => 87,
             Capability::DisciplineReuse => 88,
+            Capability::WeaponStances => 89,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -3514,17 +3559,20 @@ mod tests {
     }
 
     #[test]
-    fn a_quests_word_on_the_players_stats_is_read() {
-        let mut body = vec![0; 141];
-        body[1] = 5;
+    fn a_stat_increase_is_read_as_the_program_reads_it_and_eqemus_form_is_not() {
+        let body: Vec<u8> = [7u32, 1, 5]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
         assert_eq!(
             titanium_update(0x5b7b, &body).unwrap(),
-            Some(WorldEvent::StatsChanged(crate::stats::StatChange {
-                strength: 5,
-                ..crate::stats::StatChange::default()
+            Some(WorldEvent::StatsChanged(crate::stats::StatIncrease {
+                spawn_id: 7,
+                stat: 1,
+                amount: 5,
             }))
         );
-        assert!(titanium_update(0x5b7b, &body[..140]).is_err());
+        assert!(titanium_update(0x5b7b, &[0; 141]).is_err());
     }
 
     #[test]

@@ -1,5 +1,39 @@
 # API and integration contracts
 
+## Titanium liquid reports and their damage record (read R49-3)
+
+Every Titanium session, `EQEmu` local or not and P99, offers `Drowning` and
+`LavaHeat`, as the Titanium program reports them on any server. After each
+accepted Titanium report, the session sends `OP_EnvDamage` and then the
+program's damage record, `OP_Damage` 0x5c78
+(`hazards::titanium_damage_record`, read R49-3 c). Falls get the same
+record (R49-3a). `EQEmu` relays the record to every client in the zone,
+the sender included for every type but a fall, and applies nothing. P99's
+handling is unknown, and its first use there is the attended liquid row.
+The record is skipped where the player's HP,
+less the amount, would be below -10, the program's death path. The session
+judges that from the server's last HP plus what the items add, and only
+where it can count the items (inferred, 6.491b). No Titanium server type
+counts them yet, so the record goes.
+
+On Titanium the session also refuses any report in the freeze stance
+(posture 102) and for a carrier race (0x8d, 0x48, 0x49, 0x72, 0x194), as
+the program's shared report function does (R49-3 d, R49-3a).
+
+`WorldEvent::HazardReported { session_id, hazard, amount, record }` follows
+every report the session sent, falls included, so a front end can print the
+program's own line (R49-3 e). `record` says whether the damage record
+followed, so a front end can expect its echo.
+
+Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
+`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
+sends it yet, since cold is unwired until R49-26.
+
+**Breaking:**
+- `WorldEvent::HazardReported`;
+- `LiquidHazard::ZoneHeat` and `Hazard::ZoneHeat` on exhaustive enums;
+- `Hazard` is now `Serialize`.
+
 ## An item's song and the host's spell data
 
 `ItemUse::installed_class_spell: Option<bool>` is the host's word, from its
@@ -466,10 +500,9 @@ acceptance nor water state. The host asserts water from the installed zone.
 `Capability::ALL` grows from 50 to 52 with `Drowning` and `LavaHeat`;
 `GameCommand` gains `LiquidDamage { session_id, hazard, amount, observation }`
 and `WorldEvent` gains `LiquidHazardRevision { session_id, revision }`.
-Only the Titanium `EQEmu` policy offers the two capabilities, and only on a
-session whose connection is constrained to local endpoints; P99, Quarm, TAKP
-and a remote `EQEmu` keep falls only and refuse `LiquidDamage` before
-anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
+Every Titanium policy, `EQEmu` local or not and P99, offers the two
+capabilities (see "Titanium liquid reports and their damage record"); Quarm
+and TAKP keep falls only and refuse `LiquidDamage` before anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
 refuses every other hazard.
 
 The session raises `LiquidHazardRevision` at admission and whenever an input
@@ -484,9 +517,8 @@ milliseconds, the player is admitted and not dead or transferring, its
 accepted report of the same hazard. Anything else is refused with a
 diagnostic and no wire change; the next revision is the host's signal to
 sample again. An accepted report is sent as the Titanium environmental
-record with damage type 251 (drowning) or 250 (lava); the Titanium program's
-own liquid reports are unrecorded, so that layout is inferred (recording
-checklist 6.392). `PlayerState.titanium_environment` carries the profile's
+record with damage type 251 (drowning) or 250 (lava), 244 for zone 200's
+lava, laid out as the Titanium program builds it (read R49-3 c). `PlayerState.titanium_environment` carries the profile's
 zone, base fire resistance and whether any alternate advancement rank is
 present. Titanium `eqgame.exe` copies the profile dword at byte 12876 at
 0x4b9f3c and uses it at 0x418756. The cited EQEmu Titanium encoder writes
@@ -860,14 +892,49 @@ allowance policies remain with the existing inventory owner.
 
 `Capability::ApplyingPoison` gates `GameCommand::ApplyPoison { slot }`. The
 inventory feature offers it with `Inventory`, on Titanium and `EQMac`
-admissions; RoF2 offers no features. The session refuses, with
-`WorldEvent::ApplyPoisonRefused` and nothing sent, while the inventory is not
-current, while the slot has moves unconfirmed, while an earlier request waits
-for its answer, and when the slot holds no item of type 42. It never removes
-the poison itself: the server's own inventory record does, applied or not.
-`WorldEvent::PoisonAnswered { slot, applied }` is the server's answer and ends
-the request in flight. The Titanium program's own gates and lines are pending
-read R49-1 (recording checklist 6.493).
+admissions; RoF2 offers no features. The session follows the Titanium
+program's flow (read R49-1, recording checklist 6.493); `EQMac` takes the
+same flow, inferred, as its program is not read.
+
+- It refuses, with `WorldEvent::ApplyPoisonRefused` and nothing sent, in this
+  library's words with no `string_id`: while the inventory is not current,
+  while the slot has moves unconfirmed, when the slot holds no item of type
+  42, when the slot is inside a bag (the program's item use passes only
+  top-level slots, the cursor included), and while the player's skills are
+  not yet known.
+- With the Apply Poison skill at 0 it refuses with `string_id` 0x305f.
+- A standing player is sat down through the usual posture request and
+  `WorldEvent::Posture`. A player still not sitting (ducking, lying,
+  feigning) is refused with `string_id` 0x305d.
+- A command while a poison is waiting or in flight is ignored, as the
+  program ignores it: a diagnostic, and no world event. It is ignored only
+  after the sit and the 0x305d refusal, in the program's order, so a
+  standing player's click while one is in flight still sits them.
+- Otherwise the wait starts, with `WorldEvent::PoisonStarted { slot,
+  string_id: 0x305e }`. The request goes out once the seated wait passes
+  the delay, read each tick as the program reads it (read R49-1f): effect
+  234's total in ms where that is not 0, else 10 s. A negative total never
+  sends; the wait then ends only with a posture or zone change.
+- The host reports that total with `GameCommand::PoisonWait { total_ms }`
+  (6.493b), offered with `Capability::ApplyingPoison`, whenever it changes
+  and after each admission: effect 234 from every active buff at its
+  caster's level (type-4 records negated) and every AA the class may use at
+  its level; worn items do not count. It is the host's own report, never a
+  script's. `None` means something that could carry the effect is unknown,
+  such as a buff's spell. Untold or `None`, the session waits 10 s, which
+  departs where a total is not 0: slower below 10 s, faster above it or when
+  negative.
+- Any posture change before the send, a stand and re-sit between two ticks
+  included, cancels it with `WorldEvent::PoisonInterrupted { string_id:
+  0x30d1 }` and nothing sent. A click checks this first, so a stand and a
+  click before the next tick cancel and start anew. Leaving the zone drops
+  it silently, as the program's zoning does.
+
+It never removes the poison itself: the server's own inventory record does,
+applied or not. `WorldEvent::PoisonAnswered { slot, applied }` is the
+server's answer and ends the request in flight; the program says 0x3269 when
+`applied`, else 0x326a, in colour 0x10e. The program's lines for 0x305f,
+0x305d, 0x305e and 0x30d1 are in colour 0x111.
 
 ## Command diagnostic identity
 
@@ -2026,32 +2093,82 @@ changes are at least 500 ms apart; a refusal is
 ## Duel challenges
 
 Where the server type answers duels (`Capability::Dueling`: stock `EQEmu`
-so far), another player's challenge comes as `WorldEvent::DuelOffer` with a
-`socials::DuelQuestion`, beside the `WorldEvent::Duel` news it came in.
-Answer it with `GameCommand::AnswerDuel`, copying `id` into `offer_id` and
-its admission into `session_id`; only the player's own choice should send a
-yes. The question has no local deadline and nothing declines it on the
-player's behalf. It closes with `WorldEvent::ConsentClosed`: `AnswerSent`
-after an answer, `Interrupted` on zoning, death or logout, a newer
-challenge, the duel's start or the challenger's refusal. A stale answer is
-refused with `WorldEvent::DuelRefused` and sends nothing.
+so far), the session keeps a duel as the Titanium program does (read
+R49-6): the challenge the player sent, the one waiting for them, and
+whether a duel is on. It tells the host what happened in
+`WorldEvent::DuelNews` with a `socials::DuelNews`, one for each line the
+program shows; the host words them from the installed string table.
 
-Challenge another player with `GameCommand::ChallengeDuel`, naming their
-spawn in `target` (Titanium's `/duel` at the target). The session sends it
-only at a player spawn in its spawn list other than the player, with one
-challenge out at a time and at least five seconds between two; anything
-else is refused with `WorldEvent::SocialRefused` and sends nothing.
-`EQEmu` looks the one challenged up without checking they exist, so a
-host must never reach the wire another way. The challenge is remembered
-until the server's `OP_DuelAccept` starts the duel, the other client turns
-it down, the one challenged leaves the zone, the player zones, or sixty
-seconds pass, since `EQEmu` tells a decline only in a line of text. While
-it is remembered, the record from the one challenged that `EQEmu` sends
-before the duel starts is not a question: no `DuelOffer` comes for it and
-nothing is sent. Both bounds and every refusal line are this crate's,
-pending a read of the program (checklist 6.492b). The server says its own
-line when the other player is considering another duel or the player has
-already accepted one.
+`GameCommand::ChallengeDuel` is `/duel`. Put the player's target in
+`target`, or 0 for none. It always acts on that target:
+
+- At no player, or at the player themself, it sends nothing and tells
+  `NoPlayerTarget` or `NotYourself`.
+- During a duel it sends nothing and tells `AlreadyDueling`.
+- At the player who challenged them, it accepts: `OP_RequestDuel`, then
+  `OP_DuelAccept`, each naming the challenger and then the player. The
+  news is `Accepting`.
+- While another player's challenge waits, it sends nothing and tells
+  `ConsideringAnother`.
+- Otherwise it challenges (`OP_RequestDuel` only) and tells `Challenging`.
+  A second challenge replaces the first. The program has no distance test
+  and no time-out, so neither does the session.
+
+A challenge reaching the player is `Challenged`, unless the program would
+turn it down on its own. Then the session sends the program's 12-byte
+`OP` 0x3ea0 refusal (`socials::DUEL_AUTO_DECLINE_OPCODE`) with a reason:
+1 while a duel is on, 2 while another challenge waits or the player has
+challenged someone else. Reason 0, the ignore list, is not taken, because
+the session keeps no ignore list. The same challenger again, or the
+opponent during the duel, changes nothing. A challenge from the one the
+player challenged starts the duel with nothing sent (`Begun`).
+
+The player's side of the duel is the one they challenged or accepted
+(read R49-6d), and only it ends one:
+
+- **Its death:** `Won` when the player killed them during the duel, and
+  the session sends the program's 8-byte 0x3bad {opponent, player}
+  (`socials::titanium_duel_over`). Otherwise `Ended`, which also covers a
+  challenge that was never accepted. A challenger's death changes nothing.
+- **Its leaving the zone:** `Forfeited` during the duel, also with 0x3bad,
+  or `Lapsed` before it.
+- **Its own program's refusal** (0x3ea0, `DuelUpdate::AutoDeclined`):
+  `TurnedDown`, with the reason. This ends the player's side and keeps a
+  challenge waiting for the player. `EQEmu` never passes this on.
+
+`EQEmu` takes 0x3bad as its 12-byte decline, so it drops the 8-byte form.
+The player's own death, zoning and logging out forget the duel.
+
+A waiting challenge also comes as `WorldEvent::DuelOffer` with a
+`socials::DuelQuestion`. The program has no such window, so the host shows
+it only as a setting that says it departs from the original. Answer it
+with `GameCommand::AnswerDuel`, copying `id` into `offer_id`. A yes sends
+exactly what `/duel` at the challenger sends. A no forgets the challenge
+here and sends nothing: Titanium has no decline. It closes with
+`WorldEvent::ConsentClosed`, `AnswerSent` after an answer and
+`Interrupted` when the duel state is forgotten. A stale answer, or one naming a
+challenger gone from the zone, is refused and sends nothing (ours:
+`EQEmu` looks the one named up without checking they exist). Outside a zone, `/duel` and the answer are refused;
+the session makes no posture or motion test, as the program makes none. `Request::AnswerDuel` with `accept: false` is refused
+on Titanium.
+
+`EQEmu` maps 0x3bad, not 0x3ea0, to its decline, so on stock `EQEmu` a
+refusal the program sends is never told to the challenger. The challenger
+stays challenging until they zone or die, as with the original client.
+The first P99 use of 0x3ea0 and of the two-packet accept is attended.
+
+## Weapon stances
+
+Where the server type takes them (`Capability::WeaponStances`: stock
+`EQEmu`; not yet offered on P99, whose first use is attended, nor on the
+Mac servers, whose program forms are unread), `GameCommand::ToggleStance`
+is `/sheathe` (`Stance::Sheathed`, state bit 2) or `/aggressive`
+(`Stance::Aggressive`, bit 8). The session flips that bit in the player's
+state word and sends `OP_PlayerStateAdd` (0x63da) or
+`OP_PlayerStateRemove` (0x381d), 8 bytes {own spawn, bit}, as the program
+does (R49-6n). Nothing answers and no line is shown. The server passes it
+to the others and not back, so the session keeps the player's word itself
+until a new zone or the server's own word on the player's states.
 
 ## Shielding
 

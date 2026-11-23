@@ -256,8 +256,11 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             Some(true)
         }
         // A reward's coins, which every server adds to the purse without a
-        // money update (inferred: the official client's purse after a
-        // reward is unrecorded).
+        // money update, and which the Titanium program adds to its own purse
+        // as it shows them (read R49-6g: 0x45df62, by 0x417d70, 0x417d46,
+        // 0x417d1c and 0x417cf2). `EQEmu` 1d9cb5c7: `Client::QuestReward`
+        // fills `QuestReward_Struct` (copper at 20, then silver, gold and
+        // platinum) and calls `AddMoneyToPP` with `update_client` false.
         WorldEvent::Reward(reward) if !reward.coins.is_empty() => {
             wallet.add_to_purse(reward.coins);
             Some(true)
@@ -1248,9 +1251,9 @@ impl Feature for Belongings {
 
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
-            ClientCommand::MoveInventory(_) | ClientCommand::ApplyPoison { .. } => {
-                self.allows.items
-            }
+            ClientCommand::MoveInventory(_)
+            | ClientCommand::ApplyPoison { .. }
+            | ClientCommand::PoisonWait { .. } => self.allows.items,
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::DropItem(_) => self.allows.ground_drop,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
@@ -1299,6 +1302,10 @@ impl Feature for Belongings {
                 self.meals.choose(*auto_eat);
                 Ok(())
             }
+            ClientCommand::PoisonWait { total_ms, .. } => {
+                self.poisons.told(*total_ms);
+                Ok(())
+            }
             ClientCommand::Consume {
                 session_id, slot, ..
             } => match self.meals.by_hand(*slot, world, out)? {
@@ -1314,13 +1321,14 @@ impl Feature for Belongings {
             ClientCommand::ApplyPoison {
                 session_id, slot, ..
             } => match self.poisons.apply(*slot, world, out)? {
-                Some(reason) => out
-                    .log
-                    .send(ClientEvent::World(WorldEvent::ApplyPoisonRefused {
-                        session_id: *session_id,
-                        reason: reason.into(),
-                        string_id: None,
-                    })),
+                Some((reason, string_id)) => {
+                    out.log
+                        .send(ClientEvent::World(WorldEvent::ApplyPoisonRefused {
+                            session_id: *session_id,
+                            reason: reason.into(),
+                            string_id,
+                        }))
+                }
                 None => Ok(()),
             },
             _ => self.trade(command, world, out),
@@ -1338,6 +1346,7 @@ impl Feature for Belongings {
         if self.trades.expire(now) {
             merchant_unanswered(world, out)?;
         }
+        self.poisons.tick(now, world, out)?;
         self.sharing.tick(now, world, out)
     }
 
@@ -1526,6 +1535,7 @@ mod tests {
         food::Shortage,
         inventory::{InventorySlot, MoveQuantity, MOVE_OPCODE},
         merchant::MerchantUpdate,
+        world::PostureState,
     };
     use testing::item;
 
@@ -1864,33 +1874,58 @@ mod tests {
         (belongings, world)
     }
 
-    /// The poison in a bag's first slot and a ration beside it.
+    /// A poison in a pack slot, another in a bag's first slot and a ration
+    /// beside them, for a player with the Apply Poison skill.
     fn poisoned(
         belongings: &mut Belongings,
         wire: &'static dyn super::super::wire::Wire,
-    ) -> (World, InventorySlot) {
+    ) -> (World, InventorySlot, InventorySlot) {
         let mut world = World::new(5);
         let mut bag = item(23);
         bag.bag_slots = 4;
-        let vial = InventorySlot(23).child(0).unwrap();
-        let mut poison = item(vial.0);
-        poison.rules.item_type = eq_network_game::poisons::POISON_ITEM_TYPE;
+        let bagged = InventorySlot(23).child(0).unwrap();
+        let poison = |slot: InventorySlot| {
+            let mut poison = item(slot.0);
+            poison.rules.item_type = eq_network_game::poisons::POISON_ITEM_TYPE;
+            poison
+        };
         let mut ration = item(22);
         ration.rules.item_type = 14;
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
-            ration, bag, poison,
+            ration,
+            bag,
+            poison(bagged),
+            poison(InventorySlot(25)),
         ])));
         belongings.admit(&snapshot, &mut world).unwrap();
         world.own_spawn = Some(7);
-        world.player.admit(testing::player(7));
+        let mut player = testing::player(7);
+        let mut skills = vec![0; 100];
+        skills[6] = 20;
+        player.skills = Some(skills);
+        world.player.admit(player);
         testing::run_on(wire, |out| belongings.admitted(&mut world, out))
             .result
             .unwrap();
-        (world, vial)
+        (world, InventorySlot(25), bagged)
+    }
+
+    fn no_sends() -> [eq_network_game::command::EncodedCommand; 0] {
+        []
+    }
+
+    fn world_events(events: &[ClientEvent]) -> Vec<&WorldEvent> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(event) => Some(event),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn a_poison_goes_on_from_the_slot_it_sits_in_and_stays_until_the_server_says() {
+    fn a_poison_goes_on_after_a_seated_wait_and_stays_until_the_server_says() {
         use eq_network_game::poisons;
         for wire in [
             &super::super::wire::Titanium as &'static dyn super::super::wire::Wire,
@@ -1900,7 +1935,7 @@ mod tests {
             assert!(belongings
                 .capabilities()
                 .contains(&crate::world::Capability::ApplyingPoison));
-            let (mut world, vial) = poisoned(&mut belongings, wire);
+            let (mut world, vial, _) = poisoned(&mut belongings, wire);
             let apply = |slot| ClientCommand::ApplyPoison {
                 session_id: 5,
                 slot,
@@ -1911,77 +1946,466 @@ mod tests {
                 apply(vial).capability(),
                 Some(crate::world::Capability::ApplyingPoison)
             );
-            let before = world.inventory.items().clone();
-            let outcome =
-                testing::run_on(wire, |out| belongings.handle(&apply(vial), &mut world, out));
-            outcome.result.unwrap();
-            let expected = if wire.dialect() == eq_network_game::GameDialect::EqMac {
+            let request = if wire.dialect() == eq_network_game::GameDialect::EqMac {
                 poisons::eqmac_request(vial)
             } else {
                 poisons::titanium_request(vial)
             }
             .unwrap();
-            assert_eq!(outcome.sent, [expected]);
-            assert!(outcome.events.is_empty(), "{:?}", outcome.events);
-            // The server's own record takes it out.
-            assert_eq!(world.inventory.items(), &before);
-            // One request in flight: a second waits for the answer.
+            let before = world.inventory.items().clone();
+            // The click sits the standing player down and starts the wait;
+            // only the sit goes out.
+            let outcome =
+                testing::run_on(wire, |out| belongings.handle(&apply(vial), &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent.len(), 1, "{:?}", outcome.sent);
+            assert_ne!(outcome.sent[0], request);
+            assert_eq!(world.posture.current(), Some(PostureState::Sitting));
+            assert!(
+                matches!(
+                    world_events(&outcome.events).as_slice(),
+                    [
+                        WorldEvent::Posture {
+                            posture: PostureState::Sitting,
+                            ..
+                        },
+                        WorldEvent::PoisonStarted {
+                            session_id: 5,
+                            slot,
+                            string_id: 0x305e,
+                        },
+                    ] if *slot == vial
+                ),
+                "{:?}",
+                outcome.events
+            );
+            // Nothing goes out before the wait is over, and another click
+            // meanwhile is ignored without a word.
+            let tick = |belongings: &mut Belongings, world: &mut World, now| {
+                testing::run_on(wire, |out| belongings.tick(now, world, out))
+            };
+            let early = tick(&mut belongings, &mut world, Instant::now());
+            early.result.unwrap();
+            assert_eq!(early.sent, no_sends());
             let again =
                 testing::run_on(wire, |out| belongings.handle(&apply(vial), &mut world, out));
             again.result.unwrap();
+            assert_eq!(again.sent, no_sends());
+            assert!(world_events(&again.events).is_empty(), "{:?}", again.events);
+            belongings
+                .poisons
+                .backdate(poisons_wait().saturating_sub(std::time::Duration::from_millis(50)));
+            let short = tick(&mut belongings, &mut world, Instant::now());
+            short.result.unwrap();
+            assert_eq!(short.sent, no_sends());
+            belongings
+                .poisons
+                .backdate(std::time::Duration::from_millis(100));
+            let sent = tick(&mut belongings, &mut world, Instant::now());
+            sent.result.unwrap();
+            assert_eq!(sent.sent, std::slice::from_ref(&request));
+            assert!(world_events(&sent.events).is_empty(), "{:?}", sent.events);
+            // The server's own record takes it out.
+            assert_eq!(world.inventory.items(), &before);
+            // In flight, a click is ignored too, and nothing more goes out.
+            let held =
+                testing::run_on(wire, |out| belongings.handle(&apply(vial), &mut world, out));
+            held.result.unwrap();
+            assert_eq!(held.sent, no_sends());
+            assert!(world_events(&held.events).is_empty(), "{:?}", held.events);
             assert_eq!(
-                again.sent,
-                [] as [eq_network_game::command::EncodedCommand; 0]
+                tick(&mut belongings, &mut world, Instant::now()).sent,
+                no_sends()
             );
-            assert!(matches!(
-                again.events.as_slice(),
-                [ClientEvent::World(WorldEvent::ApplyPoisonRefused { reason, .. })]
-                    if reason == "Wait for the poison you are applying"
-            ));
-            let answer = |slot| {
-                Message::Event(WorldEvent::PoisonAnswered(poisons::PoisonAnswer {
-                    slot,
-                    applied: true,
-                }))
-            };
+            answers_end_the_hold(wire, &mut belongings, &mut world, vial);
+        }
+    }
+
+    /// The server's answer ends the poison in flight; a stray one is told
+    /// once, and the next click starts again, already seated.
+    fn answers_end_the_hold(
+        wire: &'static dyn super::super::wire::Wire,
+        belongings: &mut Belongings,
+        world: &mut World,
+        vial: InventorySlot,
+    ) {
+        use eq_network_game::poisons;
+        let apply = |slot| ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot,
+            created: Instant::now(),
+        };
+        let answer = |slot| {
+            Message::Event(WorldEvent::PoisonAnswered(poisons::PoisonAnswer {
+                slot,
+                applied: true,
+            }))
+        };
+        let heard = testing::run_on(wire, |out| belongings.observe(&answer(vial), world, out));
+        heard.result.unwrap();
+        assert!(heard.events.is_empty(), "{:?}", heard.events);
+        // A stray answer is told once.
+        for told in [1, 0] {
             let heard = testing::run_on(wire, |out| {
-                belongings.observe(&answer(vial), &mut world, out)
+                belongings.observe(&answer(InventorySlot(22)), world, out)
             });
             heard.result.unwrap();
-            assert!(heard.events.is_empty(), "{:?}", heard.events);
-            // A stray answer is told once.
-            for told in [1, 0] {
-                let heard = testing::run_on(wire, |out| {
-                    belongings.observe(&answer(InventorySlot(22)), &mut world, out)
-                });
-                heard.result.unwrap();
-                assert_eq!(heard.events.len(), told, "{:?}", heard.events);
-            }
-            for (slot, reason) in [
-                (InventorySlot(22), "That is not a poison"),
-                (InventorySlot(24), "There is no item there"),
-            ] {
-                let outcome =
-                    testing::run_on(wire, |out| belongings.handle(&apply(slot), &mut world, out));
-                outcome.result.unwrap();
-                assert_eq!(
-                    outcome.sent,
-                    [] as [eq_network_game::command::EncodedCommand; 0]
-                );
-                assert!(
-                    matches!(
-                        outcome.events.as_slice(),
-                        [ClientEvent::World(WorldEvent::ApplyPoisonRefused {
-                            session_id: 5,
-                            reason: said,
-                            string_id: None,
-                        })] if said == reason
-                    ),
-                    "{:?}",
-                    outcome.events
-                );
-            }
+            assert_eq!(heard.events.len(), told, "{:?}", heard.events);
         }
+        // Answered, the next click starts again, already seated: nothing
+        // goes out at once.
+        let next = testing::run_on(wire, |out| belongings.handle(&apply(vial), world, out));
+        next.result.unwrap();
+        assert_eq!(next.sent, no_sends());
+        assert!(matches!(
+            world_events(&next.events).as_slice(),
+            [WorldEvent::PoisonStarted { .. }]
+        ));
+    }
+
+    fn poisons_wait() -> std::time::Duration {
+        poisons::WAIT
+    }
+
+    #[test]
+    fn leaving_the_seat_before_the_wait_ends_stops_the_poison() {
+        let wire = &super::super::wire::Titanium;
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let (mut world, vial, _) = poisoned(&mut belongings, wire);
+        let apply = ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: vial,
+            created: Instant::now(),
+        };
+        testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out))
+            .result
+            .unwrap();
+        testing::run_on(wire, |out| {
+            world
+                .posture
+                .set(7, eq_network_game::command::Posture::Standing, out)
+        })
+        .result
+        .unwrap();
+        belongings
+            .poisons
+            .backdate(poisons_wait() + std::time::Duration::from_secs(1));
+        let tick = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        tick.result.unwrap();
+        assert_eq!(tick.sent, no_sends());
+        assert!(
+            matches!(
+                world_events(&tick.events).as_slice(),
+                [WorldEvent::PoisonInterrupted {
+                    session_id: 5,
+                    string_id: 0x30d1,
+                }]
+            ),
+            "{:?}",
+            tick.events
+        );
+        // Nothing is left to send.
+        let later = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        assert_eq!(later.sent, no_sends());
+        assert!(later.events.is_empty(), "{:?}", later.events);
+    }
+
+    #[test]
+    fn a_poison_click_sits_or_refuses_before_it_is_ignored_and_a_stand_restarts_it() {
+        use eq_network_game::command::Posture;
+        let wire = &super::super::wire::Titanium;
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let (mut world, vial, _) = poisoned(&mut belongings, wire);
+        let apply = ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: vial,
+            created: Instant::now(),
+        };
+        let stance = |world: &mut World, posture| {
+            testing::run_on(wire, |out| world.posture.set(7, posture, out))
+                .result
+                .unwrap();
+        };
+        // (b) A stand, then a click before the next tick: the stand ended
+        // the first wait, so the click sits the player and starts anew.
+        testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out))
+            .result
+            .unwrap();
+        stance(&mut world, Posture::Standing);
+        let restart = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        restart.result.unwrap();
+        assert_eq!(restart.sent.len(), 1, "{:?}", restart.sent);
+        assert!(
+            matches!(
+                world_events(&restart.events).as_slice(),
+                [
+                    WorldEvent::PoisonInterrupted {
+                        string_id: 0x30d1,
+                        ..
+                    },
+                    WorldEvent::Posture {
+                        posture: PostureState::Sitting,
+                        ..
+                    },
+                    WorldEvent::PoisonStarted { .. },
+                ]
+            ),
+            "{:?}",
+            restart.events
+        );
+        belongings
+            .poisons
+            .backdate(poisons_wait() + std::time::Duration::from_secs(1));
+        let sent = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent.len(), 1, "{:?}", sent.sent);
+        // (a) In flight, a standing player's click still sits them, and
+        // only then is ignored: the sit goes out, nothing else.
+        stance(&mut world, Posture::Standing);
+        let sat = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        sat.result.unwrap();
+        assert_eq!(sat.sent.len(), 1, "{:?}", sat.sent);
+        assert!(
+            matches!(
+                world_events(&sat.events).as_slice(),
+                [WorldEvent::Posture {
+                    posture: PostureState::Sitting,
+                    ..
+                }]
+            ),
+            "{:?}",
+            sat.events
+        );
+        assert_eq!(world.posture.current(), Some(PostureState::Sitting));
+        // In flight and ducking, the click is refused with 0x305d.
+        stance(&mut world, Posture::Ducking);
+        let ducked = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        ducked.result.unwrap();
+        assert_eq!(ducked.sent, no_sends());
+        assert!(
+            matches!(
+                world_events(&ducked.events).as_slice(),
+                [WorldEvent::ApplyPoisonRefused {
+                    string_id: Some(0x305d),
+                    ..
+                }]
+            ),
+            "{:?}",
+            ducked.events
+        );
+    }
+
+    #[test]
+    fn the_poison_wait_follows_the_hosts_effect_total_on_each_tick() {
+        use std::time::Duration;
+        let wire = &super::super::wire::Titanium;
+        let apply = ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: InventorySlot(25),
+            created: Instant::now(),
+        };
+        let wait = |total_ms| ClientCommand::PoisonWait {
+            session_id: 5,
+            total_ms,
+        };
+        // Starts a poison with the host's total, then reports how many
+        // requests each tick sends after the wait has run this long.
+        let start = |total| {
+            let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+            let (mut world, _, _) = poisoned(&mut belongings, wire);
+            if let Some(total) = total {
+                testing::run_on(wire, |out| belongings.handle(&wait(total), &mut world, out))
+                    .result
+                    .unwrap();
+            }
+            testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out))
+                .result
+                .unwrap();
+            (belongings, world)
+        };
+        let after = |belongings: &mut Belongings, world: &mut World, by: Duration| {
+            belongings.poisons.backdate(by);
+            let tick = testing::run_on(wire, |out| belongings.tick(Instant::now(), world, out));
+            tick.result.unwrap();
+            tick.sent.len()
+        };
+        // A total that is not 0 replaces the 10 s; 0, untold or None waits 10 s.
+        for (total, delay) in [
+            (Some(Some(5000)), 5000),
+            (Some(Some(15_000)), 15_000),
+            (Some(Some(0)), 10_000),
+            (Some(None), 10_000),
+            (None, 10_000),
+        ] {
+            let (mut belongings, mut world) = start(total);
+            let ms = Duration::from_millis;
+            assert_eq!(
+                after(&mut belongings, &mut world, ms(delay - 50)),
+                0,
+                "{total:?}"
+            );
+            assert_eq!(after(&mut belongings, &mut world, ms(100)), 1, "{total:?}");
+            assert_eq!(after(&mut belongings, &mut world, ms(100)), 0, "{total:?}");
+        }
+        // A total told mid-wait is read on the next tick against the same
+        // start: 6 s in, a 5 s total sends at once.
+        let (mut belongings, mut world) = start(None);
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(6)),
+            0
+        );
+        testing::run_on(wire, |out| {
+            belongings.handle(&wait(Some(5000)), &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(after(&mut belongings, &mut world, Duration::ZERO), 1);
+        // A negative total never sends; turned positive again, the send goes
+        // once the elapsed time passes it.
+        let (mut belongings, mut world) = start(Some(Some(-1)));
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(60)),
+            0
+        );
+        testing::run_on(wire, |out| {
+            belongings.handle(&wait(Some(90_000)), &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(29)),
+            0
+        );
+        assert_eq!(
+            after(&mut belongings, &mut world, Duration::from_secs(2)),
+            1
+        );
+        // A negative total's wait still ends with a stand.
+        let (mut belongings, mut world) = start(Some(Some(-1)));
+        testing::run_on(wire, |out| {
+            world
+                .posture
+                .set(7, eq_network_game::command::Posture::Standing, out)
+        })
+        .result
+        .unwrap();
+        let tick = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        tick.result.unwrap();
+        assert!(matches!(
+            world_events(&tick.events).as_slice(),
+            [WorldEvent::PoisonInterrupted { .. }]
+        ));
+    }
+
+    #[test]
+    fn a_stand_and_re_sit_between_two_ticks_stops_the_poison() {
+        use eq_network_game::command::Posture;
+        let wire = &super::super::wire::Titanium;
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let (mut world, vial, _) = poisoned(&mut belongings, wire);
+        let apply = ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: vial,
+            created: Instant::now(),
+        };
+        testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out))
+            .result
+            .unwrap();
+        for posture in [Posture::Standing, Posture::Sitting] {
+            testing::run_on(wire, |out| world.posture.set(7, posture, out))
+                .result
+                .unwrap();
+        }
+        assert_eq!(world.posture.current(), Some(PostureState::Sitting));
+        belongings
+            .poisons
+            .backdate(poisons_wait() + std::time::Duration::from_secs(1));
+        let tick = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        tick.result.unwrap();
+        assert_eq!(tick.sent, no_sends());
+        assert!(
+            matches!(
+                world_events(&tick.events).as_slice(),
+                [WorldEvent::PoisonInterrupted { .. }]
+            ),
+            "{:?}",
+            tick.events
+        );
+        // A server report repeating the seat does not cancel a new wait.
+        let restart = testing::run_on(wire, |out| belongings.handle(&apply, &mut world, out));
+        restart.result.unwrap();
+        world.posture.observed(PostureState::Sitting);
+        belongings
+            .poisons
+            .backdate(poisons_wait() + std::time::Duration::from_secs(1));
+        let sent = testing::run_on(wire, |out| belongings.tick(Instant::now(), &mut world, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent.len(), 1, "{:?}", sent.sent);
+    }
+
+    #[test]
+    fn a_poison_is_refused_without_the_skill_a_seat_or_a_top_level_slot() {
+        let wire = &super::super::wire::Titanium;
+        let refused = |belongings: &mut Belongings, world: &mut World, slot| {
+            let outcome = testing::run_on(wire, |out| {
+                belongings.handle(
+                    &ClientCommand::ApplyPoison {
+                        session_id: 5,
+                        slot,
+                        created: Instant::now(),
+                    },
+                    world,
+                    out,
+                )
+            });
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, no_sends());
+            match world_events(&outcome.events).as_slice() {
+                [WorldEvent::ApplyPoisonRefused {
+                    session_id: 5,
+                    reason,
+                    string_id,
+                }] => (reason.clone(), *string_id),
+                other => panic!("{other:?}"),
+            }
+        };
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let (mut world, vial, bagged) = poisoned(&mut belongings, wire);
+        // In a bag, the program's item use does not reach it.
+        assert_eq!(
+            refused(&mut belongings, &mut world, bagged),
+            ("Take the poison out of the bag to apply it".into(), None)
+        );
+        for (slot, reason) in [
+            (InventorySlot(22), "That is not a poison"),
+            (InventorySlot(24), "There is no item there"),
+        ] {
+            assert_eq!(
+                refused(&mut belongings, &mut world, slot),
+                (reason.into(), None)
+            );
+        }
+        // Ducking, the program does not sit the player, and refuses.
+        testing::run_on(wire, |out| {
+            world
+                .posture
+                .set(7, eq_network_game::command::Posture::Ducking, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(refused(&mut belongings, &mut world, vial).1, Some(0x305d));
+        // Without the skill, nothing else happens: no sit either.
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let (mut world, vial, _) = poisoned(&mut belongings, wire);
+        world.player.corrected().unwrap().skills.as_mut().unwrap()[6] = 0;
+        assert_eq!(refused(&mut belongings, &mut world, vial).1, Some(0x305f));
+        assert_eq!(world.posture.current(), None);
+        // Skills not yet reported are not the program's 0: our words.
+        world.player.corrected().unwrap().skills = None;
+        assert_eq!(
+            refused(&mut belongings, &mut world, vial),
+            ("Wait for your skills to be known".into(), None)
+        );
     }
 
     #[test]

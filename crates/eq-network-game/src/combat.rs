@@ -72,6 +72,10 @@ pub const EQMAC_ANIMATION_OPCODE: u16 = 0xa140;
 
 /// Damage kind used for spell damage and beneficial spell landings.
 pub const SPELL_DAMAGE_KIND: u8 = 231;
+/// Damage kind of a trap's or a door's record. The Titanium program picks
+/// its line for one by the record's spell field (`eqgame.exe` 0x4a56e3,
+/// read R49-3b), so a Titanium record keeps that field for this kind too.
+pub const TRAP_DAMAGE_KIND: u8 = 253;
 /// The damage kinds of a damage shield's record: decay, chill, freezing,
 /// torment, burn and thorns (`EQEmu`'s and TAKP's `DmgShieldType`,
 /// `common/spdat.h`), by the shield's spell or its resist. A shield against
@@ -276,7 +280,9 @@ pub struct Damage {
     /// client's own record, which `EQEmu` relays to everyone near it), 253
     /// for traps and 255 for a skill with no type of its own.
     pub kind: u8,
-    /// Spell responsible for spell damage; None for melee and skills.
+    /// Spell responsible for spell damage; None for melee and skills. On a
+    /// Titanium trap record ([`TRAP_DAMAGE_KIND`]) it is the record's
+    /// spell field as sent, which picks the program's line for the trap.
     pub spell_id: Option<u16>,
     /// The damage field, read by the kind.
     pub outcome: DamageOutcome,
@@ -413,8 +419,9 @@ pub(crate) fn damage_from(body: &[u8], spell_id: u16, raw: i32, push: Option<Pus
         target_id: spawns.0,
         source_id: spawns.1,
         kind,
-        spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
-            .then_some(spell_id),
+        spell_id: (matches!(kind, SPELL_DAMAGE_KIND | TRAP_DAMAGE_KIND)
+            && !matches!(spell_id, 0 | u16::MAX))
+        .then_some(spell_id),
         outcome: DamageOutcome::read(kind, spawns, raw),
         push,
     }
@@ -608,6 +615,21 @@ mod tests {
             );
         }
         assert!(damage(&body[..22]).is_err());
+    }
+
+    #[test]
+    fn a_titanium_trap_record_keeps_the_spell_field_its_line_is_chosen_by() {
+        // eqgame.exe 0x4a56e3 picks a trap's line by the field (read R49-3b).
+        let mut body = titanium_record(25);
+        body[4] = TRAP_DAMAGE_KIND;
+        for (field, kept) in [(0x87, Some(0x87)), (0, None), (u16::MAX, None)] {
+            body[5..7].copy_from_slice(&u16::to_le_bytes(field));
+            assert_eq!(damage(&body).unwrap().spell_id, kept, "{field:#x}");
+        }
+        // Other kinds still drop it: a fall's field is not a spell.
+        body[4] = 252;
+        body[5..7].copy_from_slice(&u16::to_le_bytes(0x87));
+        assert_eq!(damage(&body).unwrap().spell_id, None);
     }
 
     #[test]

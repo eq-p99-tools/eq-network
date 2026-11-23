@@ -27,7 +27,7 @@ use super::{
     character::Character,
     clock::Clock,
     combat::Combat,
-    confirmations::{Duel, Sacrifice, Translocate},
+    confirmations::{Sacrifice, Translocate},
     control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
@@ -783,11 +783,11 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Character, Clock, Combat,
-        Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
-        Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looking, Looting, Map,
-        Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading,
-        Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks,
-        Tradeskills, Training, Transfers, Translocate, Who,
+        Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
+        Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looking, Looting, Map, Marks,
+        MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading, Resurrection,
+        Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills,
+        Training, Transfers, Translocate, Who,
     };
 
     pub(super) fn spellbook(edits: Edits) -> Box<dyn Feature> {
@@ -927,10 +927,6 @@ mod shared {
         Box::new(Translocate::new(timeout))
     }
 
-    pub(super) fn duel(echoes_challenge: bool) -> Box<dyn Feature> {
-        Box::new(Duel::new(echoes_challenge))
-    }
-
     pub(super) fn reading() -> Box<dyn Feature> {
         Box::new(Reading)
     }
@@ -994,22 +990,27 @@ mod shared {
     }
 }
 
-/// The hazards a local `EQEmu` takes from the client: falls, whose damage it
-/// lowers by the player's fall damage reductions from spells, items and AAs,
-/// and drowning and lava, whose amounts it takes as sent
-/// (`Client::Handle_OP_EnvDamage`). Titanium's 0x4bdb3c and 0x41d4ba
-/// build types 251 and 250, sent by 0x41c905 as 31-byte `OP_EnvDamage`.
-/// Deployed P99 liquid report handling remains unverified.
-const LOCAL_EQEMU_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
-
-/// The hazard every Titanium server takes from the client so far: falls. The
-/// Titanium program works a fall's damage out itself (0x420dec) and reports
-/// it as `OP_EnvDamage` type 252 from the player's own spawn (sitting 6, T2;
-/// R-s). P99's own module hooks that routine and is not read, so that P99's
-/// server takes our report as it takes the official client's is inferred
-/// (recording checklist item 6.332). Remote `EQEmu` takes falls only until
-/// the liquid reports are recorded.
-const TITANIUM_FALLS: [Hazard; 1] = [Hazard::Falling];
+/// The hazards the Titanium program reports itself, on any server it plays
+/// on: falls, drowning and lava. It works a fall's damage out (0x420dec) and
+/// reports it as `OP_EnvDamage` type 252 from the player's own spawn
+/// (sitting 6, T2; R-s); 0x4bdb3c and 0x41d4ba build drowning (251) and
+/// lava (250), and 0x41c905 sends each as a 31-byte `OP_EnvDamage` (R25).
+/// `EQEmu` lowers a fall by the player's fall damage reductions and takes
+/// drowning and lava as sent (`Client::Handle_OP_EnvDamage`).
+///
+/// The liquid amounts and their timing are the program's (read R49-3); the
+/// host works them out. Inferred: that P99's server takes our reports, and
+/// the damage record after each liquid one, as it takes the official
+/// client's, since its own module hooks the fall routine and is not read
+/// (recording checklist 6.332 for falls, 6.491 for drowning and lava; its
+/// first use there is the attended liquid row). R25's door contact report
+/// is not sent (6.491).
+const TITANIUM_HAZARDS: [Hazard; 4] = [
+    Hazard::Falling,
+    Hazard::Drowning,
+    Hazard::Lava,
+    Hazard::ZoneHeat,
+];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`
 /// program reports one as `OP_EnvDamage` and then `OP_Damage` (from the
@@ -1211,10 +1212,18 @@ impl ServerType for Project1999 {
         ))
     }
 
-    /// Falls only (6.332).
+    /// Falls, drowning and lava, as the Titanium program reports them
+    /// (6.332, 6.491).
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
-        // Deployed P99 liquid report handling awaits validation.
-        offer(shared::hazards(&TITANIUM_FALLS, false))
+        offer(shared::hazards(&TITANIUM_HAZARDS, false))
+    }
+
+    /// The AA facts the air counter reads, as on `EQEmu`. That P99's
+    /// profile carries its AA bytes as `EQEmu`'s does is inferred (6.491);
+    /// a selection whose definition never comes leaves the counter
+    /// unworked, so nothing is reported from it.
+    fn environmental_aa(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
     }
 
     fn control(&self, _setup: &Setup<'_>) -> Provided {
@@ -1327,17 +1336,18 @@ impl ServerType for EqEmu {
         true
     }
 
-    /// The AA facts and requests, local only until the local live rows
-    /// pass (6.547, 6.556); then a one-line follow-up offers them on every
-    /// stock `EQEmu` session. The requests share the facts' gate
-    /// (checklist 6.581).
+    /// The AA requests, local only until the local live rows pass (6.547,
+    /// 6.556; checklist 6.581); then a one-line follow-up lists them on
+    /// every stock `EQEmu` session. Every session reads the facts, unlisted,
+    /// so that the air counter works drowning out as on any Titanium server
+    /// ([`TITANIUM_HAZARDS`], 6.491).
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
             offer(Box::new(
                 super::alternate_advancement::AlternateAdvancement::listed(),
             ))
         } else {
-            None
+            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
         }
     }
 
@@ -1532,11 +1542,11 @@ impl ServerType for EqEmu {
         offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
     }
 
-    /// Answered on the player's word as `Client::Handle_OP_DuelAccept` and
-    /// `Handle_OP_DuelDecline` read it, from source; not yet checked live
-    /// (checklist 6.492). P99, TAKP and Quarm wait for their checks.
+    /// The Titanium program's duel (R49-6 a, e, h), from the read; not
+    /// yet checked live (checklist 6.492). P99 waits for an attended row,
+    /// and TAKP and Quarm for theirs (11g).
     fn duel(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::duel(false))
+        offer(Box::<super::duel::TitaniumDuel>::default())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -1664,13 +1674,8 @@ impl ServerType for EqEmu {
         offer(Box::<Tracking>::default())
     }
 
-    fn hazards(&self, setup: &Setup<'_>) -> Provided {
-        let hazards: &[Hazard] = if setup.local_only {
-            &LOCAL_EQEMU_HAZARDS
-        } else {
-            &TITANIUM_FALLS
-        };
-        offer(shared::hazards(hazards, false))
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&TITANIUM_HAZARDS, false))
     }
 
     /// `EQEmu` regenerates the player's HP, mana and endurance on the tick
@@ -2488,19 +2493,22 @@ mod tests {
     }
 
     #[test]
-    fn aa_observations_are_only_enabled_for_local_eqemu_and_local_takp() {
+    fn aa_facts_are_read_on_every_titanium_session_and_requests_listed_only_locally() {
         let mut setup = Setup::new("Tester", AutoEat::default());
-        assert!(EqEmu.environmental_aa(&setup).is_none());
-        assert!(Takp.environmental_aa(&setup).is_none());
-        setup.local_only = true;
-        assert!(EqEmu.environmental_aa(&setup).is_some());
-        assert!(Takp.environmental_aa(&setup).is_some());
-        for protocol in [
-            ServerProtocol::Project1999,
-            ServerProtocol::Quarm,
-            ServerProtocol::EqEmuRof2,
-        ] {
-            assert!(server_type(protocol).environmental_aa(&setup).is_none());
+        // The air counter needs the facts on every Titanium server (6.491);
+        // TAKP reads them only locally, and Quarm and RoF2 not at all.
+        for local_only in [false, true] {
+            setup.local_only = local_only;
+            for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+                assert!(
+                    server_type(protocol).environmental_aa(&setup).is_some(),
+                    "{protocol:?} local {local_only}"
+                );
+            }
+            assert_eq!(Takp.environmental_aa(&setup).is_some(), local_only);
+            for protocol in [ServerProtocol::Quarm, ServerProtocol::EqEmuRof2] {
+                assert!(server_type(protocol).environmental_aa(&setup).is_none());
+            }
         }
         // The AA requests share the facts' gate (6.581): listed only on
         // local `EQEmu` and local TAKP, never on public sessions, P99,
@@ -2522,6 +2530,42 @@ mod tests {
                 let expected =
                     local_only && matches!(protocol, ServerProtocol::EqEmu | ServerProtocol::Takp);
                 assert_eq!(lists, expected, "{protocol:?} local {local_only}");
+            }
+        }
+    }
+
+    /// The hazards a server type's policy takes reports of, with the
+    /// session on the local network or not.
+    fn hazard_capabilities(protocol: ServerProtocol, local_only: bool) -> Vec<Capability> {
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        setup.local_only = local_only;
+        server_type(protocol)
+            .hazards(&setup)
+            .map(|provided| provided.feature.capabilities())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn every_titanium_server_takes_falls_drowning_and_lava_as_the_program_reports_them() {
+        for local_only in [false, true] {
+            for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+                assert_eq!(
+                    hazard_capabilities(protocol, local_only),
+                    [
+                        Capability::EnvironmentalDamage,
+                        Capability::Drowning,
+                        Capability::LavaHeat
+                    ],
+                    "{protocol:?} local {local_only}"
+                );
+            }
+            // The Mac-era program's liquid reports are not read.
+            for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+                assert_eq!(
+                    hazard_capabilities(protocol, local_only),
+                    [Capability::EnvironmentalDamage],
+                    "{protocol:?} local {local_only}"
+                );
             }
         }
     }
@@ -3147,10 +3191,11 @@ mod tests {
         // EQEmu lists petitions and bug reports (6.511) and titles (6.516),
         // and keeps a task journal (6.546). Both tell the profile's bandolier
         // sets and belt (6.559).
-        // Both Titanium policies retain the verified own-player stun timer.
+        // Both Titanium policies retain the verified own-player stun timer,
+        // and both read the AA facts the air counter needs (6.491).
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 39),
-            (ServerProtocol::EqEmu, 53),
+            (ServerProtocol::Project1999, 40),
+            (ServerProtocol::EqEmu, 54),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
