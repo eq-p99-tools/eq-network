@@ -1076,11 +1076,11 @@ mod tests {
                     part: Part::World,
                     ..
                 },
-                Message::Event(WorldEvent::BandoliersUnknown),
                 Message::Unreadable {
                     part: Part::World,
                     ..
                 },
+                Message::Event(WorldEvent::BandoliersUnknown),
                 Message::Unreadable {
                     part: Part::World,
                     ..
