@@ -161,8 +161,8 @@ pub const ROF2_READS: [u16; 27] = [
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
 /// spawns' movement and removal (6.514), how they look and how hurt they
 /// are (6.518), the player's own news and the combat records (6.519), and
-/// casting, stuns and illusions (6.522) are read yet; a body a reader refuses is unreadable, told by its opcode
-/// and length only.
+/// casting, stuns and illusions (6.522) are read yet; a body a reader
+/// refuses is unreadable, told by its opcode and length only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
