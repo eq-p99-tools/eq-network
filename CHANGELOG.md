@@ -5,6 +5,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read `/played`'s three Titanium profile fields (read R49-8 a, checklist 6.490b): the account's entitled days (+0x3314), the character's creation time (+0x32ec) and its played minutes (+0x32f4), as `WorldEvent::PlayedTime` with each profile. Breaking: a new `WorldEvent` variant.
 - A Titanium door click names the item held on the cursor, as read R49-22b
   reads the program (checklist 6.537, gap 3.4).
   - Bytes 8 to 11 of `OP_ClickDoor` carry the cursor item's ID from the
