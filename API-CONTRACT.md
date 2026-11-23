@@ -1809,8 +1809,9 @@ capability and nothing is sent. The host hears, each with the admission's
 
 What the zone sends before it admits the player is told at the admission,
 the task first, then the quests by slot, each description before its
-steps, then the finished list. Each zone starts empty and sends the whole
-journal again. A message that is short, overruns, has a string without its
+steps, then the finished list. Up to 64 stale messages heard before the
+admission go to the gap log there; past that only their count is told, as
+one diagnostic. Each zone starts empty and sends the whole journal again. A message that is short, overruns, has a string without its
 end or too long, counts past what it carries, names a shared task (kind 1,
 after Titanium), a slot past the journal or a step past 20 is refused
 whole, never cut, and goes to the gap log by opcode and length only: no

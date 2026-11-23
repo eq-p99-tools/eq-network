@@ -16,7 +16,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TaskStepUpdated`, `TaskConcluded`, `TaskRemoved` and `CompletedTasks`.
   A step for no entry of its task is told as a gap. The five coverage rows
   are read, the description's crystal parts and three step words partly;
-  their gaps keep no sample, since the bodies carry the player's quest
+  their gaps keep no sample, since the bodies carry the server's task
   text (new `sent_private` coverage rows). P99, TAKP, Quarm and RoF2 keep
   no journal; RoF2's coverage is unchanged. Nothing is sent yet.
   **Breaking:** `Message::Journal` and the five `WorldEvent` variants.

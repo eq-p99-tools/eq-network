@@ -43,9 +43,9 @@ pub(super) struct ServerMessage {
     pub(super) senders: &'static [ServerProtocol],
     /// What the session does with it.
     pub(super) reading: Reading,
-    /// Whether its body carries the player's own words (a task's title and
-    /// description), so that a gap tells of it by its opcode and length
-    /// alone, with no sample.
+    /// Whether its body carries the server's task text (a task's title,
+    /// description and step words), so that a gap tells of it by its
+    /// opcode and length alone, with no sample.
     pub(super) private: bool,
 }
 
@@ -84,7 +84,7 @@ const fn sent(
     }
 }
 
-/// A row whose body carries the player's own words: its gaps keep no
+/// A row whose body carries the server's task text: its gaps keep no
 /// sample.
 const fn sent_private(
     name: &'static str,
@@ -296,7 +296,7 @@ const ILLUSION: &[Part] = &[
         Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
     ),
 ];
-/// What the session leaves unread of a rename.
+
 /// What `OP_TaskDescription`'s reader leaves (gap list section 5, 6.546).
 const TASK_DESCRIPTION: &[Part] = &[
     Part(
@@ -325,6 +325,7 @@ const TASK_ACTIVITY: &[Part] = &[
     ),
 ];
 
+/// What the session leaves unread of a rename.
 const RENAME: &[Part] = &[
     Part(
         "the old name's second copy",

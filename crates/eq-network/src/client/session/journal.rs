@@ -32,6 +32,12 @@ use eq_network_game::{
 };
 use std::collections::{BTreeMap, HashMap};
 
+/// The most refusals the journal keeps before the admission, so that a
+/// zone that sends stale steps without end holds no growing list. A whole
+/// journal as `EQEmu` sends it refuses none; past this bound the journal
+/// keeps only how many more came, and tells that count at the admission.
+const MAX_REFUSED: usize = 64;
+
 /// An entry the journal holds: its description and the steps heard since.
 #[derive(Clone, Debug)]
 struct Entry {
@@ -52,8 +58,11 @@ struct Refused {
 pub(super) struct Journal {
     entries: HashMap<TaskSlot, Entry>,
     completed: Option<Vec<tasks::CompletedTask>>,
-    /// Refusals heard before the admission, told once it comes.
+    /// Refusals heard before the admission, told once it comes: at most
+    /// [`MAX_REFUSED`].
     refused: Vec<Refused>,
+    /// How many refusals before the admission came past the bound.
+    dropped: usize,
 }
 
 impl Journal {
@@ -145,6 +154,10 @@ impl Feature for Journal {
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Message::Journal { news, length } = message {
             if let Err(why) = self.apply(news, world.session_id) {
+                if self.refused.len() == MAX_REFUSED {
+                    self.dropped += 1;
+                    return Ok(());
+                }
                 self.refused.push(Refused {
                     opcode: Self::opcode(news),
                     length: *length,
@@ -160,6 +173,13 @@ impl Feature for Journal {
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         for refused in std::mem::take(&mut self.refused) {
             Self::tell(refused, out)?;
+        }
+        let dropped = std::mem::take(&mut self.dropped);
+        if dropped > 0 {
+            out.log.diagnostic(format!(
+                "the task journal dropped {dropped} refused messages heard before \
+                 the admission, past the {MAX_REFUSED} it keeps"
+            ))?;
         }
         let mut slots: Vec<_> = self.entries.keys().copied().collect();
         slots.sort_by_key(|at| (at.kind == tasks::TaskKind::Quest, at.slot));

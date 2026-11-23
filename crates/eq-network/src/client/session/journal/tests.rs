@@ -219,6 +219,39 @@ fn a_stale_step_before_admission_is_told_at_admission_without_its_words() {
 }
 
 #[test]
+fn refusals_before_admission_are_kept_up_to_the_bound_then_only_counted() {
+    for extra in [0, 5] {
+        let mut journal = Journal::default();
+        let mut world = World::new(5);
+        for _ in 0..MAX_REFUSED + extra {
+            journal
+                .admit(&stepped(2, 1, 100, 0, 1), &mut world)
+                .unwrap();
+        }
+        assert_eq!(journal.refused.len(), MAX_REFUSED);
+        assert_eq!(journal.dropped, extra);
+        let told = testing::run(|out| journal.admitted(&mut world, out));
+        told.result.unwrap();
+        let diagnostics: Vec<_> = told
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::Diagnostic(said) => Some(said.as_str()),
+                _ => None,
+            })
+            .collect();
+        if extra == 0 {
+            assert_eq!(diagnostics.len(), 0, "{diagnostics:?}");
+        } else {
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(diagnostics[0].contains("dropped 5 "), "{diagnostics:?}");
+            assert!(!diagnostics[0].contains("private"), "{diagnostics:?}");
+        }
+        assert!(journal.refused.is_empty() && journal.dropped == 0);
+    }
+}
+
+#[test]
 fn a_new_task_in_a_slot_forgets_the_old_tasks_steps_and_the_same_task_keeps_them() {
     let mut journal = Journal::default();
     let mut world = World::new(5);
