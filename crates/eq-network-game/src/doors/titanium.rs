@@ -180,14 +180,29 @@ impl Solidity {
     /// passed under by its pose (portcullis follow-up read, which corrects
     /// R1's "wall contact skips 60-77").
     ///
-    /// The floor sweep takes a door only when 0x490370 holds: types 30-45,
-    /// 50-51, 54-59 and 153-155, and three zones' own types. (Its second
-    /// filter 0x42ce5d is not applied here yet.)
+    /// The floor sweep stands the player on a door only when both its
+    /// filters take it: 0x42d05f's door test 0x490370 (types 30-45, 50-51,
+    /// 54-59 and 153-155, and three zones' own types), and then 0x42ce5d,
+    /// which passes types 0-7, 60-77, 115-152, 50-51 and 70 outside zone 59
+    /// through. So 50 and 51 are never floors.
     #[must_use]
     pub const fn of(open_type: u8, zone_id: u16) -> Self {
-        let floor = matches!(open_type, 30..=45 | 50 | 51 | 54..=59 | 153..=155)
+        let standable = matches!(open_type, 30..=45 | 50 | 51 | 54..=59 | 153..=155)
             || matches!((open_type, zone_id), (27, 154) | (26, 205 | 212) | (8, 208));
-        Self { floor, wall: true }
+        Self {
+            floor: standable && !sweep_passes(open_type, zone_id),
+            wall: true,
+        }
+    }
+}
+
+/// Whether the floor and ceiling sweep's hit filter 0x42ce5d passes a door
+/// through, so it is neither floor nor ceiling (portcullis follow-up read).
+const fn sweep_passes(open_type: u8, zone_id: u16) -> bool {
+    match open_type {
+        70 => zone_id != 59,
+        0..=7 | 50 | 51 | 60..=77 | 115..=152 => true,
+        _ => false,
     }
 }
 
@@ -593,12 +608,22 @@ mod tests {
 
     #[test]
     fn the_floor_sweep_takes_only_the_programs_types_and_every_door_is_a_wall() {
-        for floor in [30, 45, 50, 51, 54, 59, 153, 155] {
+        for floor in [30, 45, 54, 59, 153, 155] {
             assert!(Solidity::of(floor, 1).floor, "type {floor}");
         }
-        for not in [0, 5, 8, 15, 29, 46, 52, 53, 60, 65, 120, 156] {
+        // 0x490370 takes 50 and 51, and 0x42ce5d then passes them through.
+        for not in [0, 5, 8, 15, 29, 46, 50, 51, 52, 53, 60, 65, 120, 156] {
             assert!(!Solidity::of(not, 1).floor, "type {not}");
         }
+        // 0x42ce5d names no other type 0x490370 stands on, in any zone.
+        for open_type in 0..=u8::MAX {
+            for zone in [1, 59, 154, 205, 208, 212] {
+                if sweep_passes(open_type, zone) {
+                    assert!(!Solidity::of(open_type, zone).floor, "type {open_type}");
+                }
+            }
+        }
+        assert!(sweep_passes(70, 1) && !sweep_passes(70, 59));
         assert!(Solidity::of(27, 154).floor && !Solidity::of(27, 1).floor);
         assert!(Solidity::of(26, 205).floor && Solidity::of(26, 212).floor);
         assert!(Solidity::of(8, 208).floor && !Solidity::of(8, 1).floor);

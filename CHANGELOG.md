@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Titanium doors of open types 50 and 51 are no longer floors: the floor
+  sweep's second filter 0x42ce5d passes them through after 0x490370 takes
+  them (portcullis follow-up read). `Solidity::of` applies both filters. In
+  the local peq data only Brell's arena's two spring ramps use type 50, and
+  none uses 51. No API change.
+
 - Every Titanium door is a wall, as the program's collision move filter
   0x42cdb1 has it (portcullis follow-up read, correcting R1): a shut
   portcullis of open types 60-77 now stops the player like a hinged door.

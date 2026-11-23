@@ -261,8 +261,8 @@ stricter than the program. `EQMac` ignores the point and keeps its read 2-D rule
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:
 `Vertical::of` (rise or sink, travel and speeds by open type, 0x4368b3), `Slide::of`
 (type 15 and 78-81, 0x4366e8), `Solidity::of` (whether the floor sweep stands a
-player on a door, 0x490370, and whether it stops them: every door does,
-0x42cdb1),
+player on a door, 0x490370 and then 0x42ce5d, and whether it stops them: every
+door does, 0x42cdb1),
 `returns_after` and `returns_at` (the client's own return, 0x48faa5) and `field`
 (door +0x66, the param's low 16 bits as an i16). The field stays as spawned; the
 server message that changes it later (0x45e626) is not traced. `Solidity` is a
