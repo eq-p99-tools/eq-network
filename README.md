@@ -105,7 +105,7 @@ each.
 | `GuildRoster` | A guild member's side of a guild | Yes | Yes | – | – |
 | `GuildManagement` | An officer's and a leader's side of a guild | Yes | Yes | – | – |
 | **Server prompts and events** | | | | | |
-| `Training` | Training skills at a guildmaster | Yes | Yes | – | – |
+| `Training` | Training skills at a guildmaster (source-derived on TAKP and Quarm, not yet checked live; languages held there) | Yes | Yes | Yes | Yes |
 | `Resurrection` | Accepting or declining a resurrection (source-derived on TAKP and Quarm, not yet checked live) | Yes | Yes | Yes | Yes |
 | `Translocate` | Accepting or declining a translocate | Yes | Yes | Yes | Yes |
 | `Sacrifice` | Accepting or declining a sacrifice (source-derived on TAKP and Quarm, not yet checked live) | – | Yes | Yes | Yes |

@@ -1556,6 +1556,35 @@ Quarm and TAKP offer `Resurrection` and `Sacrifice` the same way (6.596), from
   0), on the player's word alone. The Mac program's no is inferred as 0 (open
   row 6.596c).
 
+Quarm and TAKP offer `Training` the same way (6.597), from the identical
+`Client::OPGMTraining`, `OPGMTrainSkill` and `OPGMEndTraining` at Quarm
+fc75fcf and TAKP 44afcbf.
+- **Packets.**
+  - Open and answer (0x9c40): 244 bytes, the guildmaster's and player's 16-bit
+    spawns. The answer adds each skill's most as a 16-bit value, the price
+    scale (f32 at +204), `success` (+208) and 32 language flags.
+  - Practice (0x4041): Titanium's 12 bytes with the player's spawn at +2.
+  - Goodbye (0x9d40): 4 bytes.
+- **Results.** A practice is answered by `OP_SkillUpdate2` (0xbe41), read as
+  the player's skill only when it names their spawn.
+- **Cost and points.** The server takes the cost and a point without a word.
+  - The cost is the cube of the value over 10, times the price scale, times
+    0.0099999998, cut to a whole number. A new skill (254) costs nothing.
+  - The session projects the purse as the server's copper-first take, or
+    leaves it uncertain.
+  - Points come from the profile (+156), and each level adds 5.
+- **Languages** are held: both servers accept any language 0 to 25, and the
+  `EQMac` program's own rule is unread (open row 6.597a).
+- **Caps.** An offer's caps are each skill's most at the server's top level,
+  not at the player's level, so a host shows a larger number than the player
+  can reach now. A practice at the player's current most is refused with the
+  value repeated, which closes it with no spend.
+- **Unanswered.** A practice the server leaves unanswered for 5 s leaves the
+  points unknown and, when it had a cost, the purse uncertain: the server
+  takes both without a word. A late answer is plain skill news. An untrained
+  skill the player's level has not reached is likely dropped without an
+  answer (`MaxSkill` 0); the `EQMac` program would not ask (open row 6.597d).
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

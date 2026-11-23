@@ -1799,6 +1799,20 @@ impl ServerType for Quarm {
         offer(shared::sacrifice())
     }
 
+    /// Training at a guildmaster in the `EQMac` program's packets
+    /// ([`eq_network_game::training::eqmac_open`]), from Quarm's own handlers
+    /// at SecretsOTheP/EQMacEmu fc75fcf: `Client::OPGMTraining` answers the
+    /// 244-byte request with each skill's most, its price scale and whether
+    /// faction admits the player; `OPGMTrainSkill` raises a skill by the
+    /// 12-byte practice and says so with a silent skill update, and takes
+    /// the scaled cost and a point without a word, which the session
+    /// projects as the server takes them. Languages are held until the
+    /// `EQMac` program's rule is read (6.597a). Source-derived, not live
+    /// (6.597).
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Training::eqmac()))
+    }
+
     /// Quarm's source-derived corpse flow uses the existing inventory owner
     /// for delivery and coins, with item requests paced to its 10 ms
     /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
@@ -2242,6 +2256,17 @@ impl ServerType for Takp {
     /// Source-derived, not live (6.596).
     fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::sacrifice())
+    }
+
+    /// Training at a guildmaster in the `EQMac` program's packets
+    /// ([`eq_network_game::training::eqmac_open`]), from TAKP's own handlers
+    /// at EQMacEmu/Server 44afcbf, which match Quarm's: the 244-byte
+    /// request and answer, the 12-byte practice answered by a silent skill
+    /// update, the scaled cost and the point taken without a word, and the
+    /// 4-byte goodbye. Languages are held until the `EQMac` program's rule
+    /// is read (6.597a). Source-derived, not live (6.597).
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Training::eqmac()))
     }
 
     /// Corpse looting in the `EQMac` program's packets
@@ -2696,11 +2721,11 @@ mod tests {
         // Bazaar from source (6.580), and each answers `/who all` and friends
         // from its own handlers (6.583), and rolls, assists and splits the
         // same way (6.585), corpses (6.591), pets (6.595), and resurrection and
-        // sacrifice answers (6.596). Other features
+        // sacrifice answers (6.596), and training (6.597). Other features
         // await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 29);
+        assert_eq!(quarm.features(&setup).len(), 30);
         assert_eq!(
             offers(quarm),
             [
@@ -2723,6 +2748,7 @@ mod tests {
                 Capability::Who,
                 Capability::Corpses,
                 Capability::Pets,
+                Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
                 Capability::Grouping,
@@ -2742,7 +2768,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 31);
+        assert_eq!(takp.features(&setup).len(), 32);
         assert_eq!(
             offers(takp),
             [
@@ -2765,6 +2791,7 @@ mod tests {
                 Capability::Who,
                 Capability::Corpses,
                 Capability::Pets,
+                Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
                 Capability::Grouping,

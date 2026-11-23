@@ -940,6 +940,16 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerResurrection { offer, accept } => {
             Ok(resurrection::eqmac_answer(offer, *accept))
         }
+        Request::OpenTraining(trainer) => Ok(training::eqmac_open(*trainer, sender.spawn())),
+        Request::Train { trainer, skill } => training::eqmac_practice(
+            *trainer,
+            sender.spawn(),
+            training::TrainingSubject::Skill(*skill),
+        ),
+        Request::Practice { trainer, subject } => {
+            training::eqmac_practice(*trainer, sender.spawn(), *subject)
+        }
+        Request::EndTraining(trainer) => Ok(training::eqmac_end(*trainer, sender.spawn())),
         Request::AnswerTranslocate { offer, accept } => {
             Ok(confirmations::eqmac_translocate_answer(offer, *accept))
         }
@@ -1380,14 +1390,6 @@ mod tests {
             .unwrap(),
             training::titanium_practice(42, training::TrainingSubject::Language(5)).unwrap()
         );
-        assert!(eqmac(
-            &Request::Practice {
-                trainer: 42,
-                subject: training::TrainingSubject::Language(5)
-            },
-            PLAYER
-        )
-        .is_err());
         assert_eq!(
             titanium(&Request::EndTraining(42), PLAYER).unwrap(),
             training::titanium_end(42, 7)
@@ -1422,6 +1424,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mac_training_requests_name_the_player() {
+        // TAKP and Quarm (6.597): the Mac program's own bytes, the player's
+        // spawn in every one; the session holds languages, not the codec.
+        assert_eq!(
+            eqmac(&Request::OpenTraining(42), PLAYER).unwrap(),
+            training::eqmac_open(42, 7)
+        );
+        assert_eq!(
+            eqmac(
+                &Request::Train {
+                    trainer: 42,
+                    skill: 30
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::eqmac_practice(42, 7, training::TrainingSubject::Skill(30)).unwrap()
+        );
+        assert_eq!(
+            eqmac(
+                &Request::Practice {
+                    trainer: 42,
+                    subject: training::TrainingSubject::Language(5)
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::eqmac_practice(42, 7, training::TrainingSubject::Language(5)).unwrap()
+        );
+        assert_eq!(
+            eqmac(&Request::EndTraining(42), PLAYER).unwrap(),
+            training::eqmac_end(42, 7)
+        );
+    }
     #[test]
     fn each_generation_reports_the_worlds_damage_in_its_own_packet() {
         let fall = Request::EnvironmentalDamage {

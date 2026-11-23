@@ -587,7 +587,8 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
                 .map(|value| u32::from(u16::from_le_bytes(*value)))
                 .collect(),
         ),
-        practice_points: None,
+        // `points` (i16 at 156); a negative count is none left.
+        practice_points: Some(u32::try_from(signed_attribute(data, 156)).unwrap_or(0)),
         languages: Some(data[PROFILE_LANGUAGES].to_vec()),
         disciplines: None,
         // What is left of each gem's reuse timer, in milliseconds
