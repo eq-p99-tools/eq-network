@@ -58,7 +58,8 @@ const MAILBOX_PREFIX: &str = "SOE.EQ.";
 /// The first byte of the client's login and commands, which the server
 /// skips. [I] The read (R49-12 a) gives the login's bytes as 0x01 then 0;
 /// the 0x01 is taken as the opcode ([`LOGIN_OPCODE`]) counted into the body,
-/// so the body leads with the 0 alone.
+/// so the body leads with the 0 alone. The chat server's stream carries its
+/// opcode in one byte, so the wire is 0x01, 0, then the mailbox.
 const LEAD: u8 = 0;
 /// The language tag the program sends after the key: its table at 0x799830
 /// indexed by the client's language, `us` for 0 (read R49-12 a). This client
