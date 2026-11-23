@@ -562,8 +562,13 @@ than the unspent points, whose level is no higher than the player's current
 level and whose class mask has the player's class. EQEmu's table offers each
 ability's owned rank and the next, or its first, so a rank another offered
 rank follows is owned; otherwise the selections name it, by exact id in
-`OP_RespondAA` and by an ability's first rank in the profile. Prerequisite
-abilities are left to the server. One train is in flight at a time, until
+`OP_RespondAA` and by an ability's first rank in the profile. So a maxed
+ability above rank one, which has no following rank in the table and which
+the profile names only by its first rank, reads as not owned until an
+`OP_RespondAA` names its exact rank: until then it can't be activated. The
+local live row checks that the zone entry brings an `OP_RespondAA` (our
+client sends `OP_UpdateAA`); if it brings none, the offer waits on a fix.
+Prerequisite abilities are left to the server. One train is in flight at a time, until
 EQEmu's answer (`OP_RespondAA`, then `OP_AAExpUpdate`) or 5 seconds. An
 activation goes for an owned rank with an ability (`spellid` not -1), at
 most one a second; a split change at most one a second, and above 100 is

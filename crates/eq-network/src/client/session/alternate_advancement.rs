@@ -99,7 +99,9 @@ impl View {
     /// table offers each ability's owned rank and the next, or its first
     /// (`Client::SendAlternateAdvancementTable`), so a rank another offered
     /// rank follows is owned; otherwise the selections say, by the exact id
-    /// either form names for it.
+    /// either form names for it. A maxed ability above rank one has no
+    /// follower and the profile names only its first rank, so it reads as
+    /// unowned until `OP_RespondAA` names it.
     fn owned(&self, rank: &Rank) -> Option<bool> {
         let id = i64::from(rank.id);
         if self
@@ -824,6 +826,37 @@ mod tests {
         let later = run(&mut feature, &mut world, &activate(10, None));
         assert_eq!(refusal(&later), None);
         assert_eq!(later.sent.len(), 1);
+    }
+
+    #[test]
+    fn a_maxed_ability_above_rank_one_is_unowned_until_the_exact_ids_come() {
+        // Rank 72 is the last of an ability whose first rank is 70: the
+        // table offers it alone, with nothing after it, and the profile
+        // names only the first rank (F1).
+        let (mut feature, mut world) = admitted(&[
+            Update::Selections(Some(vec![Selection { id: 70, value: 3 }])),
+            offer(72, rank(72, 71, 1, 51, 3_000)),
+            points(3),
+        ]);
+        let activate = ClientCommand::ActivateAlternateAdvancement {
+            session_id: 5,
+            rank_id: 72,
+            target: None,
+        };
+        let early = run(&mut feature, &mut world, &activate);
+        assert_eq!(refusal(&early), Some(Refusal::NotActivatable));
+        // Nor can it be bought: the rank before is not offered.
+        let bought = run(&mut feature, &mut world, &train(72));
+        assert_eq!(refusal(&bought), Some(Refusal::PreviousNotOwned));
+        // OP_RespondAA names the exact owned rank.
+        observe(
+            &mut feature,
+            &mut world,
+            Update::Selections(Some(vec![Selection { id: 72, value: 6 }])),
+        );
+        let used = run(&mut feature, &mut world, &activate);
+        assert_eq!(refusal(&used), None);
+        assert_eq!(used.sent[0].body[4], 72);
     }
 
     #[test]
