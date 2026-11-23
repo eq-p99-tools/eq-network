@@ -1,7 +1,7 @@
 //! The Titanium client's messages, which `EQEmu` and P99 send.
 
 use super::{
-    planned, sent, unasked, Part,
+    planned, sent, sent_private, unasked, Part,
     Reader::{Admission, Chat, ListPolls, Login, SpellTables, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned, Unmapped},
@@ -9,7 +9,8 @@ use super::{
     Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
     BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
     MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
+    SACRIFICE, STATS, TASK_ACTIVITY, TASK_DESCRIPTION, TITANIUM_DESCRIPTION, TITANIUM_PROFILE,
+    TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -200,7 +201,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // P99's compact position update.
         0x3a2b => sent("P99's compact position", P99, Read(&[Zone])),
         0x3af4 => sent("OP_RespondAA", EQEMU, Read(&[Zone])),
-        0x3ba8 => sent("OP_CancelTask", EQEMU, planned(LaterSystems)),
+        0x3ba8 => sent_private("OP_CancelTask", EQEMU, Read(&[Zone])),
         0x3bc2 => sent("OP_ClickObject", EQEMU, Read(&[Zone])),
         0x3bcf => sent("OP_HPUpdate", EQEMU, Read(&[Zone])),
         0x3c25 => sent("OP_ApproveWorld", EQEMU, Read(&[World])),
@@ -257,7 +258,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x541e => sent("OP_Sound", EQEMU, Partly(&[Zone], REWARD)),
         0x547a => sent("OP_Emote", EQEMU, Read(&[Chat])),
         0x5483 => sent("OP_MarkNPC", EQEMU, planned(Raids)),
-        0x54eb => sent("OP_TaskActivityComplete", EQEMU, planned(LaterSystems)),
+        0x54eb => sent_private("OP_TaskActivityComplete", EQEMU, Read(&[Zone])),
         0x55bc => sent("OP_DeleteSpawn", EQEMU, Read(&[Zone])),
         0x5639 => sent("OP_TributeUpdate", EQEMU, planned(LaterSystems)),
         0x56cd => sent("OP_AdventureStatsReply", EQEMU, planned(LaterSystems)),
@@ -293,7 +294,11 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x5e7c => sent("OP_TaskSelectWindow", EQEMU, planned(LaterSystems)),
         0x5eab => sent("OP_SetTitleReply", EQEMU, Read(&[Zone])),
         0x5ecd => sent("OP_ExpUpdate", EQEMU, Read(&[Zone])),
-        0x5ef7 => sent("OP_TaskDescription", EQEMU, planned(LaterSystems)),
+        0x5ef7 => sent_private(
+            "OP_TaskDescription",
+            EQEMU,
+            Partly(&[Zone], TASK_DESCRIPTION),
+        ),
         // Read on a local session; off one, dropped until the AA offer lifts
         // (6.547 follow-up row).
         0x5f58 => sent("OP_AAExpUpdate", EQEMU, Read(&[Zone])),
@@ -313,7 +318,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x667c => sent("OP_ItemLinkResponse", EQEMU, Read(&[Zone])),
         0x673c => sent("OP_SimpleMessage", EQEMU, Read(&[Chat])),
         0x67ea => sent("OP_GuildTributeFavorAndTimer", EQEMU, planned(LaterSystems)),
-        0x682d => sent("OP_TaskActivity", EQEMU, planned(LaterSystems)),
+        0x682d => sent_private("OP_TaskActivity", EQEMU, Partly(&[Zone], TASK_ACTIVITY)),
         0x6839 => sent("OP_TradeBusy", EQEMU, Read(&[Zone])),
         0x692c => sent("OP_GMKick", EQEMU, Partly(&[Zone], KICK)),
         0x6937 => sent("OP_ClickObjectAction", EQEMU, Read(&[Zone])),
@@ -365,7 +370,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             EQEMU,
             Partly(&[Admission, Zone], TITANIUM_PROFILE),
         ),
-        0x76a2 => sent("OP_CompletedTasks", EQEMU, planned(LaterSystems)),
+        0x76a2 => sent_private("OP_CompletedTasks", EQEMU, Read(&[Zone])),
         0x7709 => sent("OP_Assist", EQEMU, Read(&[Zone])),
         0x775d => sent("OP_InspectRequest", EQEMU, Read(&[Zone])),
         0x77d0 => sent("OP_RemoveAllDoors", EQEMU, Read(&[Zone])),
