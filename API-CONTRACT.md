@@ -1762,8 +1762,13 @@ and [translocate processing](https://github.com/EQEmu/EQEmu/blob/master/zone/cli
 position; `Release` withdraws local control; `Support` refreshes or withdraws
 the floor link. `WorldEvent::BoatControl` is only a decoded packet.
 `WorldEvent::BoatControlState` carries the admission-scoped correlated state.
-No state enables vessel position requests. See [boat control](docs/boat-control.md)
-for echo ambiguity, timeout policy and source/validation limits.
+No state enables vessel position requests. An `Acquire` for the incarnation
+already being taken sends the same take again and changes nothing else: the
+pending request, its deadline and its fence stay the first one's, one echo
+grants, and later echoes change nothing (6.533, inferred from read R35). A
+take for another vessel while one is pending is still refused. See
+[boat control](docs/boat-control.md) for echo ambiguity, timeout policy and
+source/validation limits.
 
 ## Boat riding
 

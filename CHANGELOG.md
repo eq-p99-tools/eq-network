@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A boat take asked again while one is pending goes again (6.533). The
+  program sets nothing before a take's echo, so its held-boat test
+  (`[0x905cf8]` in 0x4a7356) fails while the take waits and a second
+  interaction sends a second take; gate 0x494c09 passes on a race-141 carrier
+  before its busy checks. That is inferred from read R35's pieces in
+  combination, not read as one path. The session now sends the same 8-byte
+  `OP_ControlBoat` take for the same incarnation, leaving the pending entry,
+  its 5 s deadline and the fence as the first take set them, so repeated
+  clicks never extend the wait; stock `EQEmu` echoes each take, one echo
+  grants and later ones change nothing. A take for another vessel while one
+  is pending stays refused.
 - Read RoF2's buffs as stock `EQEmu` sends them, labelled inferred for
   RoF2 (6.527). The new `rof2_buffs` module reads `OP_Buff` (0x659c, 100
   bytes) into Titanium's `BuffUpdate`: fade word 1 is `FadeBySpell` and 2
