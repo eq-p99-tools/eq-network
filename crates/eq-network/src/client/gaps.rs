@@ -28,6 +28,14 @@ pub const SAMPLE_BYTES: usize = 256;
 /// The least time between two records of the same gap's repeats.
 pub const INTERVAL: Duration = Duration::from_secs(10);
 
+/// The most distinct kinds of [`GapKind::UnknownKind`] a stage counts
+/// apart; a server sending more has the rest counted under
+/// [`MORE_KINDS`], so its records stay bounded.
+pub const MOST_KINDS: usize = 4096;
+
+/// The kind the rest are counted under, past [`MOST_KINDS`].
+pub const MORE_KINDS: u32 = u32::MAX;
+
 /// A server message the session dropped or could not read.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -38,7 +46,8 @@ pub struct Gap {
     pub dialect: GameDialect,
     /// The configured server type.
     pub server: ServerProtocol,
-    /// The current short zone name; empty before a zone.
+    /// The short zone name: empty at the login and the world, and at a
+    /// zone until that zone has named itself.
     pub zone: String,
     /// The message's opcode on the wire.
     pub opcode: u16,
@@ -120,7 +129,8 @@ pub enum GapKind {
     },
     /// A kind of the message no server is known to send.
     UnknownKind {
-        /// The kind.
+        /// The kind, or [`MORE_KINDS`] for those past [`MOST_KINDS`] in a
+        /// stage.
         kind: u32,
     },
     /// It could not be read.
@@ -168,6 +178,11 @@ impl GapKind {
 pub(super) struct Tally {
     /// The stage under way.
     pub(super) stage: GapStage,
+    /// Whether the zone under way has named itself.
+    pub(super) zone_named: bool,
+    /// The distinct kinds of [`GapKind::UnknownKind`] counted in the stage,
+    /// past which the rest are counted as one ([`MOST_KINDS`]).
+    kinds: usize,
     /// Each gap's last record, and the repeats counted since.
     seen: HashMap<(GapStage, u16, String), Seen>,
     /// The gaps already sampled in the session.
@@ -188,6 +203,13 @@ impl Tally {
     /// the first of its kind in the stage, with its sample where one is
     /// kept, or the repeats once [`INTERVAL`] has passed since the last.
     pub(super) fn count(&mut self, mut gap: Gap, body: &[u8], at: Instant) -> Option<Gap> {
+        if matches!(gap.kind, GapKind::UnknownKind { .. }) && !self.seen.contains_key(&gap.key()) {
+            if self.kinds >= MOST_KINDS {
+                gap.kind = GapKind::UnknownKind { kind: MORE_KINDS };
+            } else {
+                self.kinds += 1;
+            }
+        }
         let key = gap.key();
         let Some(seen) = self.seen.get_mut(&key) else {
             gap.sample = self.sample(&gap, body);
@@ -243,6 +265,7 @@ impl Tally {
     /// its gaps afresh, but samples each only once a session.
     pub(super) fn drain(&mut self) -> Vec<Gap> {
         self.next_due = None;
+        self.kinds = 0;
         let mut left: Vec<Gap> = self
             .seen
             .drain()
@@ -386,6 +409,40 @@ mod tests {
         let left = tally.drain();
         assert_eq!(left.len(), 1);
         assert_eq!(tally.drain(), []);
+    }
+
+    #[test]
+    fn a_server_s_endless_kinds_are_counted_apart_only_up_to_a_bound() {
+        let mut tally = Tally::default();
+        let at = Instant::now();
+        let mut told = Vec::new();
+        for kind in 0..u32::try_from(MOST_KINDS + 100).unwrap() {
+            let unknown = gap(GapStage::Zone, GapKind::UnknownKind { kind }, 1);
+            told.extend(tally.count(unknown, &[], at));
+        }
+        told.extend(tally.drain());
+        // Each kind apart once, then the rest's first record and their repeats.
+        assert_eq!(told.len(), MOST_KINDS + 2);
+        let more: Vec<_> = told
+            .iter()
+            .filter(|gap| gap.kind == GapKind::UnknownKind { kind: MORE_KINDS })
+            .collect();
+        assert_eq!(more.iter().map(|gap| gap.count).sum::<u64>(), 100);
+        // A kind counted apart stays apart past the bound.
+        let mut tally = Tally::default();
+        for kind in 0..u32::try_from(MOST_KINDS).unwrap() {
+            tally.count(
+                gap(GapStage::Zone, GapKind::UnknownKind { kind }, 1),
+                &[],
+                at,
+            );
+        }
+        tally.count(
+            gap(GapStage::Zone, GapKind::UnknownKind { kind: 0 }, 1),
+            &[],
+            at,
+        );
+        assert_eq!(tally.drain()[0].kind, GapKind::UnknownKind { kind: 0 });
     }
 
     #[test]

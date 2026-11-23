@@ -1586,8 +1586,8 @@ Moves sent while an arrival is held are refused. See
 
 `ClientEvent::Gap(Box<Gap>)` tells of a server message the session dropped
 or could not read. `Gap` names its `stage` (login, world or zone), the
-configured `server`, its `dialect`, the current short `zone` (empty before
-one), the `opcode`, the generation's table `name` where one lists it, and
+configured `server`, its `dialect`, the short `zone` (empty at the login
+and the world, and at a zone until that zone has named itself), the `opcode`, the generation's table `name` where one lists it, and
 the `kind`:
 
 - `Unlisted`: no table row lists the opcode.
@@ -1595,6 +1595,8 @@ the `kind`:
 - `ReadElsewhere`: listed as read only at another stage.
 - `PartlyRead { parts }`: read all but these parts, which work to come reads.
 - `UnknownKind { kind }`: a kind of the message no server is known to send.
+  A stage counts at most `MOST_KINDS` (4,096) kinds apart; the rest are
+  counted under `MORE_KINDS`.
 - `Unreadable { part, error }`: the decoders could not read it.
 - `Skipped { reason }`: listed as holding nothing worth reading. Counted, but
   `GapKind::is_gap` is false.

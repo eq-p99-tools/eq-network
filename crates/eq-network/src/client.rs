@@ -39,7 +39,9 @@ mod gaps;
 mod selection;
 mod session;
 
-pub use gaps::{Gap, GapKind, GapStage, INTERVAL as GAP_INTERVAL, SAMPLE_BYTES};
+pub use gaps::{
+    Gap, GapKind, GapStage, INTERVAL as GAP_INTERVAL, MORE_KINDS, MOST_KINDS, SAMPLE_BYTES,
+};
 
 use crate::{
     assets::Assets,
@@ -981,11 +983,19 @@ impl<'a> Events<'a> {
     }
 
     /// Starts a stage of the session, telling first what the last one
-    /// still had to tell of what it left unread.
+    /// still had to tell of what it left unread. Its gaps name no zone
+    /// until a zone stage's zone has named itself ([`Self::name_zone`]).
     fn begin_stage(&mut self, stage: GapStage) -> Result<()> {
         self.end_stage()?;
         self.gaps.stage = stage;
+        self.gaps.zone_named = false;
         Ok(())
+    }
+
+    /// Keeps the short name the zone being entered gives itself.
+    fn name_zone(&mut self, name: &str) {
+        name.clone_into(&mut self.zone);
+        self.gaps.zone_named = true;
     }
 
     /// Tells what the stage under way still has to tell of what it left
@@ -1011,7 +1021,10 @@ impl<'a> Events<'a> {
             stage: self.gaps.stage,
             dialect: self.config.protocol.into(),
             server: self.config.protocol,
-            zone: self.zone.clone(),
+            zone: match self.gaps.stage {
+                GapStage::Zone if self.gaps.zone_named => self.zone.clone(),
+                GapStage::Login | GapStage::World | GapStage::Zone => String::new(),
+            },
             opcode,
             name,
             count: 1,
@@ -1299,6 +1312,43 @@ mod tests {
         packet[132..136].copy_from_slice(&channel.to_le_bytes());
         packet.extend(b"Example message\0");
         chat::parse(0x1004, &packet, false).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_gap_names_only_the_zone_that_named_itself_in_its_stage() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut zones = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                zones.push((gap.stage, gap.zone));
+            }
+            Ok(())
+        };
+        let mut events = Events::new(&config, &mut handler);
+        events.reset();
+        let unlisted = || GapKind::Unlisted;
+        events.begin_stage(GapStage::Zone).unwrap();
+        events.gap(1, None, &[], unlisted()).unwrap();
+        events.name_zone("qeynos");
+        events.gap(2, None, &[], unlisted()).unwrap();
+        events.begin_stage(GapStage::World).unwrap();
+        events.gap(3, None, &[], unlisted()).unwrap();
+        events.begin_stage(GapStage::Zone).unwrap();
+        events.gap(4, None, &[], unlisted()).unwrap();
+        events.name_zone("misty");
+        events.gap(5, None, &[], unlisted()).unwrap();
+        events.end_stage().unwrap();
+        drop(events);
+        assert_eq!(
+            zones,
+            [
+                (GapStage::Zone, String::new()),
+                (GapStage::Zone, "qeynos".to_owned()),
+                (GapStage::World, String::new()),
+                (GapStage::Zone, String::new()),
+                (GapStage::Zone, "misty".to_owned()),
+            ]
+        );
     }
 
     #[test]
