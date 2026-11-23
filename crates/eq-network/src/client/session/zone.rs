@@ -1557,7 +1557,7 @@ mod tests {
             },
             ClientCommand::ChatChannel {
                 session_id,
-                text: "list".into(),
+                text: "/list".into(),
                 created,
             },
             ClientCommand::AnswerListPolls {
