@@ -31,8 +31,13 @@ impl Feature for AlternateAdvancement {
         if let Message::AlternateAdvancement(update) = message {
             if self.staged.len() == MAX_STAGED {
                 self.staged.clear();
-                self.staged.push(Update::Selections(None));
-                self.staged.push(Update::DefinitionsUnknown);
+                // Every staged kind is withdrawn: points and experience too.
+                self.staged.extend([
+                    Update::Selections(None),
+                    Update::DefinitionsUnknown,
+                    Update::Points(None),
+                    Update::Progress(None),
+                ]);
                 self.overflowed = true;
             } else if !self.overflowed {
                 self.staged.push(update.clone());
@@ -181,12 +186,27 @@ mod tests {
         for overflow in [false, true] {
             let mut feature = AlternateAdvancement::default();
             let mut world = World::new(5);
-            let facts: Vec<_> = (1..=MAX_STAGED)
+            // Points and experience staged before an overflow are withdrawn
+            // with it, not silently lost.
+            let mut facts: Vec<_> = (1..MAX_STAGED - 1)
                 .map(|id| Update::Definition {
                     id: u32::try_from(id).unwrap(),
                     rank: None,
                 })
                 .collect();
+            facts.extend([
+                Update::Points(Some(Points {
+                    aapoints_spent: 1,
+                    aapoints: 2,
+                    exp_aa: 3,
+                })),
+                Update::Progress(Some(Progress {
+                    experience: 1,
+                    unspent: 2,
+                    percentage: 3,
+                })),
+            ]);
+            assert_eq!(facts.len(), MAX_STAGED);
             for update in &facts {
                 feature
                     .admit(&Message::AlternateAdvancement(update.clone()), &mut world)
@@ -202,7 +222,12 @@ mod tests {
             let outcome = testing::run(|out| feature.admitted(&mut world, out));
             outcome.result.unwrap();
             let expected = if overflow {
-                vec![Update::Selections(None), Update::DefinitionsUnknown]
+                vec![
+                    Update::Selections(None),
+                    Update::DefinitionsUnknown,
+                    Update::Points(None),
+                    Update::Progress(None),
+                ]
             } else {
                 facts
             };
