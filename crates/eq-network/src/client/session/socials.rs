@@ -261,10 +261,156 @@ impl Socials {
     }
 }
 
+/// How long a `/surname` waits for its answer before another may go.
+/// `EQEmu` refuses with a line of its own and sends no answer, so the wait
+/// lapses rather than holding until the zone changes (inferred).
+const SURNAME_WAIT: Duration = Duration::from_secs(10);
+
+/// Asking for a last name: `/surname`, sent as typed. The server answers
+/// with the request's record ([`WorldEvent::SurnameAnswer`]) or a line of
+/// its own for each refusal (`EQEmu`'s `Client::Handle_OP_Surname`: its
+/// timer, level 12940, length 12942 and filter 1374), so the session adds
+/// no line; a surname it takes reaches the zone's spawns as their last
+/// name. One request waits at a time, and an answer to none is withheld.
+/// Only stock `EQEmu` lists it, from source, not yet checked live
+/// (checklist 6.507).
+#[derive(Default)]
+pub(super) struct Surnames {
+    asked: Option<Instant>,
+}
+
+impl Surnames {
+    fn waiting(&self) -> bool {
+        self.asked
+            .is_some_and(|asked| asked.elapsed() < SURNAME_WAIT)
+    }
+}
+
+impl Feature for Surnames {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::Surnaming]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::Surname { .. })
+    }
+
+    fn explain(&mut self, message: &mut Message, _world: &World) {
+        match message {
+            Message::ZoneOffer(_) | Message::ZoneAnswer(_) | Message::Handoff(_) => {
+                self.asked = None;
+            }
+            Message::Event(WorldEvent::SurnameAnswer { .. }) => {
+                if !self.waiting() {
+                    *message = Message::Withheld;
+                }
+                self.asked = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::Surname { surname, .. } = command else {
+            return Ok(());
+        };
+        if self.waiting() {
+            return actions::refuse(
+                command,
+                "Wait for the answer to your last surname.",
+                out.log,
+            );
+        }
+        let surname = surname.trim();
+        if surname.is_empty() || !surname.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return actions::refuse(command, "A surname is one word of plain text.", out.log);
+        }
+        if surname.len() >= eq_network_game::names::SURNAME_FIELD {
+            return actions::refuse(command, "That surname is too long.", out.log);
+        }
+        out.request(&Request::Surname(surname.to_owned()))?;
+        self.asked = Some(Instant::now());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{feature::testing, ClientEvent};
     use super::*;
+
+    #[test]
+    fn a_surname_goes_to_the_server_as_typed_one_at_a_time() {
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut feature = Surnames::default();
+        let mut run = |world: &mut World, surname: &str| {
+            let command = ClientCommand::Surname {
+                session_id: 5,
+                surname: surname.into(),
+            };
+            testing::run(|out| feature.handle(&command, world, out))
+        };
+        let refused = |outcome: &testing::Outcome<Result<()>>| {
+            outcome.sent.is_empty()
+                && outcome.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::SocialRefused { session_id: 5, .. })
+                    )
+                })
+        };
+        for word in ["", "Ex ample", "Exämple", &"a".repeat(32)] {
+            assert!(refused(&run(&mut world, word)), "{word:?}");
+        }
+        let asked = run(&mut world, " ex-emplum ");
+        let sender = eq_network_game::request::Sender {
+            name: "Tester",
+            spawn_id: Some(7),
+        };
+        assert_eq!(
+            asked.sent,
+            [
+                eq_network_game::request::titanium(&Request::Surname("ex-emplum".into()), sender)
+                    .unwrap()
+            ]
+        );
+        // A second waits for the first one's answer.
+        assert!(refused(&run(&mut world, "Exemplum")));
+    }
+
+    #[test]
+    fn an_answer_releases_the_wait_and_one_to_no_request_is_withheld() {
+        let world = World::new(5);
+        let answer = || {
+            Message::Event(WorldEvent::SurnameAnswer {
+                accepted: true,
+                last_name: "Exemplum".into(),
+            })
+        };
+        let mut feature = Surnames::default();
+        let mut unasked = answer();
+        feature.explain(&mut unasked, &world);
+        assert!(matches!(unasked, Message::Withheld));
+
+        feature.asked = Some(Instant::now());
+        let mut heard = answer();
+        feature.explain(&mut heard, &world);
+        assert!(matches!(heard, Message::Event(_)));
+        assert!(!feature.waiting());
+
+        // A wait that lapsed holds nothing, and its late answer is withheld.
+        feature.asked = Instant::now().checked_sub(SURNAME_WAIT);
+        assert!(!feature.waiting());
+        let mut late = answer();
+        feature.explain(&mut late, &world);
+        assert!(matches!(late, Message::Withheld));
+    }
 
     #[test]
     fn a_late_assist_answer_releases_the_wait_without_selecting_a_target() {

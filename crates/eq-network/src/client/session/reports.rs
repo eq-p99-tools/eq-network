@@ -35,7 +35,7 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    reports::{self, ReportKind},
+    reports::{self, ReportError, ReportKind},
     world::WorldEvent,
 };
 use std::time::{Duration, Instant};
@@ -156,11 +156,10 @@ impl Feature for Reports {
             }
             _ => return Ok(()),
         };
-        // The encoder's refusal names only a bound or a generation, never
-        // the text.
+        // The encoder's refusal is a kind, never the text.
         let packet = match packet {
             Ok(packet) => packet,
-            Err(error) => return actions::refuse(command, &refusal(kind, &error), out.log),
+            Err(error) => return actions::refuse(command, &refusal(kind, error), out.log),
         };
         out.send(&packet)?;
         self.sent[slot] = Some(Instant::now());
@@ -173,17 +172,13 @@ impl Feature for Reports {
 }
 
 /// The player's words for an encoder's refusal.
-fn refusal(kind: ReportKind, error: &anyhow::Error) -> String {
-    let error = error.to_string();
+fn refusal(kind: ReportKind, error: ReportError) -> String {
     let what = words(kind);
-    if error.ends_with("is empty") {
-        format!("Say what the {what} is about.")
-    } else if error.contains("longer than") {
-        format!("That {what} is too long.")
-    } else if error.contains("NUL") {
-        format!("That {what} holds text that cannot be sent.")
-    } else {
-        format!("This server does not take a {what}.")
+    match error {
+        ReportError::Empty => format!("Say what the {what} is about."),
+        ReportError::TooLong { .. } => format!("That {what} is too long."),
+        ReportError::HoldsNul => format!("That {what} holds text that cannot be sent."),
+        ReportError::NotRead => format!("This server does not take a {what}."),
     }
 }
 

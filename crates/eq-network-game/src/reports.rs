@@ -16,7 +16,7 @@
 //! 6.511a and c). The system information stays empty by choice.
 
 use crate::{command::EncodedCommand, GameDialect};
-use anyhow::{bail, ensure, Result};
+
 use serde::Serialize;
 
 /// Titanium's `OP_Petition`.
@@ -204,25 +204,58 @@ pub const fn bug_longest(dialect: GameDialect) -> Option<usize> {
     }
 }
 
+/// Why a report cannot be sent. None of these repeats the report's text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportError {
+    /// The text is empty once trimmed.
+    Empty,
+    /// The text holds a NUL, which would end it early.
+    HoldsNul,
+    /// The text is longer than its field holds, in bytes before its NUL.
+    TooLong {
+        /// The most the field holds.
+        longest: usize,
+    },
+    /// No server of the generation reads this report, or the generation is
+    /// not built yet.
+    NotRead,
+}
+
+impl std::fmt::Display for ReportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("the report is empty"),
+            Self::HoldsNul => f.write_str("the report holds a NUL"),
+            Self::TooLong { longest } => {
+                write!(f, "the report is longer than {longest} bytes")
+            }
+            Self::NotRead => f.write_str("no server of this generation reads the report"),
+        }
+    }
+}
+
+impl std::error::Error for ReportError {}
+
 /// Text that fits: not empty, no NUL, at most `longest` bytes.
-fn checked<'a>(what: &str, text: &'a str, longest: usize) -> Result<&'a str> {
+fn checked(text: &str, longest: usize) -> Result<&str, ReportError> {
     let text = text.trim();
-    ensure!(!text.is_empty(), "the {what} is empty");
-    ensure!(!text.contains('\0'), "the {what} holds a NUL");
-    ensure!(
-        text.len() <= longest,
-        "the {what} is longer than {longest} bytes"
-    );
+    if text.is_empty() {
+        return Err(ReportError::Empty);
+    }
+    if text.contains('\0') {
+        return Err(ReportError::HoldsNul);
+    }
+    if text.len() > longest {
+        return Err(ReportError::TooLong { longest });
+    }
     Ok(text)
 }
 
 /// Writes text into a NUL-ended field, which must hold it.
-fn put(body: &mut [u8], at: usize, field: usize, text: &str) -> Result<()> {
-    ensure!(
-        text.len() < field,
-        "{} bytes do not fit a {field}-byte field",
-        text.len()
-    );
+fn put(body: &mut [u8], at: usize, field: usize, text: &str) -> Result<(), ReportError> {
+    if text.len() >= field {
+        return Err(ReportError::TooLong { longest: field - 1 });
+    }
     body[at..at + text.len()].copy_from_slice(text.as_bytes());
     Ok(())
 }
@@ -239,13 +272,14 @@ fn put_name(body: &mut [u8], at: usize, name: &str) {
 /// # Errors
 /// Refuses an empty or over-long text, one holding a NUL, and a generation
 /// not built yet.
-pub fn petition(dialect: GameDialect, text: &str) -> Result<EncodedCommand> {
+pub fn petition(dialect: GameDialect, text: &str) -> Result<EncodedCommand, ReportError> {
     let opcode = match dialect {
         GameDialect::Titanium => TITANIUM_PETITION_OPCODE,
         GameDialect::EqMac => EQMAC_PETITION_OPCODE,
-        GameDialect::Rof2 => bail!("not built for RoF2 yet"),
+        // Not built for RoF2 yet (6.489).
+        GameDialect::Rof2 => return Err(ReportError::NotRead),
     };
-    let text = checked("petition", text, PETITION_LONGEST)?;
+    let text = checked(text, PETITION_LONGEST)?;
     let mut body = text.as_bytes().to_vec();
     body.push(0);
     Ok(EncodedCommand { opcode, body })
@@ -256,11 +290,15 @@ pub fn petition(dialect: GameDialect, text: &str) -> Result<EncodedCommand> {
 /// # Errors
 /// Refuses an empty or over-long text, one holding a NUL, and a generation
 /// not built yet.
-pub fn bug(dialect: GameDialect, reporter: &str, report: &BugReport) -> Result<EncodedCommand> {
+pub fn bug(
+    dialect: GameDialect,
+    reporter: &str,
+    report: &BugReport,
+) -> Result<EncodedCommand, ReportError> {
     let Some(longest) = bug_longest(dialect) else {
-        bail!("not built for RoF2 yet");
+        return Err(ReportError::NotRead);
     };
-    let text = checked("bug report", &report.text, longest)?;
+    let text = checked(&report.text, longest)?;
     let place = report.place.unwrap_or(BugPlace {
         x: 0.0,
         y: 0.0,
@@ -315,7 +353,8 @@ pub fn bug(dialect: GameDialect, reporter: &str, report: &BugReport) -> Result<E
                 body,
             })
         }
-        GameDialect::Rof2 => bail!("not built for RoF2 yet"),
+        // Not built for RoF2 yet (6.489).
+        GameDialect::Rof2 => Err(ReportError::NotRead),
     }
 }
 
@@ -324,10 +363,14 @@ pub fn bug(dialect: GameDialect, reporter: &str, report: &BugReport) -> Result<E
 /// # Errors
 /// Refuses an empty or over-long text, one holding a NUL, Titanium (no
 /// server reads it) and a generation not built yet.
-pub fn feedback(dialect: GameDialect, name: &str, text: &str) -> Result<EncodedCommand> {
+pub fn feedback(
+    dialect: GameDialect,
+    name: &str,
+    text: &str,
+) -> Result<EncodedCommand, ReportError> {
     match dialect {
         GameDialect::EqMac => {
-            let text = checked("feedback", text, FEEDBACK_LONGEST)?;
+            let text = checked(text, FEEDBACK_LONGEST)?;
             let mut body = vec![0; FEEDBACK_LENGTH];
             put_name(&mut body, 0, name);
             put(&mut body, 107, 1024, text)?;
@@ -336,8 +379,9 @@ pub fn feedback(dialect: GameDialect, name: &str, text: &str) -> Result<EncodedC
                 body,
             })
         }
-        GameDialect::Titanium => bail!("no Titanium server reads feedback"),
-        GameDialect::Rof2 => bail!("not built for RoF2 yet"),
+        // No stock EQEmu handler reads it on Titanium, and RoF2 is not
+        // built yet (6.489).
+        GameDialect::Titanium | GameDialect::Rof2 => Err(ReportError::NotRead),
     }
 }
 
@@ -375,9 +419,27 @@ mod tests {
         let eqmac = petition(GameDialect::EqMac, "Help").unwrap();
         assert_eq!(eqmac.opcode, 0x0e40);
         assert_eq!(eqmac.body, b"Help\0");
-        for bad in ["", "   ", "a\0b"] {
-            assert!(petition(GameDialect::Titanium, bad).is_err(), "{bad:?}");
+        for (bad, error) in [
+            ("", ReportError::Empty),
+            ("   ", ReportError::Empty),
+            ("a\0b", ReportError::HoldsNul),
+        ] {
+            assert_eq!(
+                petition(GameDialect::Titanium, bad).unwrap_err(),
+                error,
+                "{bad:?}"
+            );
         }
+        assert_eq!(
+            petition(GameDialect::Titanium, &"x".repeat(PETITION_LONGEST + 1)).unwrap_err(),
+            ReportError::TooLong {
+                longest: PETITION_LONGEST
+            }
+        );
+        assert_eq!(
+            feedback(GameDialect::Titanium, "Reporter", "Hi").unwrap_err(),
+            ReportError::NotRead
+        );
         assert!(petition(GameDialect::Titanium, &"x".repeat(PETITION_LONGEST)).is_ok());
         assert!(petition(GameDialect::Titanium, &"x".repeat(PETITION_LONGEST + 1)).is_err());
         assert!(petition(GameDialect::Rof2, "Help").is_err());

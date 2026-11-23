@@ -19,8 +19,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   text. **Breaking:** new variants on the exhaustive `GameCommand`
   (`SendPetition`, `ReportBug`, `SendFeedback`), `WorldEvent`
   (`ReportSent`, `ReportRefused`) and `Capability` (`Petitioning`,
-  `ReportingBugs`, `SendingFeedback`; `Capability::ALL` grows to 74).
+  `ReportingBugs`, `SendingFeedback`; `Capability::ALL` grows to 75).
 
+- Ask for a last name with `/surname` (gap 3.6, checklist 6.507).
+  `GameCommand::Surname` sends `OP_Surname`'s 100-byte record (Titanium
+  0x4668, `EQMac` 0xc441) with the surname as typed, under the new
+  `Capability::Surnaming`, which only stock `EQEmu` lists (from
+  `Client::Handle_OP_Surname`, not yet checked live; P99, TAKP and Quarm wait
+  for their own checks). The encoder refuses only what the record cannot
+  carry. One request waits at a time. The server's answer comes as
+  `WorldEvent::SurnameAnswer`, and one to no request is withheld. `EQMac`'s
+  196-byte `OP_GMLastName` now decodes to `WorldEvent::LastName`. Coverage:
+  both `OP_Surname` rows and `EQMac`'s `OP_GMLastName` are read.
+  **Breaking:** new variants on the exhaustive `GameCommand`, `Request`,
+  `WorldEvent` and `Capability` (`Capability::ALL` holds 72).
 - List what RoF2's stages read in a coverage table of its own (6.508), so
   the gap log no longer tells the login replies, the character list, the
   world's entry and handoff, and the zone's description, profile, own

@@ -228,6 +228,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ToggleRoleplay { .. }
         | ClientCommand::ShowHelm { .. }
         | ClientCommand::Random { .. }
+        | ClientCommand::Surname { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -414,6 +415,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ToggleRoleplay { session_id }
         | ClientCommand::ShowHelm { session_id, .. }
         | ClientCommand::Random { session_id, .. }
+        | ClientCommand::Surname { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::SendPetition { session_id, .. }
         | ClientCommand::ReportBug { session_id, .. }
@@ -642,6 +644,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             reason,
         },
         ClientCommand::Random { .. }
+        | ClientCommand::Surname { .. }
         | ClientCommand::YellForHelp { .. }
         | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }
