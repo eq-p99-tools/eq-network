@@ -511,8 +511,20 @@ are local, and a successful send does not establish a quest outcome.
 `WorldEvent::PlayerInspection` carries the equipment names, icons and note
 received for the matching nearby player. These fields carry no inventory
 custody. `GameCommand::SetInspectNote` supplies the admission's known note
-for automatic replies. A known empty string can be sent. An absent note
-leaves the automatic reply withheld.
+for automatic replies; it needs `Capability::InspectAnswer`, which both
+Titanium types offer with `PlayerInspection`. A known empty string can be
+sent. An absent note leaves the automatic reply withheld.
+
+## EQMac inspection answers
+
+TAKP and Quarm offer `Capability::InspectAnswer` alone (6.621,
+source-derived, not live). The player's program answers each relayed
+request itself, at most once a second, with the worn places' item names
+and icons and the note from `SetInspectNote`; an absent note answers with an
+empty message, as the program always answers. Each answer emits
+`WorldEvent::InspectedBy` with line 0x57c and the asker's name when the
+asker is a known spawn other than the player. `InspectPlayer` and received
+answers are not offered on `EQMac`.
 
 ## Titanium observer sight
 

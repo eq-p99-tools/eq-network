@@ -750,12 +750,17 @@ pub enum Capability {
     /// the server type takes it. It sends nothing the session doesn't
     /// already take: `StopSong`, then a gem's `CastSpell`.
     Melody,
+    /// Answering another player's inspection of the player: on Titanium
+    /// with the player's inspect message (the server fills the equipment),
+    /// and on TAKP and Quarm with the worn items as well, which the `EQMac`
+    /// program sends itself.
+    InspectAnswer,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 91] = [
+    pub const ALL: [Self; 92] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -847,6 +852,7 @@ impl Capability {
         Self::DisciplineReuse,
         Self::WeaponStances,
         Self::Melody,
+        Self::InspectAnswer,
     ];
 }
 
@@ -2134,6 +2140,19 @@ pub enum WorldEvent {
         /// Who asks, as their client names them.
         inspector_id: u16,
     },
+    /// The player's program answered another player's inspection (the
+    /// `EQMac` program's line 0x57c, %1 their name, colour 0x111; shown
+    /// always, its option being unread: 6.621).
+    InspectedBy {
+        /// The admission that answered.
+        session_id: u64,
+        /// Who asked.
+        inspector_id: u16,
+        /// Their name, as the spawn table has it.
+        name: String,
+        /// The line, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// A decoded Titanium inspection response.
     InspectAnswer(crate::inspection::Inspection),
     /// A received response matched to the host's current inspection request.
@@ -2964,6 +2983,7 @@ mod tests {
             Capability::DisciplineReuse => 88,
             Capability::WeaponStances => 89,
             Capability::Melody => 90,
+            Capability::InspectAnswer => 91,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

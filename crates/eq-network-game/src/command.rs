@@ -1848,9 +1848,8 @@ impl GameCommand {
             Self::AnswerTranslocate { .. } => Capability::Translocate,
             Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
-            Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
-                Capability::PlayerInspection
-            }
+            Self::InspectPlayer { .. } => Capability::PlayerInspection,
+            Self::SetInspectNote { .. } => Capability::InspectAnswer,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }

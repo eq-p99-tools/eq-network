@@ -5,6 +5,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Quarm and TAKP answer another player's inspection as the `EQMac` program
+  does (checklist 6.621; TAKP program read row 11e, 0x4e769d;
+  source-derived from `Client::Handle_OP_InspectAnswer` at TAKP 44afcbf and
+  Quarm fc75fcf, which pass the 1,744-byte answer on unread, not live):
+  `OP_InspectAnswer` (0xb640) names the asker and the player, each worn
+  place's item name and icon (`EQMac` slots 0 to 21, the program's order;
+  0xffff for an empty place) and the player's inspect message. At most one
+  answer goes each second; a request inside it is dropped. The program's
+  unwritten bytes and its 32-byte string (inferred to be a title) are sent
+  as zero, a labelled departure. Each answer says line 0x57c naming the
+  asker when they are a known spawn other than the player; the program's
+  option for it is unread, so it is always said. Asking to inspect, and
+  showing an answer received, stay unoffered on `EQMac`.
+  - **Breaking:** `Capability::InspectAnswer` (91); `SetInspectNote` now
+    needs it instead of `PlayerInspection` (Titanium sessions offer both);
+    `WorldEvent::InspectedBy { session_id, inspector_id, name, string_id }`;
+    `inspection::eqmac::answer`.
+
 - Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
   read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
   192-byte body with the event's reason at +4, carrying where the player

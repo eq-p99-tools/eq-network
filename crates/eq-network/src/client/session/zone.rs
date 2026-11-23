@@ -3366,7 +3366,8 @@ mod tests {
                 Capability::ReportingBugs,
                 Capability::Shielding,
                 Capability::BazaarSearching,
-                Capability::DisciplineReuse
+                Capability::DisciplineReuse,
+                Capability::InspectAnswer
             ]
         );
         let mut expected = features(crate::client::ServerProtocol::Quarm);

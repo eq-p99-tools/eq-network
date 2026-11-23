@@ -1686,6 +1686,13 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// The `EQMac` program answers an inspection itself, with its worn
+    /// items; the server passes it on unread (6.621, source-derived: TAKP
+    /// 44afcbf and Quarm fc75fcf `Client::Handle_OP_InspectAnswer`).
+    fn dialogs(&self) -> Provided {
+        offer(Box::<super::inspect_answer::MacInspectAnswer>::default())
+    }
+
     /// The native request and Quarm's `ReadBook` handler share `EQMac`'s layout.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::reading())
@@ -2055,6 +2062,13 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// The `EQMac` program answers an inspection itself, with its worn
+    /// items; the server passes it on unread (6.621, source-derived: TAKP
+    /// 44afcbf and Quarm fc75fcf `Client::Handle_OP_InspectAnswer`).
+    fn dialogs(&self) -> Provided {
+        offer(Box::<super::inspect_answer::MacInspectAnswer>::default())
+    }
+
     /// TAKP answers a kind and server-owned text, without a window byte.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::reading())
@@ -2873,11 +2887,11 @@ mod tests {
         // sacrifice answers (6.596), training (6.597), tradeskills and
         // world containers (6.598), `/disc` and `/shield` (6.603), and emotes,
         // yells, buff cancels, book edits, surnames, petitions and bug reports
-        // (6.604). Other
-        // features await their own evidence.
+        // (6.604), and inspection answers from the program's own reply
+        // (6.621). Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 35);
+        assert_eq!(quarm.features(&setup).len(), 36);
         assert_eq!(
             offers(quarm),
             [
@@ -2930,10 +2944,11 @@ mod tests {
                 Capability::Shielding,
                 Capability::BazaarSearching,
                 Capability::DisciplineReuse,
+                Capability::InspectAnswer,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 37);
+        assert_eq!(takp.features(&setup).len(), 38);
         // TAKP offers what Quarm does, and the bleed-out report after the
         // environmental damage.
         let mut expected = offers(quarm);
