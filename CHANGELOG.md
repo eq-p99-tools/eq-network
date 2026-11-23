@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- List what RoF2's stages read in a coverage table of its own (6.508), so
+  the gap log no longer tells the login replies, the character list, the
+  world's entry and handoff, and the zone's description, profile, own
+  spawn and objects as unlisted. The description, profile and own spawn
+  are listed as partly read, naming what the entry leaves unread. Every
+  other RoF2 message stays unlisted. Nothing new is read.
 - Read RoF2's player profile and own spawn as stock `EQEmu` writes them,
   labelled inferred for RoF2 (6.502): `eq_network_game::rof2_player`
   walks each serialised stream whole, refusing any count but the

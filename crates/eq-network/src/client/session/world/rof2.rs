@@ -43,6 +43,15 @@ const POST_ENTER_WORLD: u16 = 0x6259;
 const ZONE_SERVER: u16 = 0x4c44;
 /// `OP_ZoneUnavail` (inferred, 6.499).
 const ZONE_UNAVAILABLE: u16 = 0x4cb4;
+/// What `RoF2`'s world stage reads, for the coverage table's test.
+#[cfg(test)]
+pub(in crate::client::session) const READS: [u16; 5] = [
+    characters::ROF2_OPCODE,
+    ENTER_WORLD,
+    POST_ENTER_WORLD,
+    ZONE_SERVER,
+    ZONE_UNAVAILABLE,
+];
 /// `RoF2`'s handoff: the zone server's address in a 128-byte field, then
 /// its port (`rof2_structs.h`, `ZoneServerInfo_Struct`; `rof2.cpp`,
 /// `ENCODE(OP_ZoneServerInfo)`; inferred, 6.499).
