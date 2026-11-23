@@ -1588,6 +1588,14 @@ pub enum WorldEvent {
     Channel(crate::chat_server::ChannelEvent),
     /// The chat server link came up or ended.
     ChannelLink(crate::chat_server::ChannelLink),
+    /// A chat line was not sent, and is not kept for later: the session's
+    /// pace for all chat held it (recording checklist 6.523).
+    ChatRefused {
+        /// Admission the line was asked in.
+        session_id: u64,
+        /// Why not, in this library's words, never the line itself.
+        reason: String,
+    },
     /// A chat channel command was not sent, and is not kept for later.
     ChatChannelRefused {
         /// Admission from the request.
