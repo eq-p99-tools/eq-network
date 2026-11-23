@@ -2149,14 +2149,14 @@ mod tests {
                 continue;
             }
             // Built and tested, and listed by no server type until each
-            // one's own live check: feedback (6.511f), AAs (6.556), the
-            // Bazaar's search (6.550a), browsing a trader (6.558a), and the
-            // bandolier's sets and belt (6.564), its swap (6.566) and belt
-            // use (6.568).
+            // one's own live check: feedback (6.511f), the Bazaar's search
+            // (6.550a), browsing a trader (6.558a), and the bandolier's sets
+            // and belt (6.564), its swap (6.566) and belt use (6.568). AAs
+            // are listed on local EQEmu (6.581), so they take the owner
+            // check below.
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
                     crate::world::Capability::SendingFeedback,
-                    crate::world::Capability::AlternateAdvancement,
                     crate::world::Capability::BazaarSearching,
                     crate::world::Capability::BazaarBrowsing,
                     crate::world::Capability::Bandoliers,

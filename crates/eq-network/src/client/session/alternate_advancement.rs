@@ -179,8 +179,9 @@ struct Training {
 pub(super) struct AlternateAdvancement {
     staged: Vec<Update>,
     overflowed: bool,
-    /// Whether the session lists Titanium's AA requests. No server type
-    /// does until their local `EQEmu` live row (6.556).
+    /// Whether the session lists the AA requests. Only local `EQEmu` and
+    /// local TAKP sessions do, until their live rows pass (6.556, 6.562;
+    /// checklist 6.581).
     sends: bool,
     view: View,
     training: Option<Training>,
@@ -189,6 +190,17 @@ pub(super) struct AlternateAdvancement {
 }
 
 impl AlternateAdvancement {
+    /// The feature with its requests listed: offered only to local
+    /// sessions, behind the same gate as the facts (checklist 6.581).
+    /// On the Mac client only the split goes; Train and Activate stay
+    /// refused until the client's AA data (R49-41b).
+    pub(super) fn listed() -> Self {
+        Self {
+            sends: true,
+            ..Self::default()
+        }
+    }
+
     fn publish(
         &mut self,
         updates: Vec<Update>,
@@ -640,10 +652,7 @@ mod tests {
         player.level = 51;
         player.class = Some(12);
         world.player.admit(player);
-        let mut feature = AlternateAdvancement {
-            sends: true,
-            ..AlternateAdvancement::default()
-        };
+        let mut feature = AlternateAdvancement::listed();
         for update in facts {
             feature
                 .admit(&Message::AlternateAdvancement(update.clone()), &mut world)
@@ -718,10 +727,16 @@ mod tests {
     }
 
     #[test]
-    fn the_sends_are_listed_by_no_server_type_yet() {
+    fn only_the_listed_feature_lists_and_owns_the_sends() {
         let feature = AlternateAdvancement::default();
         assert_eq!(feature.capabilities(), Vec::new());
         assert!(!feature.owns(&train(11)));
+        let listed = AlternateAdvancement::listed();
+        assert_eq!(
+            listed.capabilities(),
+            vec![crate::world::Capability::AlternateAdvancement]
+        );
+        assert!(listed.owns(&train(11)));
     }
 
     #[test]

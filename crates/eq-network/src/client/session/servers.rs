@@ -1317,11 +1317,15 @@ impl ServerType for EqEmu {
         true
     }
 
-    /// Local only until #310's local live row passes; then a one-line
-    /// follow-up offers it on every stock `EQEmu` session (checklist 6.547).
+    /// The AA facts and requests, local only until the local live rows
+    /// pass (6.547, 6.556); then a one-line follow-up offers them on every
+    /// stock `EQEmu` session. The requests share the facts' gate
+    /// (checklist 6.581).
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
-            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+            offer(Box::new(
+                super::alternate_advancement::AlternateAdvancement::listed(),
+            ))
         } else {
             None
         }
@@ -1885,11 +1889,15 @@ impl ServerType for Takp {
     }
 
     /// TAKP's AA ranks, points, experience and timers (checklist 6.548),
-    /// local only until a local TAKP row passes. Quarm shares the decoding
-    /// "assumed as TAKP" but isn't offered it until its own attended row.
+    /// and the split request (6.562), local only until a local TAKP row
+    /// passes; Train and Activate stay refused on the Mac client until
+    /// R49-41b (checklist 6.581). Quarm shares the decoding "assumed as
+    /// TAKP" but isn't offered it until its own attended row.
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
-            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+            offer(Box::new(
+                super::alternate_advancement::AlternateAdvancement::listed(),
+            ))
         } else {
             None
         }
@@ -2163,8 +2171,9 @@ mod tests {
         ] {
             assert!(server_type(protocol).environmental_aa(&setup).is_none());
         }
-        // The AA requests wait for their own local EQEmu live row (6.556):
-        // no server type lists them, local or not.
+        // The AA requests share the facts' gate (6.581): listed only on
+        // local `EQEmu` and local TAKP, never on public sessions, P99,
+        // Quarm or RoF2, local or not.
         for local_only in [false, true] {
             setup.local_only = local_only;
             for protocol in [
@@ -2174,11 +2183,14 @@ mod tests {
                 ServerProtocol::Quarm,
                 ServerProtocol::EqEmuRof2,
             ] {
-                assert!(!server_type(protocol)
+                let lists = server_type(protocol)
                     .features(&setup)
                     .iter()
                     .flat_map(|provided| provided.feature.capabilities())
-                    .any(|capability| capability == Capability::AlternateAdvancement));
+                    .any(|capability| capability == Capability::AlternateAdvancement);
+                let expected =
+                    local_only && matches!(protocol, ServerProtocol::EqEmu | ServerProtocol::Takp);
+                assert_eq!(lists, expected, "{protocol:?} local {local_only}");
             }
         }
     }

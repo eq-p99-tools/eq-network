@@ -5,6 +5,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- List the AA requests on local sessions only (6.581): a local stock
+  `EQEmu` session and a local TAKP session now offer
+  `Capability::AlternateAdvancement`, under the same local-only gate as
+  the AA facts, so the live rows 6.556 and 6.562 can run. Public `EQEmu`,
+  P99, Quarm and RoF2 still list it nowhere, local or not. On TAKP only
+  the split goes; Train and Activate stay refused until read R49-41b.
+
 - Offer Quarm giving and trading, groups, anonymous and roleplaying, and
   translocate answers (6.576), each from Quarm's own handlers at
   SecretsOTheP/EQMacEmu fc75fcf. Source-derived, not live. The encoders
