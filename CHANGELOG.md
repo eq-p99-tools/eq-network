@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Train languages on TAKP and Quarm as the `EQMac` program does (read
+  6.597, from TAKP 44afcbf and Quarm fc75fcf `IncreaseLanguageSkill`).
+  - New: `training::{LanguageLevels, EQMAC_TABLE_LANGUAGES,
+    EQMAC_TABLE_RACES, eqmac_language_trainable, eqmac_program_cost}` and
+    `ClientConfig::installed_language_levels`, the program's minimum-level
+    table a host reads from the installed program. No table values are
+    kept here; without one, language training stays shut.
+  - The offer lists the languages the player speaks; a practice runs the
+    program's gate in its order and refuses with its lines (0x327c to
+    0x327f, 0x2f21), sending nothing; a sent practice is resolved at once
+    as the program does, a prediction the next profile replaces.
+  - **Breaking:** `WorldEvent::TrainingRefused` gains `string_id` and
+    `arguments`.
+  - Source-derived, not live; the first public use is attended.
+
 - The chat server login and link follow the Titanium program (read R49-12 a,
   checklist 6.616).
   - **The login's bytes change on the wire:** after the key and its NUL
