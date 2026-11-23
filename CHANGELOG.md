@@ -5,6 +5,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The chat-channel link reads past the chat server's keep-alive: opcode 0 with nothing after it, which arrives with the transport's escaping 0 before it (a local look got its first 14 s after the login and dropped the link as unreadable). The one-byte stream now takes off that escaping 0, as the two-byte one does, and `chat_server::KEEP_ALIVE_OPCODE` is read as saying nothing.
+
 - The chat-channel link now tells the log why it ended (a diagnostic "Chat server link ended: ...": the connect failure, an unanswered login, the server's session end, a transport error, a silent server, or an unreadable message by opcode and length), never naming the address, key or mailbox. A local look found the link ending at once after the server took the login, with nothing logged to say why.
 
 - The chat-channel link logs in to a stock chat server: a chat server's stream carries its opcodes in one byte (`EQEmu`'s `ucs/clientlist.cpp`, `opcode_size = 1`), but the link used the zones' two-byte opcodes. So the server read the login's lead 0 as an empty mailbox, refused the key as the wrong size and dropped the link (local EQEmu look, checklist 6.616). `transport::Session::with_one_byte_opcodes` carries them in one byte both ways, and the chat link uses it, so the login goes as 0x01, 0, then the mailbox, as read R49-12 a gives the Titanium program's.

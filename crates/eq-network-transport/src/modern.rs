@@ -648,15 +648,19 @@ impl Session {
             }
             return Ok(());
         }
+        // A message that would start with 0 is sent with a 0 before it, so
+        // that it is not taken for a transport message; this holds whatever
+        // the opcode's width.
+        if bytes[0] == 0 {
+            bytes = &bytes[1..];
+        }
         if self.opcodes == OpcodeWidth::One {
+            ensure!(!bytes.is_empty(), "truncated escaped application opcode");
             self.applications.push_back(Application {
                 opcode: u16::from(bytes[0]),
                 body: bytes[1..].to_vec(),
             });
             return Ok(());
-        }
-        if bytes[0] == 0 {
-            bytes = &bytes[1..];
         }
         ensure!(bytes.len() >= 2, "truncated escaped application opcode");
         self.applications.push_back(Application {
@@ -848,6 +852,18 @@ mod tests {
         assert_eq!((first.opcode, first.body), (0x03, b"hi".to_vec()));
         let second = session.applications.pop_front().unwrap();
         assert_eq!((second.opcode, second.body), (0x06, Vec::new()));
+    }
+
+    #[test]
+    fn a_one_byte_stream_reads_an_escaped_opcode_0() {
+        // A chat server's keep-alive: opcode 0 with nothing after it, sent
+        // with the escaping 0 before it.
+        let (session, _peer) = session();
+        let mut session = session.with_one_byte_opcodes();
+        session.application(&[0, 0], 0).unwrap();
+        let read = session.applications.pop_front().unwrap();
+        assert_eq!((read.opcode, read.body), (0, Vec::new()));
+        assert!(session.application(&[0], 0).is_err());
     }
 
     #[test]
