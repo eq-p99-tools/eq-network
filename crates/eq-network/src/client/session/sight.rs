@@ -91,6 +91,14 @@ impl Sight {
         })
     }
 
+    /// Whether the spell binds (SPA 25), as far as the host's catalog
+    /// knows; see [`SightCatalog::bind_slot`].
+    pub(super) fn binds(&self, spell_id: u16) -> bool {
+        self.catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.bind_slot(u32::from(spell_id)).is_some())
+    }
+
     pub(super) fn changed(&mut self) -> Option<bool> {
         let visible = self.sees_invisible();
         (visible != std::mem::replace(&mut self.published, visible)).then_some(visible)

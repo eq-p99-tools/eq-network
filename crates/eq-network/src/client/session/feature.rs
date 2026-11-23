@@ -217,6 +217,10 @@ pub(in crate::client) struct World {
     pub(super) admitted: Option<Instant>,
     /// The zone's gravity from its header (`OP_NewZone` +420), once it came.
     pub(super) gravity: Option<f32>,
+    /// The zone's time type from its header (`OP_NewZone` +424), which the
+    /// Titanium program keeps at [0x923b88] as its zone type; 1, the
+    /// program's own default (0x443764, 0x4a51ee), until a header comes.
+    pub(super) time_type: u8,
     /// Application packets received in this zone session.
     pub(in crate::client) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
@@ -291,6 +295,7 @@ impl World {
             zone: (0, 0),
             admitted: None,
             gravity: None,
+            time_type: 1,
             packets: 0,
             spawns: Spawns::default(),
             lifts: eq_network_game::doors::titanium::Lifts::default(),

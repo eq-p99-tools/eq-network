@@ -71,4 +71,12 @@ pub trait SightCatalog: std::fmt::Debug + Send + Sync {
     fn grants_divine_aura(&self, _spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
         false
     }
+
+    /// Whether the spell binds, as Titanium SPA 25 (Bind Affinity), which
+    /// the spell-landing routine 0x414913 takes as the bind (read R49-22i):
+    /// the bind table slot, its base less 1, 0 outside 0 to 4. None, the
+    /// default, where the spell has no SPA 25 or the host does not know.
+    fn bind_slot(&self, _spell_id: u32) -> Option<u8> {
+        None
+    }
 }

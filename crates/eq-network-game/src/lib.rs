@@ -16,6 +16,8 @@ pub mod banker;
 pub mod bazaar;
 /// Binding wounds with bandages.
 pub mod bind_wound;
+/// What the Titanium program does when a bind spell lands on the player.
+pub mod binding;
 /// Received Titanium boat-control packets and conservative echo correlation.
 pub mod boats;
 /// Reading books and notes.

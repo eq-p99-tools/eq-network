@@ -13,7 +13,9 @@
 //! `/anonymous` (0xb), after their appearance update; the player closing a
 //! merchant's window (0x14, which window the program's site is, is
 //! inferred); and the server's `OP_LootComplete` or `OP_EndLootRequest`
-//! (0x15). The program's other sites wait on their reads (the plan's table).
+//! (0x15). Slice 2 adds a bind spell landing on the player (0x0e,
+//! [`bind_landing`]). The program's other sites wait on their reads (the
+//! plan's table).
 //!
 //! 0x4a1350 sends nothing when ([`withheld`]):
 //! - there is no own spawn, or it is not a player's (type 0): the player is
@@ -28,9 +30,18 @@
 //!
 //! Which server types take it is [`Gates::taken`]: stock `EQEmu` saves the
 //! character on any `OP_Save` and reads nothing in the body.
-use super::feature::{Out, World};
+use super::{
+    feature::{Out, World},
+    ClientEvent,
+};
 use anyhow::Result;
-use eq_network_game::{request::Request, zoning};
+use eq_network_game::{
+    binding::{self, Landing},
+    buffs::SpellEffect,
+    request::Request,
+    world::WorldEvent,
+    zoning,
+};
 
 /// What the event saves read beyond the world.
 #[derive(Clone, Copy, Debug, Default)]
@@ -89,6 +100,56 @@ pub(super) fn event(world: &World, reason: u8, out: &mut Out<'_, '_>) -> Result<
         vehicle: world.vehicle.clone(),
     };
     out.request(&Request::EventSave { save, reason })
+}
+
+/// What the Titanium program does as a spell takes hold on the player, when
+/// the host's catalog says the spell binds (SPA 25; reads R49-22i, R49-22j):
+/// [`binding::titanium_landing`] decides, then the save goes out where it
+/// says so and the server type takes it, or the host hears the refusal line.
+/// A landing on another spawn does nothing: the program writes only its own
+/// character's bind (read R49-22i).
+///
+/// The bind table the program writes changes nothing on the wire; the
+/// server keeps the bind and sends it (6.615 B3). The server's
+/// `OP_LogServer` words, which the "zone permits" term reads, reach the
+/// world session but not the zone's; they are taken as 0, stock `EQEmu`'s
+/// value (`enable_FV` and `enable_pvp` both 0), until they are carried
+/// here. The program's "local character" test (`local_378`) is unread and
+/// taken as true.
+pub(super) fn bind_landing(
+    world: &World,
+    effect: &SpellEffect,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    if world.own_spawn != Some(effect.target_id)
+        || !effect.took_hold()
+        || !world.sight.binds(effect.spell_id)
+    {
+        return Ok(());
+    }
+    let Some(position) = world.body.position() else {
+        return Ok(());
+    };
+    let caster_gm = world
+        .spawns
+        .get(effect.caster_id)
+        .is_some_and(|caster| caster.appearance.titanium_gm.is_some_and(|flag| flag != 0));
+    let bind = binding::Bind {
+        zone: world.zone.0,
+        position,
+        self_cast: effect.caster_id == effect.target_id,
+        caster_gm,
+        time_type: world.time_type,
+        server_permits: false,
+    };
+    match binding::titanium_landing(&bind) {
+        Landing::Saves => event(world, zoning::save_reason::BIND_LANDED, out),
+        Landing::Binds => Ok(()),
+        Landing::Refused(string_id) => out.log.send(ClientEvent::World(WorldEvent::BindRefused {
+            session_id: world.session_id,
+            string_id,
+        })),
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +347,171 @@ mod tests {
         assert_eq!(
             deliver(&mut looting, &mut world),
             [saved(&world, zoning::save_reason::LOOT_ENDED)]
+        );
+    }
+
+    /// A catalog in which spell 35 is a bind (SPA 25, base 1) and no other.
+    #[derive(Debug)]
+    struct Binds;
+
+    impl eq_network_game::vision::SightCatalog for Binds {
+        fn sees_invisible(&self, _spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
+            false
+        }
+
+        fn bind_slot(&self, spell_id: u32) -> Option<u8> {
+            (spell_id == 35).then_some(0)
+        }
+    }
+
+    /// Player 7 standing in an original-era zone with no bind areas, on a
+    /// server of this type, with the bind catalog.
+    fn binding(protocol: ServerProtocol) -> World {
+        let mut world = standing(protocol);
+        world.zone = (2, 0);
+        world.time_type = 0;
+        world.sight = super::super::sight::Sight::new(Some(std::sync::Arc::new(Binds)));
+        world
+    }
+
+    fn landing(spell_id: u16, caster_id: u16, target_id: u16) -> SpellEffect {
+        SpellEffect {
+            target_id,
+            caster_id,
+            caster_level: 50,
+            instrument_modifier: 10,
+            spell_id,
+            spell_level: 0,
+            effect_flag: eq_network_game::buffs::TOOK_HOLD,
+            push: None,
+        }
+    }
+
+    /// What the landing sends, and the world events the host hears.
+    fn lands(world: &World, effect: &SpellEffect) -> (Vec<EncodedCommand>, Vec<WorldEvent>) {
+        let outcome = testing::run(|out| bind_landing(world, effect, out));
+        outcome.result.unwrap();
+        let heard = outcome
+            .events
+            .into_iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(event) => Some(event),
+                _ => None,
+            })
+            .collect();
+        (outcome.sent, heard)
+    }
+
+    fn refused(string_id: u32) -> WorldEvent {
+        WorldEvent::BindRefused {
+            session_id: 5,
+            string_id,
+        }
+    }
+
+    #[test]
+    fn a_self_bind_saves_with_reason_0x0e_from_where_the_player_is_now() {
+        let mut world = binding(ServerProtocol::EqEmu);
+        let profile = world.body.position().unwrap();
+        let moved = Position {
+            x: profile.x + 8.0,
+            ..profile
+        };
+        world.correct_own(moved, Instant::now()).unwrap();
+        let (sent, events) = lands(&world, &landing(35, 7, 7));
+        assert_eq!(sent, [saved(&world, zoning::save_reason::BIND_LANDED)]);
+        assert_eq!(sent[0].body[4], 0x0e);
+        assert_eq!(events, []);
+    }
+
+    #[test]
+    fn only_a_bind_that_took_hold_on_the_player_counts() {
+        let world = binding(ServerProtocol::EqEmu);
+        // Not a bind in the catalog.
+        assert_eq!(lands(&world, &landing(36, 7, 7)), (vec![], vec![]));
+        // On another spawn: the program writes only its own character's.
+        assert_eq!(lands(&world, &landing(35, 7, 9)), (vec![], vec![]));
+        // Not taking hold.
+        let mut effect = landing(35, 7, 7);
+        effect.effect_flag = 0;
+        assert_eq!(lands(&world, &effect), (vec![], vec![]));
+        // A catalog that doesn't know, the default, sends nothing.
+        let mut world = binding(ServerProtocol::EqEmu);
+        world.sight = super::super::sight::Sight::default();
+        assert_eq!(lands(&world, &landing(35, 7, 7)), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_no_bind_zone_says_0x69_and_a_later_era_zone_0x103() {
+        let mut world = binding(ServerProtocol::EqEmu);
+        world.zone = (202, 0);
+        assert_eq!(
+            lands(&world, &landing(35, 7, 7)),
+            (vec![], vec![refused(binding::NO_BIND_HERE)])
+        );
+        world.zone = (110, 0);
+        assert_eq!(
+            lands(&world, &landing(35, 7, 7)),
+            (vec![], vec![refused(binding::CANNOT_BIND_HERE)])
+        );
+        // The zone header's time type 1 lets it through.
+        world.time_type = 1;
+        assert_eq!(
+            lands(&world, &landing(35, 7, 7)).0,
+            [saved(&world, zoning::save_reason::BIND_LANDED)]
+        );
+    }
+
+    #[test]
+    fn someone_elses_bind_saves_only_from_a_gm() {
+        let mut world = binding(ServerProtocol::EqEmu);
+        world.spawns.insert(testing::spawn(9, SpawnKind::Player));
+        // Outside the areas and time types 2-4: the refusal.
+        assert_eq!(
+            lands(&world, &landing(35, 9, 7)),
+            (vec![], vec![refused(binding::CANNOT_BIND_HERE)])
+        );
+        // Time type 2 binds without a save.
+        world.time_type = 2;
+        assert_eq!(lands(&world, &landing(35, 9, 7)), (vec![], vec![]));
+        // A GM caster's bind saves.
+        world.time_type = 0;
+        let mut gm = testing::spawn(9, SpawnKind::Player);
+        gm.appearance.titanium_gm = Some(1);
+        world.spawns.insert(gm);
+        assert_eq!(
+            lands(&world, &landing(35, 9, 7)).0,
+            [saved(&world, zoning::save_reason::BIND_LANDED)]
+        );
+    }
+
+    #[test]
+    fn the_refusal_line_shows_on_every_titanium_server_but_the_save_only_where_taken() {
+        let world = binding(ServerProtocol::Project1999);
+        assert_eq!(lands(&world, &landing(35, 7, 7)), (vec![], vec![]));
+        let mut world = binding(ServerProtocol::Project1999);
+        world.zone = (110, 0);
+        assert_eq!(
+            lands(&world, &landing(35, 7, 7)),
+            (vec![], vec![refused(binding::CANNOT_BIND_HERE)])
+        );
+        // Dead, or with a merchant or trade open: the save is withheld.
+        let mut world = binding(ServerProtocol::EqEmu);
+        world.saves.merchant_open = true;
+        assert_eq!(lands(&world, &landing(35, 7, 7)).0, []);
+    }
+
+    #[test]
+    fn the_entities_feature_hears_the_landing() {
+        let mut world = binding(ServerProtocol::EqEmu);
+        let mut entities =
+            super::super::entities::Entities::new(eq_network_game::GameDialect::Titanium);
+        let message = Message::Event(WorldEvent::SpellEffect(landing(35, 7, 7)));
+        let outcome = testing::run(|out| entities.observe(&message, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [saved(&world, zoning::save_reason::BIND_LANDED)]
         );
     }
 }
