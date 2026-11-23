@@ -174,6 +174,7 @@ fn eqmac_abilities_admit_and_send_every_supported_action_without_claiming_succes
             let class = match ability {
                 Ability::Bash | Ability::Taunt => 1,
                 Ability::Backstab => 9,
+                Ability::Tracking => 4,
                 _ => 7,
             };
             let (mut features, mut world) = setup(protocol, class);
@@ -198,6 +199,44 @@ fn eqmac_abilities_admit_and_send_every_supported_action_without_claiming_succes
                         | WorldEvent::Appearance { .. }
                 )
             )));
+        }
+    }
+}
+
+/// A Ranger's Tracking press goes out empty, once; with a trade open, or
+/// for a class both servers would kick, nothing is sent (6.619).
+#[test]
+fn eqmac_tracking_presses_only_for_a_tracker_and_not_while_trading() {
+    use super::super::exchange::{Exchange, Exchanging, Stage};
+    use eq_network_game::exchange::Partner;
+    for protocol in SERVERS {
+        let (mut features, mut world) = setup(protocol, 4);
+        world.exchange = Exchanging::from(Exchange {
+            with: 42,
+            partner: Partner::Npc,
+            stage: Stage::Open,
+        });
+        refused(use_ability(
+            protocol,
+            &mut features,
+            &mut world,
+            Ability::Tracking,
+        ));
+        world.exchange = Exchanging::default();
+        let output = use_ability(protocol, &mut features, &mut world, Ability::Tracking);
+        assert!(output.result.unwrap());
+        assert_eq!(
+            output.sent,
+            [eqmac::encode(Ability::Tracking, None, 7).unwrap()]
+        );
+        for class in [1, 2, 3, 5, 7, 9, 10, 11, 12, 13, 14, 15] {
+            let (mut features, mut world) = setup(protocol, class);
+            refused(use_ability(
+                protocol,
+                &mut features,
+                &mut world,
+                Ability::Tracking,
+            ));
         }
     }
 }

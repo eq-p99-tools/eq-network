@@ -378,8 +378,14 @@ impl Ability {
             | Self::Begging
             | Self::SenseTraps
             | Self::DisarmTraps
-            | Self::PickLock
-            | Self::Tracking => 10_000,
+            | Self::PickLock => 10_000,
+            Self::Tracking => match dialect {
+                GameDialect::Titanium | GameDialect::Rof2 => 10_000,
+                // The Mac-era program's own: skill 0x35's reuse in its
+                // static skill table, ready again once more than 10,000 ms
+                // have passed (TAKP program read 10e).
+                GameDialect::EqMac => 10_000,
+            },
             Self::BindWound => match dialect {
                 GameDialect::Titanium => 11_000,
                 // Titanium's, inferred for RoF2 (6.489).
