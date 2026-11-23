@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read how RoF2's spawns look and how hurt they are, as stock `EQEmu` sends
+  them, labelled inferred for RoF2 (6.518). The new `rof2_looks` module
+  reads `OP_SpawnAppearance` (0x0971) through the reader every generation
+  shares, now with RoF2's dialect: invisibility reads as Titanium's values,
+  inferred, since the server sends both generations the same ones. It also
+  reads `OP_ChangeSize` (0x4707, the encoder's rewrite of a size
+  appearance), `OP_HPUpdate` (0x2828, the spawn id first), `OP_MobHealth`
+  (0x37b1), `OP_WearChange` (0x7994, its 32-bit material kept whole),
+  `OP_Animation` (0x7177, the action before the speed) and
+  `OP_PlayerStateAdd`/`Remove` (0x559a/0x2d25), each into the event
+  Titanium's reader gives, with the same refusals. One player-state reader
+  now takes the generation's opcode pair. The wear change's elite material,
+  hero's forge model and two unknown words are not read. Coverage lists the
+  eight as read by the zone decoder, and the rest stay unlisted. An admitted
+  RoF2 session still sends nothing and offers nothing.
 - A Warrior's `/shield` of another player (gap 3.6, checklist 6.517).
   `GameCommand::Shield` sends Titanium's 4-byte `OP_Shielding` (0x3fe6), the
   target's spawn id widened to 32 bits, as stock `EQEmu`'s

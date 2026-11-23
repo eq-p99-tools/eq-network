@@ -118,6 +118,17 @@ unreachable because validation refuses the generation:
   `OP_DeleteSpawn` gives the spawn id; its last byte is the encoder's constant. The delta
   heading and the vehicle id are not read. `OP_MobUpdate` and `OP_NPCMoveUpdate` stay unlisted,
   since stock `EQEmu` sends neither.
+- How its spawns look and how hurt they are (`rof2_looks`, 6.518): the appearance, through the
+  reader every generation shares with `RoF2`'s dialect (its invisibility values read as
+  Titanium's, inferred; kind 20 through the `/who` listing as everywhere); `OP_ChangeSize`, the
+  encoder's rewrite of a size appearance; the player's own hit points with the spawn id first;
+  the health percent; the wear change with its 32-bit material; the animation with the action
+  before the speed (Titanium's speed scale, inferred); and the player states, through the shared
+  reader with `RoF2`'s opcode pair. Each keeps the refusals of Titanium's reader for the same
+  values. What the `RoF2` program does with the invisibility values, the appearance kinds, the
+  elite material and hero's forge model, the size message's constants and the animation speed
+  is a read still owed. `OP_Illusion`, mana, endurance, death, damage and consider stay
+  unlisted.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

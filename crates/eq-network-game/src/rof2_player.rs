@@ -15,8 +15,8 @@
 //! the zone's spawns (`EntityList::SendZoneSpawnsBulk` in `zone/entity.cpp`
 //! fills a bulk packet, whose encoder writes one record per spawn) and each
 //! later one. One walker reads them all
-//! ([`spawn`](crate::rof2_player::spawn)); the own spawn is a player's
-//! record ([`player`](crate::rof2_player::player)).
+//! ([`spawn`]); the own spawn is a player's
+//! record ([`player`]).
 //!
 //! What the `RoF2` program reads from each field is not read yet (6.502,
 //! 6.510). That includes whether it checks the profile's checksum, gems 9 to
