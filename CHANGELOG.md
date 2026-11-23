@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read `EQMac`'s alternate advancement on local TAKP, read only (6.548):
+  `OP_RespondAA` (0x1542) by Mac AA id, the profile's AA array and points,
+  `OP_AAExpUpdate` (0x2342) and the server's reuse timers on `OP_AAAction`
+  (0x1442), from TAKP's layouts. The first byte of the ranks is labelled
+  the points spent and id 211's constant 3 is passed through, both
+  inferred from TAKP's use. Quarm shares the decoding, assumed as TAKP, and
+  isn't offered it until an attended Quarm row; remote TAKP waits for the
+  local row. `EQMac` servers send no definitions, so nothing new enters the
+  environmental sums.
+
+  **Breaking** (for the client repin): `alternate_advancement::Update` gains
+  `MacRanks(Option<MacRanks>)`, `MacSelections(Option<Vec<MacRank>>)`,
+  `MacPoints(Option<MacPoints>)`, `MacProgress(Option<MacProgress>)` and
+  `MacTimer(MacTimer)`, with those structs.
+
 - Read RoF2's quest rewards and their sound, renames, the new titles
   notice and the banker's change as stock `EQEmu` sends them, labelled
   inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`

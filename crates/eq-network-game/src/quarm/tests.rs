@@ -656,6 +656,10 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
             Message::Event(WorldEvent::Nourishment(_)),
             Message::Bind(bind),
             Message::Event(WorldEvent::BoundIn { zone_id }),
+            Message::AlternateAdvancement(crate::alternate_advancement::Update::MacSelections(
+                Some(_)
+            )),
+            Message::AlternateAdvancement(crate::alternate_advancement::Update::MacPoints(Some(_))),
         ] if *zone_id == bind.zone_id
             && buffs.iter().all(Option::is_none)
             && book.slots().iter().all(Option::is_none)

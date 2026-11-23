@@ -1,5 +1,6 @@
-//! Admission-scoped, read-only AA facts for local `EQEmu`: selections,
-//! definitions, points, AA experience and reuse timers (checklist 6.547).
+//! Admission-scoped, read-only AA facts for local `EQEmu` (selections,
+//! definitions, points, AA experience and reuse timers, checklist 6.547) and
+//! local TAKP (ranks, points, AA experience and timers, 6.548).
 use super::{
     feature::{Feature, Out, World},
     ClientEvent,
@@ -8,6 +9,18 @@ use anyhow::Result;
 use eq_network_game::{alternate_advancement::Update, message::Message, world::WorldEvent};
 
 const MAX_STAGED: usize = 4096;
+/// What an overflow stages in place of the lost facts: every staged kind of
+/// either generation is withdrawn, points and experience too.
+const OVERFLOW: [Update; 8] = [
+    Update::Selections(None),
+    Update::DefinitionsUnknown,
+    Update::Points(None),
+    Update::Progress(None),
+    Update::MacRanks(None),
+    Update::MacSelections(None),
+    Update::MacPoints(None),
+    Update::MacProgress(None),
+];
 
 #[derive(Default)]
 pub(super) struct AlternateAdvancement {
@@ -31,13 +44,7 @@ impl Feature for AlternateAdvancement {
         if let Message::AlternateAdvancement(update) = message {
             if self.staged.len() == MAX_STAGED {
                 self.staged.clear();
-                // Every staged kind is withdrawn: points and experience too.
-                self.staged.extend([
-                    Update::Selections(None),
-                    Update::DefinitionsUnknown,
-                    Update::Points(None),
-                    Update::Progress(None),
-                ]);
+                self.staged.extend(OVERFLOW);
                 self.overflowed = true;
             } else if !self.overflowed {
                 self.staged.push(update.clone());
@@ -221,16 +228,7 @@ mod tests {
             }
             let outcome = testing::run(|out| feature.admitted(&mut world, out));
             outcome.result.unwrap();
-            let expected = if overflow {
-                vec![
-                    Update::Selections(None),
-                    Update::DefinitionsUnknown,
-                    Update::Points(None),
-                    Update::Progress(None),
-                ]
-            } else {
-                facts
-            };
+            let expected = if overflow { OVERFLOW.to_vec() } else { facts };
             assert!(matches!(outcome.events.as_slice(), [
                 ClientEvent::World(WorldEvent::AlternateAdvancement { session_id: 5, updates }),
             ] if updates == &expected));
