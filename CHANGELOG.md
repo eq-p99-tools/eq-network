@@ -74,6 +74,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   need `tongue`; the JSON of every channel message gains `language` and
   `language_skill`.
 
+- Answer another player's challenge to a duel. On stock `EQEmu` a challenge
+  now also comes as `WorldEvent::DuelOffer` (`socials::DuelQuestion`, with an
+  admission-scoped `ConsentId` of the new `ConsentKind::Duel`), and
+  `GameCommand::AnswerDuel` sends the player's yes (`OP_DuelAccept`) or no
+  (`OP_DuelDecline` 0x3bad) as `Client::Handle_OP_DuelAccept` and
+  `Handle_OP_DuelDecline` read them: the challenger, then the player. The
+  question has no local deadline; zoning, death, logout, a newer challenge,
+  the duel's start and the challenger's refusal close it as interrupted.
+  `EQMac` encoders for TAKP and Quarm (`OP_RequestDuel` then `OP_DuelAccept`
+  for a yes, `OP_DuelResponse` for a no) are built and tested but no server
+  type lists them yet; P99, TAKP and Quarm wait for live checks. The field
+  order the official programs write is inferred (checklist 6.492). New
+  `Capability::Dueling`, `Request::AnswerDuel`, `Request::DuelRequest` and
+  `WorldEvent::DuelRefused`. **Breaking:** the new variants on
+  `ConsentKind`, `Capability`, `GameCommand`, `Request` and `WorldEvent`.
+
 - Add RoF2 as a placeholder client generation and server type, so each
   decision a third generation needs has an answer before any of it is built.
   `GameDialect::Rof2` and `ServerProtocol::EqEmuRof2` (stock `EQEmu` with the

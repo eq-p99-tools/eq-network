@@ -914,7 +914,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 115;
+    const KINDS: usize = 116;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1020,6 +1020,7 @@ mod tests {
             ClientCommand::BledOut { .. } => 67,
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
+            ClientCommand::AnswerDuel { .. } => 115,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1464,6 +1465,15 @@ mod tests {
                 offer_id: eq_network_game::confirmations::ConsentId {
                     session_id,
                     kind: eq_network_game::confirmations::ConsentKind::Translocate,
+                    sequence: 1,
+                },
+                accept: true,
+            },
+            ClientCommand::AnswerDuel {
+                session_id,
+                offer_id: eq_network_game::confirmations::ConsentId {
+                    session_id,
+                    kind: eq_network_game::confirmations::ConsentKind::Duel,
                     sequence: 1,
                 },
                 accept: true,
