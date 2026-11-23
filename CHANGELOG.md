@@ -19,7 +19,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the jump's crouch posture reports while a feign is held. The jump
     request alone clears no feign on EQEmu (1d9cb5c), Quarm (fc75fcf) or
     TAKP (44afcbf).
+  - `FeignHeld(true)` means pressed or landed and held, not that the roll
+    succeeded: after a failed feign it stays true until the next posture,
+    and a standing-still jump in that window skips its crouch reports too
+    (row 6.599a).
   - **Breaking:** `WorldEvent` gains `FeignHeld(bool)`.
+
 - Read TAKP's and Quarm's boat control (6.602), from their own
   `Handle_OP_ControlBoat` (Quarm fc75fcf, TAKP 44afcbf). Neither server type
   offers `BoatControl` or `BoatRiding` yet: both wait for the `EQMac`
