@@ -106,7 +106,7 @@ impl Transfers {
         );
         ensure!(world.zone.0 != 0, "zone identity is unavailable");
         let crossing = self.points.crossing(destination, *position, world.zone)?;
-        if matches!(crossing, zoning::BoundaryRoute::SameZone(_)) && !world.local_eqemu() {
+        if matches!(crossing, zoning::BoundaryRoute::SameZone(_)) {
             let boundaries = world
                 .pad_boundaries
                 .as_ref()
@@ -388,12 +388,6 @@ impl Feature for Transfers {
         };
         match self.zone_line(command, world) {
             Ok(zoning::BoundaryRoute::Transfer(offer)) => Self::start(offer, world, out)?,
-            Ok(zoning::BoundaryRoute::SameZone(_)) if world.local_eqemu() => {
-                out.log
-                    .send(ClientEvent::World(WorldEvent::SameZoneBoundary {
-                        session_id: *session_id,
-                    }))?;
-            }
             Ok(zoning::BoundaryRoute::SameZone(pad)) => {
                 let player = world
                     .player
@@ -562,7 +556,7 @@ mod tests {
     use eq_network_game::movement::{DiagonalRates, MotionSession};
 
     #[test]
-    fn local_eqemu_boundary_waits_for_a_server_instruction() {
+    fn a_server_move_within_the_zone_keeps_its_wire_values() {
         use crate::client::{ClientConfig, ServerProtocol};
         let mut config = ClientConfig::new("Example", "Example", "Example", "Tester");
         config.local_only = true;
@@ -581,26 +575,6 @@ mod tests {
         world.zone = (2, 0);
         world.admitted = Some(Instant::now());
         let mut transfers = Transfers::new("Tester", Home::Offered);
-
-        let cross = ClientCommand::CrossZoneLine {
-            session_id: 5,
-            destination: zoning::ZoneLineDestination::Absolute {
-                zone_id: 2,
-                position: Position::default(),
-            },
-            position: here,
-            created: Instant::now(),
-        };
-        let trigger = testing::run(|out| transfers.handle(&cross, &mut world, out));
-        trigger.result.unwrap();
-        assert_eq!(trigger.sent, []);
-        assert!(matches!(
-            trigger.events.as_slice(),
-            [ClientEvent::World(WorldEvent::SameZoneBoundary {
-                session_id: 5
-            })]
-        ));
-        assert_eq!(world.body.position(), Some(here));
 
         // These finite values happen to equal the separate zone-point
         // sentinels. The explicit move must preserve their wire meaning.
@@ -632,12 +606,84 @@ mod tests {
         assert!(world.lifecycle.pending().is_none());
     }
 
+    /// The Mac programs' and `RoF2`'s same-zone lines are unread: they stay
+    /// refused, as before 6.640.
     #[test]
+    fn mac_and_rof2_same_zone_lines_stay_refused() {
+        use crate::client::{ClientConfig, ServerProtocol};
+        for protocol in [
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            let mut config = ClientConfig::new("Example", "Example", "Example", "Tester");
+            config.protocol = protocol;
+            let here = Position {
+                x: 12.0,
+                y: -4.0,
+                z: 3.0,
+                heading: 64.0,
+            };
+            let mut world = World::for_zone(5, &config);
+            world
+                .body
+                .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+            world.player.admit(testing::player(7));
+            world.zone = (2, 0);
+            world.admitted = Some(Instant::now());
+            let mut transfers = Transfers::new("Tester", Home::Offered);
+            let cross = ClientCommand::CrossZoneLine {
+                session_id: 5,
+                destination: zoning::ZoneLineDestination::Absolute {
+                    zone_id: 2,
+                    position: Position::default(),
+                },
+                position: here,
+                created: Instant::now(),
+            };
+            let trigger = testing::run(|out| transfers.handle(&cross, &mut world, out));
+            trigger.result.unwrap();
+            assert_eq!(trigger.sent, [], "{protocol:?}");
+            assert!(
+                matches!(
+                    trigger.events.as_slice(),
+                    [ClientEvent::World(WorldEvent::ZoneLineRejected {
+                        session_id: 5,
+                        ..
+                    })]
+                ),
+                "{protocol:?}"
+            );
+            assert_eq!(world.body.position(), Some(here));
+        }
+    }
+
+    #[test]
+    fn p99_pad_checks_installed_entry_and_submits_only_ordinary_positions() {
+        same_zone_line_checks_installed_entry_and_lands_locally(
+            crate::client::ServerProtocol::Project1999,
+            false,
+        );
+    }
+
+    /// Titanium's 0x48aaa6 places the player itself on any server (read
+    /// same-zone zone line, 6.640), local `EQEmu` included.
+    #[test]
+    fn a_local_eqemu_same_zone_line_lands_locally_as_the_program_does() {
+        same_zone_line_checks_installed_entry_and_lands_locally(
+            crate::client::ServerProtocol::EqEmu,
+            true,
+        );
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "Keeps the pad route, gate and packet assertions together"
     )]
-    fn p99_pad_checks_installed_entry_and_submits_only_ordinary_positions() {
+    fn same_zone_line_checks_installed_entry_and_lands_locally(
+        protocol: crate::client::ServerProtocol,
+        local_only: bool,
+    ) {
         use crate::client::{ClientConfig, InstalledZoneBoundaries};
         use eq_network_game::movement::{
             MotionCalibration, MovementMode, MovementRequest, UpdateGate, POSITION_OPCODE,
@@ -675,6 +721,8 @@ mod tests {
             ..entry
         };
         let mut config = ClientConfig::new("Example", "Example", "Example", "Tester");
+        config.protocol = protocol;
+        config.local_only = local_only;
         config.installed_zone_boundaries =
             Some(std::sync::Arc::new(Boundaries { from, to: entry }));
         let mut world = World::for_zone(5, &config);

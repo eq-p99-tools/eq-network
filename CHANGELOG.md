@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Breaking:** A same-zone zone line places the player locally on stock
+  EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
+  program's 0x48aaa6 sends one position record and lands the player itself,
+  with no 0x5dd8 and no wait, on any server). `WorldEvent::SameZoneBoundary`
+  is removed: nothing waits for the server to move the player any more, and
+  exhaustive matches drop its arm. The EQEmu profile now takes the host's
+  `InstalledZoneBoundaries`. Quarm, TAKP and RoF2 are unread and still refuse
+  a same-zone line, as before.
 - P99's expansion list is read: its `OP_ExpansionInfo` body is 46 bytes (capture-derived: the mask first, then bytes that differ per session and zeros), and `rules::expansions` refused any body but 4 bytes, so P99's mask was dropped. It now takes the first word from a 4- or 46-byte body (`rules::P99_EXPANSIONS_LENGTH`) and leaves the rest unread. P99 recordings give 0x3 (Kunark and Velious), so `WorldEvent::Expansions` now reaches P99 sessions too.
 
 - TAKP and Quarm keep a duel as the `EQMac` program does (checklist 6.622;
