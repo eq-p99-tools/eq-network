@@ -20,6 +20,10 @@ use anyhow::{ensure, Result};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
+/// The server's keep-alive to an idle connection: opcode 0 with nothing
+/// after it. A local `EQEmu` link got its first 14 s after the login [I: the
+/// name and interval]. It says nothing, and the link reads past it.
+pub const KEEP_ALIVE_OPCODE: u16 = 0x00;
 /// `OP_MailLogin`: the client's login, and the server's list of mailboxes.
 pub const LOGIN_OPCODE: u16 = 0x01;
 /// `OP_Mail`: a command from the client as text; from the server, the
@@ -259,7 +263,7 @@ pub fn read(opcode: u16, body: &[u8]) -> Result<Option<ChannelEvent>> {
                 ChannelEvent::MemberLeft { channel, name }
             }
         }
-        LOGIN_OPCODE | BUDDY_OPCODE | IGNORE_OPCODE => return Ok(None),
+        KEEP_ALIVE_OPCODE | LOGIN_OPCODE | BUDDY_OPCODE | IGNORE_OPCODE => return Ok(None),
         opcode if MAIL_OPCODES.contains(&opcode) => return Ok(None),
         _ => anyhow::bail!("a chat server opcode {opcode:#06x} is not one it sends"),
     };
@@ -447,6 +451,7 @@ mod tests {
         for opcode in [LOGIN_OPCODE, BUDDY_OPCODE, IGNORE_OPCODE, 0x0d, 0x14] {
             assert_eq!(read(opcode, &[1, 0, 0, 0]).unwrap(), None);
         }
+        assert_eq!(read(KEEP_ALIVE_OPCODE, &[]).unwrap(), None);
         assert!(read(0x30, &[]).is_err());
     }
 

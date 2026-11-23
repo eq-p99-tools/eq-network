@@ -487,6 +487,11 @@ fn heard(
     packet: &eq_network_transport::Application,
     up: &mut bool,
 ) -> Result<(), String> {
+    if packet.opcode == chat_server::KEEP_ALIVE_OPCODE {
+        // The server's keep-alive: it counts as a word from the server, as
+        // anything the transport takes does, and says nothing more.
+        return Ok(());
+    }
     let mut inbound = inbound.lock().unwrap_or_else(PoisonError::into_inner);
     if packet.opcode == chat_server::LOGIN_OPCODE {
         // The server's mailboxes answer a login it took.
@@ -854,6 +859,19 @@ mod tests {
         link.close();
         assert!(!link.running());
         assert!(!link.opened());
+    }
+
+    #[test]
+    fn the_servers_keep_alive_keeps_the_link_and_tells_nothing() {
+        let inbound = Mutex::new(Inbound::default());
+        let mut up = true;
+        let keep_alive = Application {
+            opcode: chat_server::KEEP_ALIVE_OPCODE,
+            body: Vec::new(),
+        };
+        assert_eq!(heard(&inbound, &keep_alive, &mut up), Ok(()));
+        assert!(up);
+        assert!(inbound.lock().unwrap().news.is_empty());
     }
 
     #[test]
