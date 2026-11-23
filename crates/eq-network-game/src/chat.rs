@@ -406,6 +406,10 @@ enum CommunicationOpcode {
     MultiLineMessage,
     SpellText,
     SpellTextStringId,
+    /// `EQMac`'s `OP_InterruptCast`, a line only when it says a discipline
+    /// is ready ([`crate::spells::DISCIPLINE_READY`]); the spells reader
+    /// takes every other.
+    DisciplineReady,
     Unknown(u16),
 }
 
@@ -434,6 +438,7 @@ impl CommunicationOpcode {
                 0x1440 => Self::MultiLineMessage,
                 0xd341 => Self::SpellText,
                 0x4142 => Self::SpellTextStringId,
+                crate::spells::EQMAC_INTERRUPT_OPCODE => Self::DisciplineReady,
                 value => Self::Unknown(value),
             },
             // Stock `EQEmu`'s (`utils/patches/patch_RoF2.conf`; 6.521).
@@ -1144,6 +1149,18 @@ pub fn parse_for(
         CommunicationOpcode::SpellTextStringId => {
             eqmac_spell_text_by_number(opcode, body, include_raw)?
         }
+        CommunicationOpcode::DisciplineReady => {
+            // A malformed body is the spells reader's to log.
+            match crate::spells::eqmac_token(body) {
+                Ok((string_id, color)) if string_id == crate::spells::DISCIPLINE_READY => {
+                    let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
+                    event.string_id = Some(u32::from(string_id));
+                    event.message_type = Some(u32::from(color));
+                    event
+                }
+                _ => return Ok(None),
+            }
+        }
         CommunicationOpcode::Unknown(_) => return Ok(None),
     };
     Ok(Some(event))
@@ -1635,6 +1652,34 @@ mod tests {
         for opcode in [0x1440, 0xd341, 0x4142] {
             assert!(parse(opcode, &by_number, false).unwrap().is_none());
         }
+    }
+
+    #[test]
+    fn eqmac_discipline_ready_is_a_line_and_other_interruptions_are_not() {
+        let eqmac = |body: &[u8]| parse_for(GameDialect::EqMac, 0x3542, body, false);
+        // Quarm's four bytes and TAKP's six: string 393 in the color sent.
+        for body in [&[0x89, 0x01, 15, 0][..], &[0x89, 0x01, 15, 0, 0, 0]] {
+            let event = eqmac(body).unwrap().unwrap();
+            assert_eq!(event.channel_name, ChannelName::System);
+            assert_eq!(
+                (event.string_id, event.message_type, event.message.is_none()),
+                (Some(393), Some(15), true)
+            );
+        }
+        // A cast's interruption is the spells reader's, and a malformed
+        // body is its to log.
+        for body in [
+            &[173, 0, 13, 0][..],
+            &[173, 0, 13, 0, 0, 0],
+            &[0x89, 0x01, 15, 0, 1, 0],
+            &[0x89, 0x01, 15],
+        ] {
+            assert!(eqmac(body).unwrap().is_none());
+        }
+        // Titanium's 0x3542 is not this.
+        assert!(parse(0x3542, &[0x89, 0x01, 15, 0], false)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

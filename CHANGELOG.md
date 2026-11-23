@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Fix TAKP's cast interruptions (6.603 D0). Since 0802525, TAKP sends
+  `OP_InterruptCast` (0x3542) as a 6-byte `TokenText_Struct`, and the Mac
+  reader took only Quarm's 4 bytes, so every TAKP interruption was refused.
+  - Both lengths now read the same on both wires.
+  - A `fromWorld` other than 0 is refused and logged as not understood.
+  - New: `spells::{eqmac_token, DISCIPLINE_READY}`.
+  - The discipline-ready message (string 393) now reaches the host as a
+    chat line with the server's string number and color. Before, it was
+    dropped.
+
 - Read TAKP's and Quarm's boat control (6.602), from their own
   `Handle_OP_ControlBoat` (Quarm fc75fcf, TAKP 44afcbf). Neither server type
   offers `BoatControl` or `BoatRiding` yet: both wait for the `EQMac`
