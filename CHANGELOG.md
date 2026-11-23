@@ -8,8 +8,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Pace all chat a host asks for (6.523). Every `SendChat`,
   `SendChatInAdmission` and `ChatChannel` goes through one pace that spans
   zones: at most 10 lines in any 5 s, and at most 12 shout, auction,
-  out-of-character, tell and channel messages in any 60 s, below stock
-  `EQEmu`'s disconnect at more than 20 a minute. Both bounds are inferred
+  out-of-character, tell and channel messages and chat server commands in
+  any 60 s, below stock `EQEmu`'s disconnect at more than 20 a minute. Only
+  `join`, `leave`, `leaveall`, `list`, `listall` and `announce`, which reach
+  no one else, are left out of that count; an unknown word is counted. Both bounds are inferred
   (R49-17) and only ever make the client slower. A paced line is refused,
   not queued and not counted; zone chat is told by the new
   `WorldEvent::ChatRefused`, channel commands by `ChatChannelRefused`, with

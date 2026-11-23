@@ -127,7 +127,8 @@ Some capabilities depend on the session, not only on the server type:
   only when it is restricted to the local network.
 - `RaidGroupLeaders`: not offered by any server type yet.
 - `Talking`: all chat a host asks for is paced, at most 10 lines in any 5 s
-  and 12 shout, auction, out-of-character, tell and channel messages in any
+  and 12 shout, auction, out-of-character, tell, channel messages and chat
+  server commands but those that reach no one else in any
   60 s, on every server type. The numbers are inferred, and the pace is a
   departure that only makes the client slower; see "Chat pacing" in
   `API-CONTRACT.md`.

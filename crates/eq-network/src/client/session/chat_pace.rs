@@ -12,7 +12,8 @@
 //!
 //! - any chat: at most [`ANY_CHAT`] in any [`ANY_WINDOW`] (a five-line
 //!   social pressed twice goes; a loop does not);
-//! - shout, auction, out-of-character, tells and channel messages: at most
+//! - shout, auction, out-of-character, tells, channel messages and any
+//!   chat server command but those in [`REACHES_NO_ONE`]: at most
 //!   [`COUNTED_CHAT`] in any [`COUNTED_WINDOW`]. A sliding window bounds
 //!   every span of that length, so however the server's interval falls it
 //!   sees no more than 12, `EQEmu`'s most at full karma and below its kick.
@@ -65,19 +66,45 @@ impl Kind {
         }
     }
 
-    /// The kind of a chat server command: a message to a channel by its
-    /// number or its name, or another command.
+    /// The kind of a chat server command: [`Kind::Local`] only when its first
+    /// word is one of [`REACHES_NO_ONE`]. A message to a channel by its
+    /// number or its name, a command that reaches someone (`invite`,
+    /// `kick`, mail) and a word not listed are [`Kind::Counted`]: the
+    /// slower choice, since eq-network keeps no list of the commands a
+    /// host may send.
     pub(super) fn of_channel(text: &str) -> Self {
-        if text
-            .trim_start()
-            .starts_with(|first: char| first.is_ascii_digit() || first == '#')
+        let first = text.split_whitespace().next().unwrap_or_default();
+        if REACHES_NO_ONE
+            .iter()
+            .any(|(word, _)| first.eq_ignore_ascii_case(word))
         {
-            Self::Counted
-        } else {
             Self::Local
+        } else {
+            Self::Counted
         }
     }
 }
+
+/// The chat server commands that reach no one but the player, each with
+/// why; only these are [`Kind::Local`]. Anything else, `oplist` included
+/// until it is read, is counted.
+pub(super) const REACHES_NO_ONE: [(&str, &str); 6] = [
+    ("join", "puts the player on channels"),
+    ("leave", "takes the player off a channel"),
+    ("leaveall", "takes the player off every channel"),
+    (
+        "list",
+        "lists the player's channels or one's members, to the player",
+    ),
+    (
+        "listall",
+        "lists the server's public channels, to the player",
+    ),
+    (
+        "announce",
+        "turns the player's own join and leave lines on or off",
+    ),
+];
 
 /// A send the pace refused, and how long until one would go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,8 +309,17 @@ mod tests {
         }
         assert_eq!(Kind::of_channel("2 hello"), Kind::Counted);
         assert_eq!(Kind::of_channel("#name hello"), Kind::Counted);
-        assert_eq!(Kind::of_channel("join a, b"), Kind::Local);
-        assert_eq!(Kind::of_channel("list"), Kind::Local);
+        // A command that reaches a named person, and one not listed.
+        assert_eq!(Kind::of_channel("invite Someone test1"), Kind::Counted);
+        assert_eq!(Kind::of_channel("kick test1 Someone"), Kind::Counted);
+        assert_eq!(Kind::of_channel("mail Someone hi"), Kind::Counted);
+        assert_eq!(Kind::of_channel("oplist test1"), Kind::Counted);
+        assert_eq!(Kind::of_channel("joined"), Kind::Counted);
+        for (word, _) in REACHES_NO_ONE {
+            assert_eq!(Kind::of_channel(&format!("{word} test1")), Kind::Local);
+            assert_eq!(Kind::of_channel(&word.to_uppercase()), Kind::Local);
+        }
+        assert_eq!(Kind::of_channel("  join a, b"), Kind::Local);
     }
 
     #[test]

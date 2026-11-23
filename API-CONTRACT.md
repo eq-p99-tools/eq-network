@@ -172,7 +172,9 @@ on every zone channel and tells, and `ChatChannel` commands and messages on the 
 server link, whether typed, from a social or hotbutton, or from a script. It is the
 character's, so it spans zones. At most 10 lines of any chat go in any 5 s, and at most
 12 shout, auction, out-of-character, tell and channel messages (`2 hello`, `#name hello`)
-in any 60 s. Both windows slide, so any span of that length holds no more; stock
+and chat server commands in any 60 s; only `join`, `leave`, `leaveall`, `list`, `listall`
+and `announce`, which reach no one else, are left out of that count, and an unknown word
+is counted. Both windows slide, so any span of that length holds no more; stock
 `EQEmu` counts those kinds 4 to 12 a minute and disconnects a client past 20. The
 numbers are this library's, inferred until the official client's own chat pacing is
 read (recording checklist 6.523, R49-17); the official client has no known limiter, so
