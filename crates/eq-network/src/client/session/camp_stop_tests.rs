@@ -98,6 +98,7 @@ fn request(created: Instant, position: Position) -> ClientCommand {
         position,
         created,
         support: None,
+        vertical_speed: None,
     })
 }
 

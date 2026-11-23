@@ -2206,6 +2206,37 @@ ascent. The tracker expires as accepted samples pass the jump apex. It does
 not establish a landing. None represents a native movement
 rule, safe server threshold or detection guarantee.
 
+A sample's velocity fields carry the player's own velocity in the
+generation's wire scale (checklist 6.617). A swim stroke carries all three,
+as before. On land, `MovementRequest::vertical_speed` is the host's own
+vertical speed at the moment of the sample, in units a second with up
+positive: some while the host has the player in the air, and none on the
+ground and on the sample that lands. A rider's speed is its own and leaves
+out the boat. Where the generation sends it
+(`GameDialect::sends_airborne_speed`: Titanium, and RoF2 inferred), the
+session sends that speed. It is bounded up to the read jump's take-off speed
+(0 without a read jump) and down to the fall limit derived from the zone's
+gravity (`movement::fall_speed`), and a non-number is refused. With none
+given, the session sends 0.
+
+Titanium builds its update from the actor's own velocity fields
+(`eqgame.exe` 0x465244, read R49-27 (c)), and other clients' pickers draw the
+rise and the fall from that vertical speed (0x44fa8f). Capture-derived from
+kept official recordings: the field is the speed at the moment of each
+update (a jump sends +1.968, then -0.341 a tick, where the interval means
+were +0.994 and -0.497), and it is 0 on every grounded update and on the
+landing.
+
+Departures and unread cases:
+- **Bumpy ground:** the program also sends small values (-0.11 to -0.72 a
+  tick) while walking over bumpy ground. The session sends 0 there.
+- **Flight and levitation:** the session sends 0, unread.
+- **Mac era:** the program's field is unread, so the session keeps sending 0
+  on land.
+
+Sending 0 in the air was our departure until now, and the change applies on
+every Titanium server type, P99 included.
+
 `SetBookOptions { session_id, memorize_without_sitting }` is an explicit
 memorization departure: no automatic sitting and no local five-second
 preparation. Scribing retains its existing posture and delay. Spell ownership,
