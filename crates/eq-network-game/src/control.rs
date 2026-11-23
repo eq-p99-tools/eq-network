@@ -61,6 +61,12 @@ pub enum StunState {
 /// the session has from its entry, in 65 bytes.
 const EQMAC_FREEZE_LENGTH: usize = 65;
 
+/// The races whose charm the Titanium program ignores: its `OP_Charm` handler
+/// (eqgame.exe 0x453d7b) does nothing when the pet spawn's race is one of
+/// these (read R49-22a). The handler also ignores a pet whose byte +0x1b3 is
+/// set; which spawn field that is stays unread (row 22a-i).
+pub const CHARM_IGNORED_RACES: [u32; 3] = [0x6c, 0xd8, 0x1d8];
+
 /// A charm taking hold or ending, as the whole zone hears it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct Charm {

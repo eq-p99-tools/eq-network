@@ -495,6 +495,20 @@ duplicate spawn report of the same ID. Pass the latest identity in
 name the target; the session refuses an order whose identity or target no
 longer matches ("Your pet has changed") before anything is sent, and
 `SelectTarget::expected_pet` pins a pet-specific selection the same way.
+That guard is the session's own, not the program's, and it only ever refuses.
+An order with no pet (`pet: None` while the session knows of none) goes out:
+the program sends every `/pet` order without asking whether there is a pet
+(eqgame.exe 0x49975b, read R49-22a), and EQEmu's, Quarm's (fc75fcf) and
+TAKP's (44afcbf) handlers return in silence when there is none. The Mac
+program is inferred the same (6.610).
+
+The Titanium session ignores a `WorldEvent::Charm` whose pet spawn's race is
+in `control::CHARM_IGNORED_RACES` (108, 216 and 472), as the program's
+`OP_Charm` handler does (0x453d7b), and says so in a diagnostic. The handler
+also ignores a pet whose byte +0x1b3 is set; that field is unread (row
+22a-i). The handler prints no line and changes no target, and neither does
+the session. `EQMac` and RoF2 keep applying every charm until their
+programs are read.
 `PetCommand::GuardMe` is Titanium command 6. The Project 1999 provider
 selects the classic order set, which excludes Hold, Feign, NoCast and Focus.
 The EQEmu provider selects the expanded set. Local submission leaves

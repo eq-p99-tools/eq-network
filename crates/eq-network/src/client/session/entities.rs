@@ -7,6 +7,7 @@ use super::{
 };
 use anyhow::{ensure, Result};
 use eq_network_game::{
+    control::CHARM_IGNORED_RACES,
     message::Message,
     names::TitleChange,
     pets,
@@ -192,6 +193,25 @@ impl Entities {
     /// without naming anyone: a cast interruption (TAKP
     /// `Mob::InterruptSpell`) and a buff's fade
     /// (`Client::MakeBuffFadePacket`).
+    /// The race of a charm's pet when the program ignores that charm: the
+    /// Titanium program's `OP_Charm` handler does nothing for the races in
+    /// [`CHARM_IGNORED_RACES`] (read R49-22a). `EQMac`'s and `RoF2`'s are
+    /// unread, so they keep applying every charm.
+    fn ignored_charm(&self, event: &WorldEvent, world: &World) -> Option<u32> {
+        let WorldEvent::Charm(charm) = event else {
+            return None;
+        };
+        let applies = match self.dialect {
+            GameDialect::Titanium => true,
+            GameDialect::Rof2 | GameDialect::EqMac => false,
+        };
+        world
+            .spawns
+            .get(charm.pet_id)
+            .map(|spawn| spawn.race)
+            .filter(|race| applies && CHARM_IGNORED_RACES.contains(race))
+    }
+
     fn name_the_player(&self, event: &mut WorldEvent, world: &World) {
         let (GameDialect::EqMac, Some(own)) = (self.dialect, world.own_spawn) else {
             return;
@@ -271,7 +291,10 @@ impl Feature for Entities {
         let Message::Event(event) = message else {
             return Ok(());
         };
-        world.spawns.apply(event, world.own_spawn);
+        // Before admission there is no log; the charm is ignored all the same.
+        if self.ignored_charm(event, world).is_none() {
+            world.spawns.apply(event, world.own_spawn);
+        }
         let carriers = world
             .carriers
             .observe(event, self.dialect, std::time::Instant::now());
@@ -386,7 +409,13 @@ impl Feature for Entities {
         let Message::Event(event) = message else {
             return Ok(());
         };
-        world.spawns.apply(event, world.own_spawn);
+        if let Some(race) = self.ignored_charm(event, world) {
+            out.log.diagnostic(format!(
+                "Ignored a charm of a race-{race} spawn, as the program does (0x453d7b)"
+            ))?;
+        } else {
+            world.spawns.apply(event, world.own_spawn);
+        }
         let carriers = world
             .carriers
             .observe(event, self.dialect, std::time::Instant::now());
@@ -1083,6 +1112,53 @@ mod tests {
             explained(GameDialect::EqMac, &world, interrupted(0)),
             interrupted(0)
         );
+    }
+
+    /// The Titanium program ignores a charm of an eye, a horse or race 472
+    /// (0x453d7b, read R49-22a), and says so only in diagnostics; the Mac
+    /// program is unread, so its session keeps every charm.
+    #[test]
+    fn titanium_ignores_a_charm_of_the_races_its_program_ignores() {
+        use eq_network_game::control::Charm;
+        for (dialect, race, owned) in [
+            (GameDialect::Titanium, 1, true),
+            (GameDialect::Titanium, 0x6c, false),
+            (GameDialect::Titanium, 0xd8, false),
+            (GameDialect::Titanium, 0x1d8, false),
+            (GameDialect::EqMac, 0x6c, true),
+        ] {
+            let mut entities = Entities::new(dialect);
+            let mut world = World::new(5);
+            world.own_spawn = Some(7);
+            let mut pet = spawn(8, SpawnKind::Npc);
+            pet.race = race;
+            entities
+                .admit(
+                    &event(WorldEvent::Spawns(vec![spawn(7, SpawnKind::Player), pet])),
+                    &mut world,
+                )
+                .unwrap();
+            let charm = event(WorldEvent::Charm(Charm {
+                owner_id: Some(7),
+                pet_id: 8,
+                charmed: true,
+            }));
+            let outcome = testing::run(|out| entities.observe(&charm, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(
+                world.spawns.get(8).unwrap().pet_owner,
+                owned.then_some(7),
+                "{dialect:?} {race}"
+            );
+            assert_eq!(
+                outcome
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, ClientEvent::Diagnostic(_))),
+                !owned,
+                "{dialect:?} {race}"
+            );
+        }
     }
 
     #[test]
