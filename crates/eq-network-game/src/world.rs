@@ -1721,8 +1721,29 @@ pub enum WorldEvent {
     },
     /// The server's answer to a poison put on ([`crate::poisons`]): where it
     /// sat and whether it took. The server's own inventory record removes
-    /// it.
+    /// it. The program says 0x3269 when it took, else 0x326a, in colour
+    /// 0x10e (read R49-1 d).
     PoisonAnswered(crate::poisons::PoisonAnswer),
+    /// A poison started going on (read R49-1): the player sits for it, and
+    /// its request goes out when the program's wait ends. The host says
+    /// `string_id` (0x305e).
+    PoisonStarted {
+        /// Admission from the request.
+        session_id: u64,
+        /// Where the poison sits.
+        slot: crate::inventory::InventorySlot,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
+    /// A poison waiting to go out was stopped by a posture change before
+    /// its request went (read R49-1 d); nothing was sent. The host says
+    /// `string_id` (0x30d1), in colour 0x111 (read R49-1f).
+    PoisonInterrupted {
+        /// Admission from the request.
+        session_id: u64,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// What the chat server told about its channels
     /// ([`crate::chat_server`]).
     Channel(crate::chat_server::ChannelEvent),
@@ -1814,8 +1835,9 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
         /// The official client's own words for this refusal, as an
-        /// `eqstr_us.txt` string ID; none yet (pending read R49-1, recording
-        /// checklist 6.493).
+        /// `eqstr_us.txt` string ID (read R49-1 b): 0x305f without the
+        /// Apply Poison skill, 0x305d when the player is still not sitting.
+        /// None where the refusal is this library's own.
         string_id: Option<u32>,
     },
     /// The player used an ability; its timer runs this long before the

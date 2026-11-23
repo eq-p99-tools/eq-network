@@ -177,6 +177,10 @@ pub(super) struct OwnPosture {
     /// The owed stand is a feign's: the player holds a Feign Death standing
     /// (6.454), reported to the host as [`WorldEvent::FeignHeld`].
     feign_held: bool,
+    /// How many times the stance changed this admission, so that a wait
+    /// the program cancels on any posture change can tell a stand and
+    /// re-sit between two ticks from an unbroken seat.
+    changes: u64,
 }
 
 /// Tells the host the feign the player held standing has ended.
@@ -197,6 +201,7 @@ impl OwnPosture {
         }
         out.request(&Request::FeignDeathPosture)?;
         self.posture = Some(PostureState::Lying);
+        self.changes += 1;
         self.stand_owed = false;
         if std::mem::take(&mut self.feign_held) {
             feign_released(out.log)?;
@@ -211,10 +216,20 @@ impl OwnPosture {
     pub(super) fn current(&self) -> Option<PostureState> {
         self.posture
     }
+
+    /// How many times the stance changed this admission: each one this
+    /// session sent, and each server report naming another stance than the
+    /// one noted. A report repeating the noted stance is not counted.
+    pub(super) const fn changes(&self) -> u64 {
+        self.changes
+    }
     /// Notes a stance the server reported for the player, which ends a feign
     /// pressed standing as any posture report does. True when that ended a
     /// feign held standing, which the caller reports.
     pub(super) fn observed(&mut self, posture: PostureState) -> bool {
+        if self.posture != Some(posture) {
+            self.changes += 1;
+        }
         self.posture = Some(posture);
         self.stand_owed = false;
         std::mem::take(&mut self.feign_held)
@@ -283,6 +298,7 @@ impl OwnPosture {
     fn sent(&mut self, spawn_id: u16, posture: Posture, log: &mut Events<'_>) -> Result<()> {
         let posture = state(posture);
         self.posture = Some(posture);
+        self.changes += 1;
         self.stand_owed = false;
         if std::mem::take(&mut self.feign_held) {
             feign_released(log)?;
