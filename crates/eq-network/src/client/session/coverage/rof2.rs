@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527), and the chat rows from the
-//! chat parser (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532), and the chat rows
+//! from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -178,6 +178,12 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x3377 => sent("OP_BuffCreate", ROF2, Read(&[Zone])),
         0x4f4b => sent("OP_TargetBuffs", ROF2, Read(&[Zone])),
         0x5882 => sent("OP_PetBuffWindow", ROF2, Read(&[Zone])),
+        // The spell book and gems (6.532), unencoded: the server's own
+        // structs, with a 720-slot book. The deletion's padding is the
+        // client's own request echoed, so it is not a part.
+        0x217c => sent("OP_MemorizeSpell", ROF2, Read(&[Zone])),
+        0x0efa => sent("OP_SwapSpell", ROF2, Read(&[Zone])),
+        0x3358 => sent("OP_DeleteSpell", ROF2, Read(&[Zone])),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the

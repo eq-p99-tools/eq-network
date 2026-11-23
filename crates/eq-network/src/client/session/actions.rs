@@ -755,6 +755,7 @@ mod tests {
         let command = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| refuse(&command, "Not available on this server", out.log));
@@ -811,6 +812,7 @@ mod tests {
         let door = ClientCommand::ClickDoor {
             session_id: 1,
             door_id: 4,
+            point: None,
             created: now,
         };
         assert!(matches!(

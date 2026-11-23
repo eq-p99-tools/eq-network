@@ -193,6 +193,7 @@ fn a_transition_refuses_each_command_already_drained_behind_it() {
         let click = |door_id| ClientCommand::ClickDoor {
             session_id: 5,
             door_id,
+            point: None,
             created: Instant::now(),
         };
         let outcome = testing::run(|out| -> Result<()> {
@@ -273,6 +274,7 @@ fn settlement_failure_refuses_every_move_behind_the_completed_command() {
         ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
+            point: None,
             created,
         },
         movement(4),

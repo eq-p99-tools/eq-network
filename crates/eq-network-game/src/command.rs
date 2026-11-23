@@ -122,6 +122,12 @@ pub enum GameCommand {
         session_id: u64,
         /// ID from this zone's server-provided door table.
         door_id: u8,
+        /// Where the host's click ray hit the door's model as drawn, in
+        /// server axes; the session measures the reach from it, as the
+        /// Titanium program does (0x49812e, 0x4906c5; read R16b, R16e).
+        /// None where the host cast no ray (a key, a script): the reach then
+        /// runs to the door's origin, which is stricter.
+        point: Option<crate::world::Position>,
         /// Requests expire rather than surviving stalls or reconnects.
         created: std::time::Instant,
     },
