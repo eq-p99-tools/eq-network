@@ -231,6 +231,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::DeclineGroup { .. }
         | ClientCommand::Disband { .. }
         | ClientCommand::ToggleAway { .. }
+        | ClientCommand::LookForGroup { .. }
         | ClientCommand::ToggleAnonymous { .. }
         | ClientCommand::ToggleRoleplay { .. }
         | ClientCommand::ShowHelm { .. }
@@ -420,6 +421,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::DeclineGroup { session_id, .. }
         | ClientCommand::Disband { session_id }
         | ClientCommand::ToggleAway { session_id }
+        | ClientCommand::LookForGroup { session_id, .. }
         | ClientCommand::ToggleAnonymous { session_id }
         | ClientCommand::ToggleRoleplay { session_id }
         | ClientCommand::ShowHelm { session_id, .. }
@@ -634,6 +636,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             string_id: None,
         },
         ClientCommand::ToggleAway { .. }
+        | ClientCommand::LookForGroup { .. }
         | ClientCommand::ToggleAnonymous { .. }
         | ClientCommand::ToggleRoleplay { .. }
         | ClientCommand::ShowHelm { .. } => WorldEvent::ListingRefused {

@@ -40,7 +40,7 @@ use super::{
     hazards::Hazards,
     hiding::HideAnswer,
     inventory::{Allowances, Belongings},
-    listing::{Helm, Listing},
+    listing::{Helm, Listing, Looking},
     looting::Looting,
     map::Map,
     motion::Motion,
@@ -528,6 +528,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Saying the player looks for a group, `/lfg` (checklist 6.515).
+    fn looking(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Petitions, bug reports and feedback to the server's staff. A server
     /// type lists them only after its own live check, since a person reads
     /// each one (recording checklist 6.511).
@@ -623,6 +628,7 @@ pub(super) trait ServerType: Sync {
             self.environmental_aa(setup),
             self.ticks(setup),
             self.helm(setup),
+            self.looking(setup),
             self.reports(setup),
             self.dialogs(),
             self.channels(setup),
@@ -724,8 +730,8 @@ mod shared {
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Duel, Edits, Entities, Exchanges, Feature, GameDialect,
         GroundObjects, Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing,
-        Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids,
-        Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
+        Looking, Looting, Map, Marks, MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes,
+        Raids, Reading, Resurrection, Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk,
         Targeting, Ticks, Tradeskills, Training, Transfers, Translocate, Who,
     };
 
@@ -902,6 +908,10 @@ mod shared {
 
     pub(super) fn helm() -> Box<dyn Feature> {
         Box::new(Helm)
+    }
+
+    pub(super) fn looking() -> Box<dyn Feature> {
+        Box::<Looking>::default()
     }
 
     pub(super) fn raids() -> Box<dyn Feature> {
@@ -1490,6 +1500,13 @@ impl ServerType for EqEmu {
     /// (`Client::Handle_OP_SpawnAppearance`), not yet checked live.
     fn helm(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::helm())
+    }
+
+    /// Titanium's `OP_LFGCommand` as `Client::Handle_OP_LFGCommand` reads
+    /// it, from source; not yet checked live (checklist 6.515). P99, TAKP
+    /// and Quarm wait for their own checks.
+    fn looking(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::looking())
     }
 
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
@@ -2553,7 +2570,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 49),
+            (ServerProtocol::EqEmu, 50),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2570,6 +2587,7 @@ mod tests {
             Capability::BoatControl,
             Capability::Petitioning,
             Capability::ReportingBugs,
+            Capability::LookingForGroup,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

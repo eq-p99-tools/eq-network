@@ -172,6 +172,8 @@ pub enum Request {
     SetAnonymity(Anonymity),
     /// Whether the player's helm shows to others.
     ShowHelm(bool),
+    /// Say the player looks for a group (true), or no longer.
+    SetLooking(bool),
     /// Say the player is seen again, as a Titanium client answers the
     /// server's end of its hiding: its own appearance, invisibility 0
     /// ([`abilities::titanium_unhide`]).
@@ -564,6 +566,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             listing::titanium_anonymity(sender.spawn(), *anonymity)?
         }
         Request::ShowHelm(show) => listing::titanium_show_helm(sender.spawn(), *show)?,
+        Request::SetLooking(on) => listing::titanium_looking(*on),
         Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
         Request::YellForHelp => socials::titanium_yell(),
         Request::EmoteAnimation(animation) => {
@@ -818,6 +821,17 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn lfg_goes_only_on_titanium() {
+        assert_eq!(
+            titanium(&Request::SetLooking(true), PLAYER).unwrap(),
+            crate::listing::titanium_looking(true)
+        );
+        // TAKP's `OP_LFGCommand` is a world-stage message of its own, not
+        // read (checklist 6.515).
+        assert!(eqmac(&Request::SetLooking(true), PLAYER).is_err());
+    }
 
     #[test]
     fn eqmac_trades_in_its_own_bodies_naming_the_partner() {

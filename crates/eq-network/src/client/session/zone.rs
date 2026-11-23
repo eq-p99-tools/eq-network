@@ -943,7 +943,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 124;
+    const KINDS: usize = 125;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -981,6 +981,7 @@ mod tests {
             ClientCommand::SocialEmote { .. } => 111,
             ClientCommand::ApplyPoison { .. } => 112,
             ClientCommand::ChatChannel { .. } => 121,
+            ClientCommand::LookForGroup { .. } => 123,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1010,7 +1011,7 @@ mod tests {
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
             ClientCommand::DestroyCoins { .. } => 122,
-            ClientCommand::Shield { .. } => 123,
+            ClientCommand::Shield { .. } => 124,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1578,6 +1579,10 @@ mod tests {
             },
             ClientCommand::Disband { session_id },
             ClientCommand::ToggleAway { session_id },
+            ClientCommand::LookForGroup {
+                session_id,
+                on: None,
+            },
             ClientCommand::ToggleAnonymous { session_id },
             ClientCommand::ToggleRoleplay { session_id },
             ClientCommand::ShowHelm {
