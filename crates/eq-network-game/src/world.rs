@@ -2059,6 +2059,11 @@ pub enum WorldEvent {
     /// News of the player's guild ([`crate::guild`]). The session keeps no
     /// roster.
     Guild(crate::guild::GuildUpdate),
+    /// News of the guild bank ([`crate::guild_bank`]): a slot seen or
+    /// emptied, an answer to a request, or the player's banker flag. A
+    /// host's view is the slots seen since it entered the guild hall, never
+    /// complete. Nothing in the session acts on it.
+    GuildBank(crate::guild_bank::GuildBankUpdate),
     /// What a game master or the world tells the zone of a player: a kick,
     /// a kill, or the player made to look like an NPC; or, to a game
     /// master, a petition in the queue ([`crate::gm`]). Nothing acts on
@@ -2592,6 +2597,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(event)
         } else if let Some(update) = crate::guild::titanium(opcode, body)? {
             Some(WorldEvent::Guild(update))
+        } else if let Some(update) = crate::guild_bank::titanium(opcode, body)? {
+            Some(WorldEvent::GuildBank(update))
         } else if let Some(notice) = crate::gm::titanium(opcode, body)? {
             Some(WorldEvent::Gm(notice))
         } else if let Some(update) = crate::raid::decode(opcode, body)? {

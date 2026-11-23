@@ -392,7 +392,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x7e03 => sent("OP_ShopEnd", EQEMU, Read(&[Zone])),
         0x7fe4 => sent("OP_MoneyOnCorpse", EQEMU, Read(&[Zone])),
         0x8258 => sent("OP_Translocate", EQEMU, Partly(&[Zone], TRANSLOCATE)),
-        0xb4ab => sent("OP_GuildBank", EQEMU, planned(LaterSystems)),
+        0xb4ab => sent("OP_GuildBank", EQEMU, Read(&[Zone])),
         _ => return None,
     })
 }

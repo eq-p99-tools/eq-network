@@ -478,6 +478,10 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         Ok(group) => messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update)))),
         Err(error) => messages.push(unreadable(Part::World, &error)),
     }
+    messages.push(crate::guild_bank::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |banker| Message::Event(WorldEvent::GuildBank(banker)),
+    ));
     messages.push(crate::buffs::titanium_profile(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
@@ -1022,6 +1026,9 @@ mod tests {
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(Some(_))),
                 Message::VehicleName(None),
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
+                Message::Event(WorldEvent::GuildBank(
+                    crate::guild_bank::GuildBankUpdate::Banker(false)
+                )),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
                 Message::Event(WorldEvent::AutoSplit(true)),
@@ -1045,6 +1052,10 @@ mod tests {
                 )),
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(None)),
                 Message::VehicleName(None),
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
                 Message::Unreadable {
                     part: Part::World,
                     ..

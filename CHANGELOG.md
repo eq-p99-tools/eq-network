@@ -5,6 +5,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read the guild bank as stock `EQEmu` tells a Titanium client of it
+  (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
+  emptied), the deposit answer, the bare acknowledgement and the clear, by
+  action and exact length, and the profile's `guildbanker` word. Read only:
+  nothing is sent and nothing acts on an answer. Stock `EQEmu` sends
+  Titanium no list of the bank, so a host's view is the slots seen since it
+  entered the guild hall and never complete. A deposit's donor and a single
+  member's name stay out of `Debug` output.
+
+  **Breaking** (for exhaustive matches in the client): `WorldEvent` gains
+  `GuildBank`. New: `guild_bank::{GuildBankUpdate, GuildBankEntry,
+  GuildBankArea, GuildBankPermission, OPCODE, titanium, titanium_profile}`.
+
 - Read augments from Titanium item records (6.570). A common item's
   children are its augment sockets, which `EQEmu` serializes on worn,
   carried and bagged items; before, any augmented item made the whole
@@ -79,6 +92,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nor class, and an activation's target is refused. RoF2 refuses all three.
   New: `alternate_advancement::{eqmac_action, EQMAC_ACTION_OPCODE,
   EQMAC_ACTION_LENGTH}`; no new variants.
+
 
 - Send Titanium's AA requests, built and tested but listed by no server
   type until their local `EQEmu` live row (6.556): training a rank,
