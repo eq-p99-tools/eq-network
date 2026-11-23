@@ -334,9 +334,8 @@ impl CastGuard {
 /// of the player's own last cast start, and whether an item cast it. No song
 /// ends on its own; the server's cast update, a stop, or a new cast ends it.
 /// A gem's song is kept only over 100 ms once the player's own cast start
-/// says its time. The program's memorize path (0x308e), where a Bard
-/// memorizing a spell stops the song with the stop sent and restarts that
-/// gem's, is not followed (6.442, R49-21c).
+/// says its time. Under the Titanium program's rules (`SongRules`), a
+/// forget's answer stops it and a memorize's leaves it (read R49-21c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Song {
     spell: u32,
@@ -359,6 +358,13 @@ const SONG_CAST_MS: u32 = 100;
 pub(super) struct Casting {
     guard: CastGuard,
     song: Option<Song>,
+    /// The program's item-cast flag (+0x104c, read R49-21e): an item cast
+    /// of over 100 ms is in flight. Under the Titanium rules, the server's
+    /// end of it for a Bard's non-song ends the song here.
+    item_cast: bool,
+    song_rules: SongRules,
+    /// The song the host was last told a Bard sings (`WorldEvent::Singing`).
+    told_singing: Option<u32>,
     song_stop: bool,
     cast_stop: bool,
     knights: Option<knights::Reuse>,
@@ -376,6 +382,21 @@ enum DisciplineUse {
     Titanium,
     /// TAKP's and Quarm's numbered `OP_Discipline` (6.603 G1).
     EqMac,
+}
+
+/// Whose program's song rules the session follows (read R49-21; 6.442,
+/// 6.542).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SongRules {
+    /// Today's holds: a song holds what any cast holds, a gem click casts,
+    /// and the spell book's answers leave the song alone. The Mac-era
+    /// program is unread.
+    #[default]
+    Held,
+    /// The Titanium program's (read R49-21): a song holds nothing a song
+    /// doesn't, a gem click stops it and casts nothing, a forget's answer
+    /// stops it, and an item cast goes alongside it.
+    Titanium,
 }
 
 /// Whether the server type takes items used from the potion belt (6.568).
@@ -405,6 +426,7 @@ impl Casting {
         };
         casting.knights = Some(knights::Reuse::new(knight_estimate));
         casting.use_disciplines = DisciplineUse::Titanium;
+        casting.song_rules = SongRules::Titanium;
         casting
     }
 
@@ -465,23 +487,16 @@ impl Casting {
         let Some(song) = self.song else {
             return out.log.diagnostic("No song is playing".into());
         };
-        // The host's installed spell data says whether an item's song is
-        // of the class's spell (6.542); without it, a memorized spell is
-        // taken as the class's (6.442), exact for a gem's song.
-        let class_spell = song.installed_class_spell.unwrap_or_else(|| {
-            world
-                .player
-                .as_ref()
-                .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
-        });
-        if !class_spell {
+        if !class_song(song, world) {
             self.song = None;
+            self.item_cast = false;
             return out
                 .log
                 .diagnostic("A song not of the class stops here only; nothing is sent".into());
         }
         out.request(&Request::StopSong)?;
         self.song = None;
+        self.item_cast = false;
         if self.guard.active() {
             self.guard.stop_deadline = Some(Instant::now() + SONG_STOP_WAIT);
             Ok(())
@@ -514,21 +529,59 @@ impl Casting {
         out.request(&Request::StopSong)
     }
 
+    /// The song a Bard is singing, under the Titanium program's rules
+    /// (0x4eb9b7, read R49-21b): a song kept whose spell is the class's.
+    /// A gem's song counts once its own cast start has kept it.
+    fn singing(&self, world: &World) -> Option<Song> {
+        if self.song_rules != SongRules::Titanium {
+            return None;
+        }
+        world
+            .player
+            .as_ref()
+            .filter(|player| player.class == Some(BARD_CLASS))?;
+        self.song
+            .filter(|song| !song.awaiting_start && class_song(*song, world))
+    }
+
+    /// Tells the host when the song a Bard sings changes, so its own gates
+    /// can follow the session's.
+    fn report_singing(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let singing = self.singing(world).map(|song| song.spell);
+        if singing == self.told_singing {
+            return Ok(());
+        }
+        self.told_singing = singing;
+        out.log.send(ClientEvent::World(WorldEvent::Singing {
+            session_id: world.session_id,
+            spell_id: singing,
+        }))
+    }
+
     /// The server's cast update for a spell, keep-casting clear, ends the
     /// song as the program's 0x40f06d does (read R16): the current one for
     /// spell -1; any song for a spell of the player's class, or for another
     /// class's player; and for a Bard a song from an item, or the very spell
-    /// named. A memorized spell is taken as the class's (6.442); the
-    /// program's added test of an item-flag-clear song is not followed
-    /// (6.429).
+    /// named. A memorized spell is taken as the class's (6.442). Under the
+    /// Titanium rules, a Bard's non-song also ends it while the item-cast
+    /// flag is set, with nothing sent; an instant one leaves it (read
+    /// R49-21e). The flag clears either way.
     fn song_reported(&mut self, spell: u32, world: &World) {
+        let item_cast = std::mem::take(&mut self.item_cast);
         let Some(song) = self.song else {
             return;
         };
         let player = world.player.as_ref();
         let bard = player.is_some_and(|p| p.class == Some(BARD_CLASS));
         let class_spell = player.is_some_and(|p| p.memorized_spells.contains(&Some(spell)));
-        if spell == u32::MAX || !bard || class_spell || song.item || song.spell == spell {
+        let item_cast = item_cast && self.song_rules == SongRules::Titanium;
+        if spell == u32::MAX
+            || !bard
+            || class_spell
+            || song.item
+            || song.spell == spell
+            || item_cast
+        {
             self.song = None;
         }
     }
@@ -536,8 +589,9 @@ impl Casting {
     /// The player's own cast start, with the cast time the server sends
     /// (`EQEmu`'s base time, `Mob::DoCastSpell`), keeps a gem's song only over
     /// 100 ms, as 0x411f3d keeps a cast (read R16). Until it comes, a gem
-    /// cast is taken as a song; with none, it stays one. Whether 0x411f3d
-    /// reads the base or the focused time is unread (R49-21a, 6.442). Only
+    /// cast is taken as a song; with none, it stays one. For a Bard's song
+    /// every adjustment is 0, so the program compares the base time too
+    /// (read R49-21a). Only
     /// the first own start of that spell after the gem's send decides; a
     /// later one, such as an item's click of the same spell, changes
     /// nothing. An item's song was decided by its record's own cast time.
@@ -571,6 +625,16 @@ impl Casting {
         else {
             return Ok(());
         };
+        // A gem click while singing stops the song and casts nothing
+        // (0x4ecb56, read R49-21c). The gem timers the stop resets are the
+        // host's (6.542).
+        if self.singing(world).is_some() {
+            self.stop_song(world, out)?;
+            if let Some(event) = rejected(command, SONG_STOPPED) {
+                out.log.send(ClientEvent::World(event))?;
+            }
+            return out.log.diagnostic(SONG_STOPPED.into());
+        }
         // The program refuses a cast while the player lies, and neither
         // stands them nor casts (read R19 d, 0x411f3d).
         if let Some(string_id) = lying_refusal(world, out) {
@@ -695,11 +759,15 @@ impl Casting {
         let error = match prepared {
             Ok((spell_id, packet)) => {
                 out.send(&packet)?;
-                if world
+                let timed = world
                     .inventory
                     .click_cast_time_ms(request.slot)
-                    .is_some_and(|ms| ms > SONG_CAST_MS)
-                {
+                    .is_some_and(|ms| ms > SONG_CAST_MS);
+                // While a Bard sings, the item cast goes alongside the song,
+                // which stays kept (0x411f3d's item path, read R49-21d).
+                let singing = self.singing(world).is_some();
+                self.item_cast = timed;
+                if timed && !singing {
                     self.song = Some(Song {
                         spell: spell_id,
                         item: true,
@@ -791,8 +859,20 @@ impl Feature for Casting {
         offered
     }
 
-    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        self.guard.hold().into_iter().collect()
+    /// A cast in flight holds casting; a Bard's own song, under the
+    /// Titanium program's rules, holds only what a song holds (read
+    /// R49-21d). An item cast alongside the song holds as any cast.
+    fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+        let Some(hold) = self.guard.hold() else {
+            return Vec::new();
+        };
+        if self
+            .singing(world)
+            .is_some_and(|song| self.guard.held_spell() == Some(song.spell))
+        {
+            return vec![(Resource::Song, hold.1)];
+        }
+        vec![hold]
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -841,7 +921,7 @@ impl Feature for Casting {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        match command {
+        let handled = match command {
             ClientCommand::StopSong { .. } => self.stop_song(world, out),
             ClientCommand::StopCasting { .. } => self.stop_cast(world, out),
             ClientCommand::UseKnightAbility {
@@ -864,11 +944,14 @@ impl Feature for Casting {
             ClientCommand::UseBeltItem(request) => self.use_belt_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
-        }
+        };
+        handled?;
+        self.report_singing(world, out)
     }
 
     /// Releases a local hold when the server sends no matching reply.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.report_singing(world, out)?;
         if let Some(spell) = self.guard.expire_song_stop(now) {
             return report_unconfirmed_stop(world.session_id, Some(spell), out);
         }
@@ -916,6 +999,14 @@ impl Feature for Casting {
         {
             self.song_reported(*spell_id, world);
         }
+        // A forget's answer stops the song as the program's 0x308e
+        // handler does (kind 2, 0x4eb9b7, read R49-21c); a memorize's
+        // leaves it.
+        if let Message::Event(WorldEvent::Spell(SpellUpdate::Slot { mode: 2, .. })) = message {
+            if self.singing(world).is_some() {
+                self.stop_song(world, out)?;
+            }
+        }
         if let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
             caster_id,
             spell_id,
@@ -960,9 +1051,26 @@ impl Feature for Casting {
             }
             _ => (),
         }
-        Ok(())
+        self.report_singing(world, out)
     }
 }
+
+/// Whether a song kept is of the class's spell: the host's installed word
+/// for an item's song (6.542), else a memorized spell (6.442). A gem's song
+/// is always the class's: only the class's spells memorize [I], and the
+/// gem may have been forgotten since.
+fn class_song(song: Song, world: &World) -> bool {
+    song.installed_class_spell.unwrap_or_else(|| {
+        !song.item
+            || world
+                .player
+                .as_ref()
+                .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
+    })
+}
+
+/// What the host is told when a gem click stopped the song instead.
+const SONG_STOPPED: &str = "The song stopped; the gem did not cast";
 
 fn report_unconfirmed_stop(
     session_id: u64,
@@ -998,6 +1106,9 @@ fn drop_invisibility(
 
 #[cfg(test)]
 mod song_stop_tests;
+
+#[cfg(test)]
+mod song_rules_tests;
 
 #[cfg(test)]
 mod cast_stop_tests;

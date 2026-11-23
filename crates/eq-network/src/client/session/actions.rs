@@ -55,6 +55,10 @@ pub(super) fn stale(
 pub(super) enum Resource {
     /// Casting a spell or item click effect.
     Casting,
+    /// A Bard's own song in flight, under the Titanium program's rules
+    /// (read R49-21d): it holds only what a command waiting on `Casting`
+    /// still waits for during a song (`goes_during_song`).
+    Song,
     /// The spellbook and memorized gems.
     Spellbook,
     /// Inventory contents, including the cursor.
@@ -88,14 +92,42 @@ impl Held {
         let needs = needs(command);
         self.0
             .iter()
-            .find(|(resource, _)| {
-                if *resource == Resource::CursorAndStation {
-                    touches_cursor_or_station(command)
-                } else {
-                    needs.contains(resource)
-                }
+            .find(|(resource, _)| match resource {
+                Resource::CursorAndStation => touches_cursor_or_station(command),
+                Resource::Song => needs.contains(&Resource::Casting) && !goes_during_song(command),
+                _ => needs.contains(resource),
             })
             .map(|(_, reason)| *reason)
+    }
+}
+
+/// What goes out at once while a Bard's song is kept, though it waits for
+/// any other cast. The Titanium program holds nothing because of a song:
+/// each of its gates tests for a spell held that isn't a song (read
+/// R49-21d). The rest still wait during a song: the program's side of
+/// them is unread.
+fn goes_during_song(command: &ClientCommand) -> bool {
+    match command {
+        // The strike gate 0x47c9c6 lets class 8 through.
+        ClientCommand::UseAbility { ability, .. } => ability.strikes(),
+        // Right-click use (0x519da6) and an item's click-cast (0x411f3d's
+        // item path, which starts the item cast alongside the song). The
+        // belt uses the same click path.
+        ClientCommand::UseItem(_)
+        | ClientCommand::UseBeltItem(_)
+        // Left-click moves (0x519356); a cursor move needs no cast anyway.
+        | ClientCommand::MoveInventory(_)
+        // [I] A ranged attack is taken as a strike; its gate is unread.
+        | ClientCommand::RangedAttack(_)
+        // A gem click while singing stops the song and casts nothing
+        // (0x4ecb56): the casting feature does that, so it must reach it.
+        | ClientCommand::CastSpell { .. }
+        // [I] The answers leave the song alone (memorize) or stop it
+        // (forget, at the answer); the requests' own gate is unread
+        // (R49-48 a, 6.542).
+        | ClientCommand::MemorizeSpell { .. }
+        | ClientCommand::ForgetSpell { .. } => true,
+        _ => false,
     }
 }
 
@@ -131,8 +163,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::CastSpell { .. }
         | ClientCommand::UseKnightAbility { .. }
         | ClientCommand::UseDiscipline { .. } => &[Casting],
-        // `EQEmu` ignores a strike during a cast; bards may strike while they
-        // sing, but the session cannot tell songs apart, so they wait too.
+        // `EQEmu` ignores a strike during a cast. A Bard's song holds
+        // `Song` instead, which a strike passes (R49-21d).
         ClientCommand::UseAbility { ability, .. } => match ability {
             Ability::BindWound => &[Casting, Inventory],
             ability if ability.strikes() => &[Casting],
@@ -156,10 +188,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SwapSpell { .. } => &[Casting, Spellbook],
         // `EQEmu` and TAKP disconnect a player who moves an item from anywhere
         // but the cursor during a cast that is not a bard song
-        // (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session
-        // cannot tell songs apart, so singing bards wait too. That the
-        // official client refuses such a move, rather than interrupting the
-        // cast, is inferred.
+        // (`Client::Handle_OP_MoveItem`, "Inventory desync"). A Bard's song
+        // holds `Song` instead, which a move passes (R49-21d). That the
+        // official client refuses such a move during another cast, rather
+        // than interrupting it, is inferred.
         ClientCommand::MoveInventory(request) if request.from != InventorySlot::CURSOR => {
             &[Casting, Inventory]
         }

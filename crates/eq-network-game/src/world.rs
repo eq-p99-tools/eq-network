@@ -1129,6 +1129,18 @@ pub enum WorldEvent {
         /// The cast released locally, or None if there was no cast to release.
         spell_id: Option<u32>,
     },
+    /// Whether the player, a Bard, is singing a song under the Titanium
+    /// program's rules (read R49-21), each time it changes: its spell, or
+    /// None once it ends. While one is sung, the session holds nothing
+    /// because of it and a gem cast stops it instead (see API-CONTRACT.md),
+    /// so a host's own gates can follow. Each admission starts with none;
+    /// the Mac-era server types never send it.
+    Singing {
+        /// Zone admission whose song it is.
+        session_id: u64,
+        /// The song's spell, or None when no song is sung.
+        spell_id: Option<u32>,
+    },
     /// A cast request failed local validation; existing cast state is unchanged.
     CastRejected {
         /// Admission identifier from the rejected request.

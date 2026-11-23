@@ -26,11 +26,13 @@ pub struct ItemUse {
     /// Local creation time; stalls and reconnects do not replay requests.
     pub created: Instant,
     /// The host's word, from its installed spell data, on whether the
-    /// item's spell is the player's class's (spells fields 104-119 below
-    /// 255 for that class); `None` without an installed record. It only
-    /// chooses, for a song the session is already keeping from this click,
-    /// between sending the stop and ending it here; it never starts a song,
-    /// names a spell, or sends a stop with no song (6.542).
+    /// item's spell is the player's class's: the class's level for it
+    /// (spells fields 104-119) is neither 0 nor 255, read R49-21b's song
+    /// test; `None` without an installed record. It only decides, for a
+    /// song the session is already keeping from this click, between
+    /// sending the stop and ending it here, and whether a Bard is singing
+    /// it; it never starts a song, names a spell, or sends a stop with no
+    /// song (6.542).
     pub installed_class_spell: Option<bool>,
 }
 
