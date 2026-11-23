@@ -1873,10 +1873,33 @@ items; an item is its id, icon and name. An item numbered 0 is `None`
 whatever its name (`EQEmu`'s remove leaves the name), and a set with
 neither a name nor an item is `None`. A name with no end within its field
 gives one unreadable gap and withdraws only these two events; the rest of
-the profile still reads. Nothing is sent: saving, removing, swapping and
-the belt's use are later slices. P99's era has no bandolier and its bytes
+the profile still reads, and the session tells the new
+`WorldEvent::BandoliersUnknown` instead of the two. Both are told at the
+admission, after `Entered`. P99's era has no bandolier and its bytes
 there are unverified, so a host shows them only with the windows that come
 later. `EQMac` has neither, and RoF2's 20 sets and 5 slots are owed.
+
+Saving and clearing a set (`GameCommand::SaveBandolier`, `ClearBandolier`,
+under `Capability::Bandoliers`) and setting and clearing a belt slot
+(`SetPotionBelt`, `ClearPotionBelt`, under `Capability::PotionBelt`) are
+built and tested from stock `EQEmu`'s source (6.564), and no server type
+offers them until their local live rows pass; P99 never does. Sets and
+slots are numbered 0 to 3. Titanium sends `OP_Bandolier` (0x6f0c, 40
+bytes) and `OP_PotionBelt` (0x0719, 12 bytes). A save stores the name (1
+to 31 printable ASCII bytes) and the id, icon and name of what is worn in
+the primary, secondary, range and ammo slots; a belt slot takes an item
+the player wears or carries in a pack or a bag in one (never the cursor or
+a bank) that is a potion (item type 21) or carries the item's potion-belt
+flag (`ItemPlacement::potion_belt`). The server answers none of them, so
+after each send the session tells the whole new `WorldEvent::Bandoliers`
+or `WorldEvent::PotionBelt`. **That event is the session's own mirror of
+what it sent; the next admission's profile is the server's word.** A
+refusal is `WorldEvent::BandolierRefused` in the session's words, with
+nothing sent: sets unknown, a set, slot or name out of bounds, a save
+while the inventory is not known or while casting (inferred until read
+R49-45 b), a clear of a set or slot already empty, a belt item not carried
+or not for the belt, and a second send within 250 ms (ours, inferred). The
+swap and the belt's use are later slices.
 
 ## Bazaar search
 

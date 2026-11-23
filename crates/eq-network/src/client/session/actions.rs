@@ -138,7 +138,12 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
             ability if ability.strikes() => &[Casting],
             _ => &[],
         },
-        ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
+        // The server copies what is worn as a bandolier save arrives, so the
+        // save waits for a cast (6.564 E2, inferred until R49-45 b) and for
+        // a move in flight, which would change what the session copies.
+        ClientCommand::UseItem(_)
+        | ClientCommand::RangedAttack(_)
+        | ClientCommand::SaveBandolier { .. } => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
@@ -258,6 +263,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::BazaarWelcome { .. }
         | ClientCommand::BrowseTrader { .. }
         | ClientCommand::EndBrowse { .. }
+        | ClientCommand::ClearBandolier { .. }
+        | ClientCommand::SetPotionBelt { .. }
+        | ClientCommand::ClearPotionBelt { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -457,6 +465,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::BazaarWelcome { session_id }
         | ClientCommand::BrowseTrader { session_id, .. }
         | ClientCommand::EndBrowse { session_id }
+        | ClientCommand::SaveBandolier { session_id, .. }
+        | ClientCommand::ClearBandolier { session_id, .. }
+        | ClientCommand::SetPotionBelt { session_id, .. }
+        | ClientCommand::ClearPotionBelt { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
         | ClientCommand::AcceptTask { session_id, .. }
@@ -736,6 +748,12 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::BazaarWelcome { .. }
         | ClientCommand::BrowseTrader { .. }
         | ClientCommand::EndBrowse { .. } => WorldEvent::BazaarRefused { session_id, reason },
+        ClientCommand::SaveBandolier { .. }
+        | ClientCommand::ClearBandolier { .. }
+        | ClientCommand::SetPotionBelt { .. }
+        | ClientCommand::ClearPotionBelt { .. } => {
+            WorldEvent::BandolierRefused { session_id, reason }
+        }
         ClientCommand::AcceptTask { .. }
         | ClientCommand::DeclineTasks { .. }
         | ClientCommand::CancelTask { .. }

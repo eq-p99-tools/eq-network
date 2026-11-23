@@ -263,6 +263,9 @@ pub struct ItemPlacement {
     pub bag_weight_reduction: u8,
     /// Item category, including weapon handedness.
     pub item_type: u8,
+    /// Whether the item's definition lets the potion belt hold it
+    /// (Titanium's `PotionBelt` field); false where the generation has none.
+    pub potion_belt: bool,
     /// Deity restrictions; zero is unrestricted.
     pub deity_mask: u32,
 }

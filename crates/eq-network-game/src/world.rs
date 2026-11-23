@@ -705,6 +705,14 @@ pub enum Capability {
     /// ([`crate::command::GameCommand::BrowseTrader`],
     /// [`crate::command::GameCommand::EndBrowse`]). No money moves.
     BazaarBrowsing,
+    /// Saving and clearing bandolier sets
+    /// ([`crate::command::GameCommand::SaveBandolier`],
+    /// [`crate::command::GameCommand::ClearBandolier`]). No swap.
+    Bandoliers,
+    /// Setting and clearing the potion belt's slots
+    /// ([`crate::command::GameCommand::SetPotionBelt`],
+    /// [`crate::command::GameCommand::ClearPotionBelt`]). No use from it.
+    PotionBelt,
     /// Taking offered tasks, cancelling journal entries, a finished task's
     /// steps and `/tasktimers` ([`crate::tasks::offers`]).
     Tasks,
@@ -718,7 +726,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 84] = [
+    pub const ALL: [Self; 86] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -803,6 +811,8 @@ impl Capability {
         Self::Tasks,
         Self::AlternateAdvancement,
         Self::BazaarBrowsing,
+        Self::Bandoliers,
+        Self::PotionBelt,
     ];
 }
 
@@ -1352,6 +1362,16 @@ pub enum WorldEvent {
     /// The player's four potion belt slots, as the profile at admission
     /// keeps them; each `None` where it is empty.
     PotionBelt(Box<[Option<crate::bandolier::BeltItem>; crate::bandolier::BELT_SLOTS]>),
+    /// The profile's sets and belt could not be read at this admission:
+    /// they are unknown until the next, and the session changes neither.
+    BandoliersUnknown,
+    /// A bandolier set or potion belt change was not sent, and why.
+    BandolierRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A Bazaar search, welcome request, click on a trader or end of a
     /// browse was not sent, and why.
     BazaarRefused {
@@ -2813,6 +2833,8 @@ mod tests {
             Capability::Tasks => 81,
             Capability::AlternateAdvancement => 82,
             Capability::BazaarBrowsing => 83,
+            Capability::Bandoliers => 84,
+            Capability::PotionBelt => 85,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

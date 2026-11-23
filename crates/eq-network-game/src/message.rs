@@ -494,13 +494,17 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         |error| unreadable(Part::World, &error),
         |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
     ));
-    // A bad set or belt field withdraws only these two (6.559).
+    // A bad set or belt field withdraws only these two, and says they are
+    // unknown (6.559, 6.564).
     match crate::bandolier::titanium_profile(body) {
         Ok((sets, belt)) => messages.extend([
             Message::Event(WorldEvent::Bandoliers(Box::new(sets))),
             Message::Event(WorldEvent::PotionBelt(Box::new(belt))),
         ]),
-        Err(error) => messages.push(unreadable(Part::World, &error)),
+        Err(error) => messages.extend([
+            unreadable(Part::World, &error),
+            Message::Event(WorldEvent::BandoliersUnknown),
+        ]),
     }
     messages.push(crate::money::titanium_elsewhere(body).map_or_else(
         |error| unreadable(Part::World, &error),
@@ -836,6 +840,10 @@ mod tests {
             event,
             WorldEvent::Bandoliers(_) | WorldEvent::PotionBelt(_)
         )));
+        assert!(has(&read, |event| matches!(
+            event,
+            WorldEvent::BandoliersUnknown
+        )));
         assert!(has(&read, |event| matches!(event, WorldEvent::Coins(_))));
         assert!(has(&read, |event| matches!(
             event,
@@ -1061,6 +1069,7 @@ mod tests {
                     part: Part::World,
                     ..
                 },
+                Message::Event(WorldEvent::BandoliersUnknown),
                 Message::Unreadable {
                     part: Part::World,
                     ..
