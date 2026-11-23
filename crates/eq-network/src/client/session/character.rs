@@ -60,6 +60,8 @@ struct Staged {
     /// The player's own wear changes, which arrive before their state exists.
     wear: Vec<WearChange>,
     buffs: Option<Vec<Option<Buff>>>,
+    /// The primary bind point's zone, from the profile (6.524).
+    bound_in: Option<u16>,
 }
 
 impl Feature for Character {
@@ -86,6 +88,7 @@ impl Feature for Character {
                 staged.wear.push(*change);
             }
             WorldEvent::BuffSnapshot(buffs) => staged.buffs = Some(buffs.clone()),
+            WorldEvent::BoundIn { zone_id } => staged.bound_in = Some(*zone_id),
             _ => (),
         }
         Ok(())
@@ -112,6 +115,10 @@ impl Feature for Character {
         let news = [
             staged.buffs.map(WorldEvent::BuffSnapshot),
             staged.experience.map(WorldEvent::Experience),
+            // Once per profile, after the buffs and experience (6.524).
+            staged
+                .bound_in
+                .map(|zone_id| WorldEvent::BoundIn { zone_id }),
         ];
         for event in news.into_iter().flatten() {
             out.log.send(ClientEvent::World(event))?;
@@ -368,5 +375,58 @@ mod profile_tests {
             .events
             .iter()
             .any(|event| matches!(event, ClientEvent::World(WorldEvent::BuffSnapshot(_)))));
+    }
+
+    /// The bind zone a profile says is told once, after the buffs and
+    /// experience, and sends nothing (6.524).
+    #[test]
+    fn the_profiles_bind_zone_is_told_once_after_admission() {
+        let mut character = Character::default();
+        let mut world = World::new(5);
+        let mut profile = vec![0; 19592];
+        profile[24..28].copy_from_slice(&2u32.to_le_bytes());
+        for message in eq_network_game::message::titanium(0x75df, &profile) {
+            character.admit(&message, &mut world).unwrap();
+        }
+        world.player.admit(testing::player(7));
+        let outcome = testing::run(|out| character.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::BuffSnapshot(_)),
+                ClientEvent::World(WorldEvent::BoundIn { zone_id: 2 }),
+            ]
+        ));
+        let again = testing::run(|out| character.admitted(&mut world, out));
+        assert!(again.events.is_empty());
+    }
+
+    /// A bind zone past 16 bits gives no bind zone, and the rest of the
+    /// profile is still told (6.524).
+    #[test]
+    fn an_unreadable_bind_zone_tells_none_and_keeps_the_rest() {
+        let mut character = Character::default();
+        let mut world = World::new(5);
+        let mut profile = vec![0; 19592];
+        profile[24..28].copy_from_slice(&70_000u32.to_le_bytes());
+        let messages = eq_network_game::message::titanium(0x75df, &profile);
+        assert!(!messages
+            .iter()
+            .any(|message| matches!(message, Message::Event(WorldEvent::BoundIn { .. }))));
+        for message in messages {
+            character.admit(&message, &mut world).unwrap();
+        }
+        world.player.admit(testing::player(7));
+        let outcome = testing::run(|out| character.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::BuffSnapshot(_))]
+        ));
     }
 }
