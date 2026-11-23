@@ -13,6 +13,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   6.615), resurrection's write is not copied, and the value is kept per
   session. Unreachable on stock `EQEmu`, whose profile names no vehicle.
 
+- `Capability::Melody`: where the server type takes a Bard's `/melody`
+  (read R49-33 c): P99 and stock Titanium `EQEmu`; not the Mac-era server
+  types, whose program is unread. The host runs the melody with `StopSong` and gem casts, and a
+  test shows the stop followed at once by a gem press casts. **Breaking:** a
+  new `Capability` variant.
 - Say why a zone sent no inventory at admission (gap 3.11, checklist 6.437):
   stock `EQEmu` sends a Titanium client no `OP_CharInventory` exactly when
   the character holds nothing (its Titanium encoder drops an empty one), or
