@@ -16,6 +16,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still refused before a socket opens, and the RoF2 world stage still
   refuses.
 
+- Speak in a chosen language (parity item 9). `chat::Tongue` (private fields,
+  made only by `Tongue::COMMON` or `Tongue::spoken` from the player's profile)
+  travels on `SendChatInAdmission { tongue }`, and `chat::encode_outbound_in`
+  writes its language and the speaker's skill on both generations;
+  `encode_outbound_for` and `SendChat` stay in the common tongue. A received
+  channel message keeps its language and skill as sent
+  (`ChatEvent::language`, new `ChatEvent::language_skill`). What the official
+  client puts in the skill field, and on which channels, waits for program
+  read R49-4b; RoF2 refuses. **Breaking:** `SendChatInAdmission` constructors
+  need `tongue`; the JSON of every channel message gains `language` and
+  `language_skill`.
+
 - Add RoF2 as a placeholder client generation and server type, so each
   decision a third generation needs has an answer before any of it is built.
   `GameDialect::Rof2` and `ServerProtocol::EqEmuRof2` (stock `EQEmu` with the

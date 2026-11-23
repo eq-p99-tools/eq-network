@@ -101,6 +101,7 @@ mod tests {
         let queued = ClientCommand::SendChatInAdmission {
             session_id: 7,
             message: OutboundChat::Say("synthetic".into()),
+            tongue: eq_network_game::chat::Tongue::COMMON,
         };
         let output = testing::run(|out| talk.handle(&queued, &mut world, out));
         output.result.unwrap();

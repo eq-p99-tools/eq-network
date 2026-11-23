@@ -83,6 +83,7 @@ fn queued_scoped_chat_cannot_reach_any_feature_in_a_later_admission() {
         let queued = ClientCommand::SendChatInAdmission {
             session_id: 4,
             message: OutboundChat::Say("synthetic scoped message".into()),
+            tongue: eq_network_game::chat::Tongue::COMMON,
         };
         let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
             apply_commands(&[queued], &mut features, &mut world, out, true)
@@ -93,6 +94,7 @@ fn queued_scoped_chat_cannot_reach_any_feature_in_a_later_admission() {
         let current = ClientCommand::SendChatInAdmission {
             session_id: world.session_id,
             message: OutboundChat::Say("synthetic scoped message".into()),
+            tongue: eq_network_game::chat::Tongue::COMMON,
         };
         let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
             apply_commands(&[current], &mut features, &mut world, out, true)
