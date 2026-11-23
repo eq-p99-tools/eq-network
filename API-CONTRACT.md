@@ -38,13 +38,43 @@ sends it yet, since cold is unwired until R49-26.
 
 `ItemUse::installed_class_spell: Option<bool>` is the host's word, from its
 installed spell data, on whether the clicked item's spell is the player's
-class's (spells fields 104-119 below 255 for that class). A host without an
-installed record (no spell data, or P99's replayed definitions) sends
-`None`. The session uses it only for a song it is already keeping from that
-click, to choose between sending the Bard's stop and ending the song here;
-it never starts a song, names a spell or sends a stop with no song. `None`
-keeps the memorized test (6.442, 6.542). **Breaking:** every `ItemUse`
-literal names the field.
+class's: the class's level for it (spells fields 104-119) is neither 0 nor
+255, read R49-21b's song test. The program also needs the spell's byte
++0x1c4 clear, which no spells field is mapped to yet (R49-48 c). A host
+without an installed record (no spell data, or P99's replayed definitions)
+sends `None`. The session uses it only for a song it is already keeping
+from that click: to choose between sending the Bard's stop and ending the
+song here, and, under the Titanium song rules below, whether that song is
+one a Bard is singing. It never starts a song, names a spell or sends a
+stop with no song. `None` keeps the memorized test (6.442, 6.542).
+**Breaking:** every `ItemUse` literal names the field.
+
+## A Bard's song under the Titanium program's rules
+
+The Titanium server types (P99 and Titanium EQEmu) follow read R49-21 while
+a Bard sings, that is, while the session keeps a song of the class's spell
+(a gem's, once its own cast start kept it, or an item's):
+
+- **Nothing is held because of the song.** A strike, `UseItem`,
+  `UseBeltItem`, any `MoveInventory`, `RangedAttack` (inferred),
+  `MemorizeSpell` and `ForgetSpell` (both inferred, R49-48 a) go at once.
+  The rest that wait on a cast still wait. Any other cast, including an
+  item cast started alongside the song, holds as before.
+- **A gem cast (`CastSpell`) while singing stops the song** (the empty
+  `0x4839`, as `StopSong` sends) **and casts nothing.** The host gets
+  `WorldEvent::CastRejected` for the gem, reason "The song stopped; the gem
+  did not cast", with no string id. The gem timers the program resets on a
+  stop are the host's to reset (6.542).
+- **A forget's answer** (the server's gem clear, mode 2) **stops the song**
+  the same way. A memorize's answer leaves it.
+- **An item cast goes alongside the song**, which stays kept. When the
+  server ends an item cast of over 100 ms (the program's item flag), the
+  song ends too, with nothing sent; an instant item's end leaves it (read
+  R49-21e).
+
+The Mac-era server types keep the earlier rules: the song holds what any
+cast holds, a gem click casts, and the book's answers leave the song alone.
+The Mac-era program is unread. First use on P99 is attended.
 
 ## Server filters
 
