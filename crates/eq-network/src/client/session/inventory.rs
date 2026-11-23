@@ -40,6 +40,7 @@ use eq_network_game::{
     training::TrainingUpdate,
     world::Coins,
     world::{SpawnKind, WorldEvent},
+    zoning,
 };
 use merchant::{MerchantTrades, OpenMerchant, Refusal};
 use std::time::{Duration, Instant};
@@ -1080,7 +1081,7 @@ impl Belongings {
     fn shop(
         &mut self,
         command: &ClientCommand,
-        world: &World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let ClientCommand::Shop {
@@ -1098,6 +1099,10 @@ impl Belongings {
         if !open {
             if self.merchant.is_open(merchant_id) && out.command(command)? {
                 self.merchant.clear();
+                world.saves.merchant_open = false;
+                // The program saves as the merchant's window closes
+                // (0x537149; which window, inferred; read R49-22g, 6.615).
+                super::saves::event(world, zoning::save_reason::MERCHANT_CLOSED, out)?;
             }
             return Ok(());
         }
@@ -1422,6 +1427,22 @@ impl Feature for Belongings {
     /// the news says about the coins; the host hears of item updates and
     /// money updates with the rest of the zone's news.
     fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        // The merchant's window opens in `explain`, before this, and closes
+        // here or on the player's command. The event saves read it.
+        world.saves.merchant_open = self.merchant.any_open();
+        let observed = self.observe_message(message, world, out);
+        world.saves.merchant_open = self.merchant.any_open();
+        observed
+    }
+}
+
+impl Belongings {
+    fn observe_message(
         &mut self,
         message: &Message,
         world: &mut World,
@@ -1773,21 +1794,68 @@ mod tests {
             open,
             created: Instant::now(),
         };
-        let mut run = |wire, command: &ClientCommand, world: &World| {
+        let mut run = |wire, command: &ClientCommand, world: &mut World| {
             let outcome = testing::run_on(wire, |out| belongings.shop(command, world, out));
             outcome.result.unwrap();
             outcome.sent.len()
         };
         // TAKP reaches a merchant 20 away in 3-D; Titanium's reach is unread.
-        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 0);
-        assert_eq!(run(&super::super::wire::Titanium, &shop(true), &world), 1);
+        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &mut world), 0);
+        assert_eq!(
+            run(&super::super::wire::Titanium, &shop(true), &mut world),
+            1
+        );
         // A matching close still goes out after the merchant has walked away.
-        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 1);
-        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 0);
+        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &mut world), 1);
+        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &mut world), 0);
         let mut merchant = testing::spawn(9, SpawnKind::Npc);
         merchant.position.x = 20.0;
         world.spawns.insert(merchant);
-        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 1);
+        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &mut world), 1);
+    }
+
+    /// The open window withholds the event saves; the player's own close
+    /// sends the close, then the save (6.615; the window is inferred).
+    #[test]
+    fn closing_a_merchants_window_saves_after_the_close() {
+        let (mut belongings, mut world) = admitted();
+        world.saves.taken = true;
+        let position = testing::player(7).position;
+        world.body.admit(
+            eq_network_game::movement::MotionSession::new(5, 7, position, Instant::now()).unwrap(),
+        );
+        shopping_at(&mut belongings, &mut world);
+        assert!(!world.saves.merchant_open, "synced on the next observe");
+        let coins = Message::Event(WorldEvent::Coins(Coins::default()));
+        testing::run(|out| belongings.observe(&coins, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.saves.merchant_open);
+        let close = ClientCommand::Shop {
+            session_id: 5,
+            merchant_id: 9,
+            own_id: 7,
+            open: false,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| belongings.handle(&close, &mut world, out));
+        outcome.result.unwrap();
+        assert!(!world.saves.merchant_open);
+        assert_eq!(outcome.sent.len(), 2);
+        assert_eq!(
+            outcome.sent[1],
+            zoning::titanium_event_save(
+                &zoning::Save {
+                    position: world.body.position(),
+                    vehicle: None,
+                },
+                zoning::save_reason::MERCHANT_CLOSED,
+            )
+        );
+        // A second close names no open window: nothing goes out.
+        let outcome = testing::run(|out| belongings.handle(&close, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
     }
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
