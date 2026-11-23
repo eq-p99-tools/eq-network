@@ -43,6 +43,10 @@ pub(super) struct ServerMessage {
     pub(super) senders: &'static [ServerProtocol],
     /// What the session does with it.
     pub(super) reading: Reading,
+    /// Whether its body carries the server's task text (a task's title,
+    /// description and step words), so that a gap tells of it by its
+    /// opcode and length alone, with no sample.
+    pub(super) private: bool,
 }
 
 impl ServerMessage {
@@ -76,6 +80,20 @@ const fn sent(
         name,
         senders,
         reading,
+        private: false,
+    }
+}
+
+/// A row whose body carries the server's task text: its gaps keep no
+/// sample.
+const fn sent_private(
+    name: &'static str,
+    senders: &'static [ServerProtocol],
+    reading: Reading,
+) -> ServerMessage {
+    ServerMessage {
+        private: true,
+        ..sent(name, senders, reading)
     }
 }
 
@@ -253,10 +271,7 @@ const ROF2: &[ServerProtocol] = &[ServerProtocol::EqEmuRof2];
 
 /// What the session leaves unread of Titanium's profile.
 const TITANIUM_PROFILE: &[Part] = &[
-    Part(
-        "alternate advancement and leadership",
-        Reason::Planned(Step::AlternateAdvancement),
-    ),
+    Part("leadership", Reason::Planned(Step::AlternateAdvancement)),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
 ];
 /// What the session leaves unread of `EQMac`'s profile.
@@ -289,6 +304,35 @@ const BAZAAR_SEARCH: &[Part] = &[Part(
          (zone/trading.cpp Client::SendBazaarDeliveryCosts)",
     ),
 )];
+
+/// What `OP_TaskDescription`'s reader leaves (gap list section 5, 6.546).
+const TASK_DESCRIPTION: &[Part] = &[
+    Part(
+        "the reward type and the points (crystal rewards)",
+        Reason::Planned(Step::LaterSystems),
+    ),
+    Part(
+        "the reward-selection byte",
+        Reason::Planned(Step::LaterSystems),
+    ),
+];
+
+/// What `OP_TaskActivity`'s reader leaves.
+const TASK_ACTIVITY: &[Part] = &[
+    Part(
+        "the step's request-type word (EQEmu writes 0)",
+        Reason::Planned(Step::LaterSystems),
+    ),
+    Part(
+        "the step's dynamic zone switch",
+        Reason::Planned(Step::LaterSystems),
+    ),
+    Part(
+        "the long step's last byte (EQEmu writes 1)",
+        Reason::Planned(Step::LaterSystems),
+    ),
+];
+
 /// What the session leaves unread of a rename.
 const RENAME: &[Part] = &[
     Part(
@@ -625,6 +669,7 @@ impl Unheard {
         log: &mut Events<'_>,
     ) -> Result<Vec<Message>> {
         let name = wire.coverage(opcode).map(|message| message.name);
+        let private = wire.coverage(opcode).is_some_and(|message| message.private);
         let mut kept = Vec::with_capacity(messages.len());
         for message in messages {
             let kind = match message {
@@ -634,7 +679,11 @@ impl Unheard {
                         part: part.to_string(),
                         error: error.clone(),
                     };
-                    gap_of(log, (opcode, name, body), gap)?;
+                    if private {
+                        log.gap_unsampled(opcode, name, body.len(), gap)?;
+                    } else {
+                        log.gap(opcode, name, body, gap)?;
+                    }
                     kept.push(message);
                     continue;
                 }
@@ -643,7 +692,12 @@ impl Unheard {
                     continue;
                 }
             };
-            gap_of(log, (opcode, name, body), GapKind::UnknownKind { kind })?;
+            let gap = GapKind::UnknownKind { kind };
+            if private {
+                log.gap_unsampled(opcode, name, body.len(), gap)?;
+            } else {
+                log.gap(opcode, name, body, gap)?;
+            }
             if self.kinds.insert((opcode, kind)) {
                 let name = name.unwrap_or("an unlisted message");
                 log.diagnostic(format!(
@@ -674,11 +728,12 @@ impl Unheard {
         let length = body.len();
         let message = wire.coverage(opcode);
         if let Some(gap) = gap_at(message.as_ref(), self.stage, length) {
-            gap_of(
-                log,
-                (opcode, message.map(|message| message.name), body),
-                gap,
-            )?;
+            let name = message.map(|message| message.name);
+            if message.is_some_and(|message| message.private) {
+                log.gap_unsampled(opcode, name, length, gap)?;
+            } else {
+                log.gap(opcode, name, body, gap)?;
+            }
         }
         if message.is_some_and(|message| !message.told_at(self.stage, length))
             || !self.told.insert(opcode)
@@ -698,32 +753,6 @@ impl Unheard {
             "{} sent {name} (0x{opcode:04x}, {length} bytes), left unread: {why}",
             self.stage
         ))
-    }
-}
-
-/// The messages whose gaps keep no sample of their body, only their opcode
-/// and length: the bazaar's and traders', which list other players' sales
-/// and name traders (6.550).
-const UNSAMPLED: [&str; 6] = [
-    "OP_BazaarSearch",
-    "OP_BecomeTrader",
-    "OP_Trader",
-    "OP_TraderShop",
-    "OP_TraderBuy",
-    "OP_Barter",
-];
-
-/// Counts a gap, with a sample of its body unless its message is one of
-/// [`UNSAMPLED`].
-fn gap_of(
-    log: &mut Events<'_>,
-    (opcode, name, body): (u16, Option<&'static str>, &[u8]),
-    gap: GapKind,
-) -> Result<()> {
-    if name.is_some_and(|name| UNSAMPLED.contains(&name)) {
-        log.gap_unsampled(opcode, name, body.len(), gap)
-    } else {
-        log.gap(opcode, name, body, gap)
     }
 }
 

@@ -29,6 +29,7 @@ mod guilds;
 pub(super) mod hazards;
 mod hiding;
 mod inventory;
+mod journal;
 mod lifecycle;
 pub(super) mod list_poll;
 mod listing;

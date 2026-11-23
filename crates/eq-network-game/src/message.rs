@@ -66,6 +66,14 @@ pub enum Message {
     Bind(zoning::BindPoint),
     /// Ability-slot reuse received in a Titanium knight profile.
     KnightRefresh(std::time::Duration),
+    /// A Titanium task journal message, which the session's journal
+    /// checks against the entries it holds before the host hears of it.
+    Journal {
+        /// What it says.
+        news: crate::tasks::News,
+        /// Its body's length, for a gap that tells of it without its words.
+        length: usize,
+    },
     /// The server logging the character out.
     LoggedOut,
     /// A Titanium system notice identifying an invalid tradeskill recipe.
@@ -128,7 +136,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 58] = [
+pub const ROF2_READS: [u16; 62] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -187,6 +195,10 @@ pub const ROF2_READS: [u16; 58] = [
     crate::rof2_answers::BEGGING_OPCODE,
     crate::rof2_answers::PICK_POCKET_OPCODE,
     crate::rof2_answers::BIND_WOUND_OPCODE,
+    crate::rof2_notices::SOUND_OPCODE,
+    crate::rof2_notices::RENAME_OPCODE,
+    crate::rof2_notices::NEW_TITLES_OPCODE,
+    crate::rof2_notices::BANKER_CHANGE_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
@@ -195,8 +207,9 @@ pub const ROF2_READS: [u16; 58] = [
 /// casting, stuns and illusions (6.522), buffs (6.527), the spell book and
 /// gems (6.532), the mana and endurance pools (6.538), doors, ground objects
 /// and the weather (6.539), rolls, assists, yells and effects (6.541), and
-/// targets, charms, rewards, reuse and skill answers (6.544) are read yet;
-/// a body a reader refuses is unreadable, told by its opcode and length
+/// targets, charms, rewards, reuse and skill answers (6.544), and quest
+/// rewards, renames, new titles and the banker's change (6.549) are read
+/// yet; a body a reader refuses is unreadable, told by its opcode and length
 /// only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
@@ -237,6 +250,7 @@ fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
         .or_else(|| one(crate::rof2_world::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_socials::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_answers::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_notices::read(opcode, body), Part::World))
         .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
         .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
 }
@@ -273,9 +287,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         Err(error) => messages.push(unreadable(Part::Spells, &error)),
     }
     let message = match opcode {
-        crate::alternate_advancement::DEFINITION_OPCODE
-        | crate::alternate_advancement::SELECTIONS_OPCODE
-        | crate::alternate_advancement::CLEAR_OPCODE => {
+        opcode if crate::alternate_advancement::is_titanium(opcode) => {
             titanium_aa_message(opcode, body, &mut messages)
         }
         zoning::POINTS_OPCODE => zoning::ZonePoints::decode(body).map_or_else(
@@ -358,38 +370,63 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
         }
-        _ => match inventory::decode(opcode, body) {
-            Ok(Some(update)) => Message::Event(WorldEvent::Inventory(update)),
-            Err(error) => unreadable(Part::Inventory, &error),
-            Ok(None) => match crate::world::titanium_update(opcode, body) {
-                Ok(Some(event)) => Message::Event(event),
-                Ok(None) => return messages,
-                Err(error) => unreadable(Part::World, &error),
-            },
+        _ => match titanium_other(opcode, body) {
+            Some(message) => message,
+            None => return messages,
         },
     };
     messages.push(message);
     messages
 }
 
+/// What a Titanium packet no other reader took says: the task journal, the
+/// inventory, or the rest of the world; None when nothing reads it.
+fn titanium_other(opcode: u16, body: &[u8]) -> Option<Message> {
+    if let Some(news) = crate::tasks::titanium(opcode, body) {
+        return Some(news.map_or_else(
+            |error| unreadable(Part::World, &error),
+            |news| Message::Journal {
+                news,
+                length: body.len(),
+            },
+        ));
+    }
+    match inventory::decode(opcode, body) {
+        Ok(Some(update)) => Some(Message::Event(WorldEvent::Inventory(update))),
+        Err(error) => Some(unreadable(Part::Inventory, &error)),
+        Ok(None) => match crate::world::titanium_update(opcode, body) {
+            Ok(Some(event)) => Some(Message::Event(event)),
+            Ok(None) => None,
+            Err(error) => Some(unreadable(Part::World, &error)),
+        },
+    }
+}
+
 fn titanium_aa_message(opcode: u16, body: &[u8], messages: &mut Vec<Message>) -> Message {
     match crate::alternate_advancement::titanium(opcode, body) {
         Ok(update) => Message::AlternateAdvancement(update),
-        Err(error) => {
-            messages.push(unreadable(Part::World, &error));
-            Message::AlternateAdvancement(crate::alternate_advancement::invalidated(opcode, body))
-        }
+        Err(error) => match crate::alternate_advancement::invalidated(opcode, body) {
+            Some(update) => {
+                messages.push(unreadable(Part::World, &error));
+                Message::AlternateAdvancement(update)
+            }
+            None => unreadable(Part::World, &error),
+        },
     }
 }
 
 fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Message {
     match crate::alternate_advancement::titanium_profile(body) {
-        Ok(update) => messages.push(Message::AlternateAdvancement(update)),
+        Ok(updates) => messages.extend(updates.map(Message::AlternateAdvancement)),
         Err(error) => {
             messages.push(unreadable(Part::World, &error));
-            messages.push(Message::AlternateAdvancement(
-                crate::alternate_advancement::Update::Selections(None),
-            ));
+            messages.extend(
+                [
+                    crate::alternate_advancement::Update::Selections(None),
+                    crate::alternate_advancement::Update::Points(None),
+                ]
+                .map(Message::AlternateAdvancement),
+            );
         }
     }
     messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
@@ -742,6 +779,32 @@ mod tests {
     }
 
     #[test]
+    fn aa_timers_and_experience_are_read_and_an_unreadable_one_says_so() {
+        use crate::alternate_advancement::{Update, PROGRESS_OPCODE, TIMER_OPCODE};
+        assert!(matches!(
+            titanium(TIMER_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::Timer(_))]
+        ));
+        assert!(matches!(
+            titanium(PROGRESS_OPCODE, &[0; 12])[..],
+            [Message::AlternateAdvancement(Update::Progress(Some(_)))]
+        ));
+        // A short timer is only unreadable; short experience also withdraws
+        // the last.
+        assert!(matches!(
+            &titanium(TIMER_OPCODE, &[0; 11])[..],
+            [Message::Unreadable { part: Part::World, error }] if error.ends_with("length 11")
+        ));
+        assert!(matches!(
+            &titanium(PROGRESS_OPCODE, &[0; 13])[..],
+            [
+                Message::Unreadable { part: Part::World, error },
+                Message::AlternateAdvancement(Update::Progress(None)),
+            ] if error.ends_with("length 13")
+        ));
+    }
+
+    #[test]
     fn the_profile_says_what_is_in_the_spellbook() {
         let mut profile = vec![0; 19592];
         profile[12940..12946].copy_from_slice(b"Tester");
@@ -751,6 +814,7 @@ mod tests {
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(Some(_))),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(Some(_))),
                 Message::VehicleName(None),
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
@@ -772,6 +836,7 @@ mod tests {
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(
                     None
                 )),
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Points(None)),
                 Message::VehicleName(None),
                 Message::Unreadable {
                     part: Part::World,

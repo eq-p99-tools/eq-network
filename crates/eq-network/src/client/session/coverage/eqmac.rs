@@ -1,7 +1,7 @@
 //! The `EQMac` client's messages, which TAKP and Quarm send.
 
 use super::{
-    planned, sent, unasked, Part,
+    planned, sent, sent_private, unasked, Part,
     Reader::{Admission, Answer, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::Needless,
@@ -49,8 +49,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0c40 => sent("OP_ShopInventoryPacket", EQMAC, Read(&[Zone])),
         0x1040 => sent("OP_TradeReset", EQMAC, planned(EqMacExchanges)),
         0x1140 => sent("OP_PetitionRefresh", EQMAC, Partly(&[Zone], PETITION)),
-        0x1142 => sent("OP_BazaarSearch", EQMAC, planned(Bazaar)),
-        0x1242 => sent("OP_Trader", EQMAC, planned(Bazaar)),
+        0x1142 => sent_private("OP_BazaarSearch", EQMAC, planned(Bazaar)),
+        0x1242 => sent_private("OP_Trader", EQMAC, planned(Bazaar)),
         0x1342 => sent("OP_ShopPlayerRecharge", QUARM, unasked(EqMacExchanges)),
         // The world's text for one player, which the zone relays; nothing
         // in TAKP's or Quarm's world sends it today.
@@ -59,15 +59,15 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1540 => sent("OP_Emote", EQMAC, Read(&[Chat])),
         0x1542 => sent("OP_RespondAA", EQMAC, planned(AlternateAdvancement)),
         0x1640 => sent("OP_RandomReply", EQMAC, planned(EqMacWorld)),
-        0x1642 => sent("OP_TraderShop", EQMAC, planned(Bazaar)),
+        0x1642 => sent_private("OP_TraderShop", EQMAC, planned(Bazaar)),
         0x1741 => sent("OP_GuildInvite", EQMAC, Partly(&[Zone], INVITE)),
-        0x1842 => sent("OP_BecomeTrader", EQMAC, planned(Bazaar)),
+        0x1842 => sent_private("OP_BecomeTrader", EQMAC, planned(Bazaar)),
         // TAKP and Quarm send it only when a removal fails.
         0x1941 => sent("OP_GuildRemove", EQMAC, Partly(&[Zone], REMOVAL)),
         0x1942 => sent("OP_ManaUpdate", EQMAC, Read(&[Zone])),
         0x2140 => sent("OP_CorpsePosition", EQMAC, Read(&[Zone])),
         0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
-        0x2442 => sent("OP_TraderBuy", EQMAC, planned(Bazaar)),
+        0x2442 => sent_private("OP_TraderBuy", EQMAC, planned(Bazaar)),
         0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
         0x2542 => sent("OP_FaceChange", EQMAC, Read(&[Zone])),
         0x2620 => sent("OP_GroupUpdate", EQMAC, Read(&[Zone])),

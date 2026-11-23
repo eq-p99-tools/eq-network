@@ -1652,6 +1652,47 @@ pub enum WorldEvent {
     Channel(crate::chat_server::ChannelEvent),
     /// The chat server link came up or ended.
     ChannelLink(crate::chat_server::ChannelLink),
+    /// A task journal entry's description, as stock `EQEmu` sends it as
+    /// the entry is taken, at each zone-in and after each step's end
+    /// (gap list section 5, recording checklist 6.546). Its steps follow
+    /// as [`WorldEvent::TaskStepUpdated`].
+    TaskDescribed {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The entry.
+        description: crate::tasks::TaskDescription,
+    },
+    /// One step of a journal entry the session holds, hidden or with its
+    /// objective and count.
+    TaskStepUpdated {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The step.
+        activity: crate::tasks::TaskActivity,
+    },
+    /// A step or a whole journal entry ended. `EQEmu` takes a whole
+    /// entry out with a [`WorldEvent::TaskRemoved`] right after.
+    TaskConcluded {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// How and where.
+        completion: crate::tasks::TaskCompletion,
+    },
+    /// The server took a journal entry out.
+    TaskRemoved {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The emptied slot.
+        at: crate::tasks::TaskSlot,
+    },
+    /// The tasks the player has finished, the 50 most recent, replacing
+    /// any earlier list.
+    CompletedTasks {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The list, oldest first, as sent.
+        list: Vec<crate::tasks::CompletedTask>,
+    },
     /// A chat line was not sent, and is not kept for later: the session's
     /// pace for all chat held it (recording checklist 6.523).
     ChatRefused {

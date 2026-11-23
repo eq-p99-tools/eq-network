@@ -128,6 +128,7 @@ pub mod rof2_buffs;
 pub mod rof2_casting;
 pub mod rof2_looks;
 pub mod rof2_news;
+pub mod rof2_notices;
 pub mod rof2_player;
 pub mod rof2_pools;
 pub mod rof2_socials;
@@ -154,6 +155,8 @@ pub mod stats;
 pub mod sysinfo;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
+/// The task journal stock `EQEmu` keeps for a Titanium player.
+pub mod tasks;
 /// The server's regeneration tick and how often it comes.
 pub mod ticks;
 /// Tracking: the server's list and following a spawn.

@@ -509,7 +509,26 @@ Post-admission facts publish immediately as singleton batches. This reduces
 admission event amplification without enlarging the viewer queue or proving
 that all possible queue saturation is prevented.
 
-Malformed packets withdraw their affected observation. An unidentified
+Since checklist 6.547 the facts also carry the rest of the Titanium AA
+state, each field raw under its wire name: every `OP_SendAATable` header
+field (the string ids, `cost`, `cost2`, the prerequisite pair, `type`,
+`spellid`, the timer id `spell_type`, `spell_refresh`, `max_level`,
+`last_id`, `next_id`); the profile's `aapoints_spent`, `aapoints` and `expAA`
+as `Update::Points`; the 12-byte `OP_AAExpUpdate` 0x5f58 as
+`Update::Progress` (experience as the server scales it to 0..330, unspent
+points and the split percentage); and the server's 12-byte `OP_AAAction`
+0x0681 as `Update::Timer` {`begin`, `ability`, `end`}, where `ability` is a
+definition's `spell_type` and `end` is the server's clock when it sent the
+timer, not a deadline. The session does no timer arithmetic and keeps no
+timers; it publishes each as received. Points, experience and timers change
+no effect, so they bring no `LiquidHazardRevision`.
+
+Malformed packets withdraw their affected observation. An unreadable
+profile withdraws its points with its selections (`Update::Points(None)`),
+unreadable experience withdraws the last (`Update::Progress(None)`), and an
+unreadable timer withdraws nothing: no timer id in it can be trusted. Each
+unreadable line carries no payload bytes; the profile, experience and
+timer lines name the length. An unidentified
 malformed definition withdraws cached definitions; `OP_ClearAA` withdraws the
 whole AA view until replacement facts arrive. These withdrawals never supply
 an empty selection. The local effect-list bound is 256 records per definition;
@@ -1798,6 +1817,45 @@ nobody asked for is withheld and a gap too. The bazaar's and traders'
 gaps keep no sample, only opcode and length. The parcel delivery costs
 `EQEmu` sends after results (action 29) are read and dropped: only RoF and
 later have parcels.
+
+## Task journal
+
+Stock `EQEmu` sessions (Titanium) read the task journal the zone sends
+(gap list section 5, recording checklist 6.546, from `EQEmu`'s source and
+not yet checked live). P99, TAKP, Quarm and RoF2 keep none; there is no
+capability and nothing is sent. The host hears, each with the admission's
+`session_id`:
+
+- `WorldEvent::TaskDescribed { description }`: an entry's `TaskDescription`
+  in its `TaskSlot` (the one `TaskKind::Task` slot 0, or a `TaskKind::Quest`
+  slot 0 to 18), with its title, the server's open-journal flag, duration,
+  duration code and start time as sent (the session does no clock
+  arithmetic), description and `Rewards`. A description of another task in
+  a slot forgets that slot's earlier steps.
+- `WorldEvent::TaskStepUpdated { activity }`: one step, `Step::Hidden` or
+  `Step::Shown(Objective)` with its goal and count, for an entry the
+  session holds. `EQEmu` sends a description before its steps every time,
+  so a step for a slot holding no entry of its task is stale: the host
+  does not hear it, and it goes to the gap log by opcode and length.
+- `WorldEvent::TaskConcluded { completion }`: a step ended
+  (`stage_completed`), or the whole task completed or failed. `EQEmu` then
+  sends the entry again (a step) or takes it out (the task).
+- `WorldEvent::TaskRemoved { at }`: the server took the entry out
+  (`OP_CancelTask`), the only way an entry leaves the journal here.
+- `WorldEvent::CompletedTasks { list }`: the tasks finished, at most 50,
+  replacing the earlier list.
+
+What the zone sends before it admits the player is told at the admission,
+the task first, then the quests by slot, each description before its
+steps, then the finished list. Up to 64 stale messages heard before the
+admission go to the gap log there; past that only their count is told, as
+one diagnostic. Each zone starts empty and sends the whole journal again. A message that is short, overruns, has a string without its
+end or too long, counts past what it carries, names a shared task (kind 1,
+after Titanium), a slot past the journal or a step past 20 is refused
+whole, never cut, and goes to the gap log by opcode and length only: no
+journal message's gap keeps a sample, and no diagnostic or error carries a
+task's words. Inferred until read R49-38: the official program's use of
+each field, and whether it clears its journal at zone-in.
 
 ## Resurrection and translocate consent
 

@@ -15,6 +15,51 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local live row passes. Gaps of the bazaar's and traders' messages keep no
   sample. **Breaking:** new `GameCommand`, `WorldEvent` and `Capability`
   variants.
+- Read RoF2's quest rewards and their sound, renames, the new titles
+  notice and the banker's change as stock `EQEmu` sends them, labelled
+  inferred for RoF2 (6.549). The new `rof2_notices` module reads `OP_Sound`
+  (0x1a30, both the reward and the ding record), `OP_MobRename` (0x2c57),
+  `OP_NewTitlesAvailable` (0x0d32) and `OP_BankerChange` (0x791e), which
+  have no encoder for either generation, through Titanium's readers into
+  Titanium's events, with Titanium's refusals. The rename's names reach the
+  host in the event only. Coverage rows for all four; `OP_Sound` and
+  `OP_MobRename` share Titanium's parts. Validate still refuses RoF2.
+- Read the task journal stock `EQEmu` sends a Titanium player (gap list
+  section 5, checklist 6.546), from source and not yet checked live. The
+  new `tasks` module reads `OP_TaskDescription` (0x5ef7), `OP_TaskActivity`
+  (0x682d), `OP_TaskActivityComplete` (0x54eb), `OP_CompletedTasks`
+  (0x76a2) and the server's `OP_CancelTask` (0x3ba8), refusing a record
+  whole rather than cutting it. A session journal, offered by stock
+  `EQEmu` only, keeps the task and 19 quests per admission and tells the
+  host five new events for its ignore arms: `WorldEvent::TaskDescribed`,
+  `TaskStepUpdated`, `TaskConcluded`, `TaskRemoved` and `CompletedTasks`.
+  A step for no entry of its task is told as a gap. The five coverage rows
+  are read, the description's crystal parts and three step words partly;
+  their gaps keep no sample, since the bodies carry the server's task
+  text (new `sent_private` coverage rows). P99, TAKP, Quarm and RoF2 keep
+  no journal; RoF2's coverage is unchanged. Nothing is sent yet.
+  **Breaking:** `Message::Journal` and the five `WorldEvent` variants.
+- Read the rest of Titanium's alternate advancement, read only (6.547):
+  every `OP_SendAATable` header field (`Rank` gains `hotkey_sid`,
+  `hotkey_sid2`, `title_sid`, `desc_sid`, `cost`, `prereq_skill`,
+  `prereq_minpoints`, `kind` for the wire's `type`, `spellid`, `spell_type`,
+  `spell_refresh`, `max_level`, `last_id`, `next_id` and `cost2`, each raw
+  under its wire name), the profile's points spent, unspent and `expAA`,
+  `OP_AAExpUpdate` (0x5f58) and the server's reuse timers on `OP_AAAction`
+  (0x0681). The session publishes them as received and keeps no timers.
+  The feature is still offered on local `EQEmu` only; it opens to every
+  stock `EQEmu` session in a one-line follow-up once its local live row
+  passes, and stays off P99, TAKP, Quarm and RoF2.
+
+  **Breaking** (for the client repin):
+  - `alternate_advancement::Rank` gains the fifteen fields above.
+  - `alternate_advancement::Update` gains `Points(Option<Points>)`,
+    `Progress(Option<Progress>)` and `Timer(Timer)`, with the new structs
+    `Points`, `Progress` and `Timer`.
+  - `alternate_advancement::titanium_profile` returns `[Update; 2]`
+    (selections, then points), and `invalidated` returns `Option<Update>`
+    (`None` for an unreadable timer).
+
 - Take an item's song as the class's when the host's installed spell data
   says so (gap 3.5, checklist 6.542, part 2). The new
   `ItemUse::installed_class_spell: Option<bool>` is the host's word; with
@@ -46,6 +91,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   echoes the start to the caster, are inferred (R49-21a). The song state
   still decides only what `/stopsong` and a Bard's `/stopcast` send; it
   holds nothing and never touches movement.
+
 - Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
   sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`
   module reads `OP_RandomReply` (0x106b), `OP_Assist` (0x4478),

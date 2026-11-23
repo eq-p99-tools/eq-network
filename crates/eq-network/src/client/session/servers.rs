@@ -551,6 +551,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// The task journal stock `EQEmu` keeps (gap list section 5, checklist
+    /// 6.546). P99, TAKP and Quarm have no tasks.
+    fn journal(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Petitions, bug reports and feedback to the server's staff. A server
     /// type lists them only after its own live check, since a person reads
     /// each one (recording checklist 6.511).
@@ -654,6 +660,7 @@ pub(super) trait ServerType: Sync {
             self.ticks(setup),
             self.helm(setup),
             self.looking(setup),
+            self.journal(setup),
             self.reports(setup),
             self.dialogs(),
             self.channels(setup),
@@ -1282,6 +1289,8 @@ impl ServerType for EqEmu {
         true
     }
 
+    /// Local only until #310's local live row passes; then a one-line
+    /// follow-up offers it on every stock `EQEmu` session (checklist 6.547).
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
             offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
@@ -1532,6 +1541,12 @@ impl ServerType for EqEmu {
     /// and Quarm wait for their own checks.
     fn looking(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::looking())
+    }
+    /// The task journal as `TaskManager::SendActiveTaskToClient` and the
+    /// senders around it build it, from source; not yet checked live
+    /// (checklist 6.546).
+    fn journal(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<super::journal::Journal>::default())
     }
 
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
@@ -2048,6 +2063,7 @@ mod tests {
             ServerProtocol::Project1999,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
         ] {
             assert!(server_type(protocol).environmental_aa(&setup).is_none());
         }
@@ -2083,6 +2099,32 @@ mod tests {
     /// What a server type offers, each once.
     fn offers(server: &dyn ServerType) -> Vec<Capability> {
         listed(server, false)
+    }
+
+    #[test]
+    fn only_stock_eqemu_keeps_a_task_journal() {
+        use crate::client::ServerProtocol;
+        let setup = Setup::new("Tester", AutoEat::default());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            let keeps = match protocol {
+                ServerProtocol::EqEmu => true,
+                ServerProtocol::Project1999
+                | ServerProtocol::Quarm
+                | ServerProtocol::Takp
+                | ServerProtocol::EqEmuRof2 => false,
+            };
+            assert_eq!(
+                server_type(protocol).journal(&setup).is_some(),
+                keeps,
+                "{protocol:?}"
+            );
+        }
     }
 
     #[test]
@@ -2598,11 +2640,12 @@ mod tests {
         // the Titanium program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; only EQEmu takes the show-helm option; and only
-        // EQEmu lists petitions and bug reports (6.511) and titles (6.516).
+        // EQEmu lists petitions and bug reports (6.511) and titles (6.516),
+        // and keeps a task journal (6.546).
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 38),
-            (ServerProtocol::EqEmu, 51),
+            (ServerProtocol::EqEmu, 52),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
