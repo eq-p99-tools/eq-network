@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Build the Mac-era program's arrival aboard a boat (TAKP 0x53df6e, read
+  9c, checklist 6.641), not offered yet: Quarm and TAKP keep `BoatRiding`
+  off until an attended first ride.
+  - The profile's position is taken as a world point, as both servers
+    write it (TAKP 44afcbf and Quarm fc75fcf, source-derived), and
+    `Arrival::Aboard` carries it in the boat's frame. The host's placement
+    is accepted at the first try only.
+  - With the boat not in, nothing is sent; the session looks again each
+    tick and gives up at the safe point after 60 s (inferred from
+    Titanium).
+
 - Build the Mac-era program's boat boarding and leaving (TAKP 0x4c131d,
   read 9a, checklist 6.618), not offered yet: Quarm and TAKP keep
   `BoatRiding` off until the Mac-era arrival is read.
