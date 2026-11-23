@@ -1899,8 +1899,20 @@ identical `Handle_OP_BoardBoat`, `Handle_OP_LeaveBoat` and
   death each give control back.
 - **Not offered.** `BoatControl` and `BoatRiding` stay off on both server
   types until the `EQMac` program's steering (a position update under the
-  boat's spawn moves it on both servers) and its board, leave and arrival
-  wire are read (open rows 9a and 9b).
+  boat's spawn moves it on both servers) and its arrival are read (open row
+  9b and the arrival placement).
+- **Board and leave (built, not offered; 6.618).** The `EQMac` program's
+  frame routine (TAKP `eqgame.exe` 0x4c131d, read 9a) sends `OP_BoardBoat`
+  (the program's 0x41bb; 0xbb41 in this crate's byte order, as Quarm's
+  table lists it) reliable on the first frame its vehicle pointer is set,
+  with the boat's name, its NUL and three record bytes, and an empty
+  `OP_LeaveBoat` (0x41bc; 0xbc41 here) unreliable once two frames in a row
+  have none.
+  `boats::riders::{eqmac_board, eqmac_leave}` encode them, sending the
+  three bytes as zero (inferred, as on Titanium). The riders feature
+  checks for them on each accepted motion sample on the Mac era, where
+  Titanium uses its 1 s tick. Samples standing in for the program's frames
+  is inferred.
 - **Profile.** The Mac profile's `boat` (+3256, 32 bytes) arrives as
   `Message::VehicleName`, last among the profile's messages. Both servers
   keep it across zones and clear it on `OP_LeaveBoat` and in a zone without
@@ -2217,6 +2229,37 @@ grounded movement cannot qualify a sample for diagonal credit during that
 ascent. The tracker expires as accepted samples pass the jump apex. It does
 not establish a landing. None represents a native movement
 rule, safe server threshold or detection guarantee.
+
+A sample's velocity fields carry the player's own velocity in the
+generation's wire scale (checklist 6.617). A swim stroke carries all three,
+as before. On land, `MovementRequest::vertical_speed` is the host's own
+vertical speed at the moment of the sample, in units a second with up
+positive: some while the host has the player in the air, and none on the
+ground and on the sample that lands. A rider's speed is its own and leaves
+out the boat. Where the generation sends it
+(`GameDialect::sends_airborne_speed`: Titanium, and RoF2 inferred), the
+session sends that speed. It is bounded up to the read jump's take-off speed
+(0 without a read jump) and down to the fall limit derived from the zone's
+gravity (`movement::fall_speed`), and a non-number is refused. With none
+given, the session sends 0.
+
+Titanium builds its update from the actor's own velocity fields
+(`eqgame.exe` 0x465244, read R49-27 (c)), and other clients' pickers draw the
+rise and the fall from that vertical speed (0x44fa8f). Capture-derived from
+kept official recordings: the field is the speed at the moment of each
+update (a jump sends +1.968, then -0.341 a tick, where the interval means
+were +0.994 and -0.497), and it is 0 on every grounded update and on the
+landing.
+
+Departures and unread cases:
+- **Bumpy ground:** the program also sends small values (-0.11 to -0.72 a
+  tick) while walking over bumpy ground. The session sends 0 there.
+- **Flight and levitation:** the session sends 0, unread.
+- **Mac era:** the program's field is unread, so the session keeps sending 0
+  on land.
+
+Sending 0 in the air was our departure until now, and the change applies on
+every Titanium server type, P99 included.
 
 `SetBookOptions { session_id, memorize_without_sitting }` is an explicit
 memorization departure: no automatic sitting and no local five-second

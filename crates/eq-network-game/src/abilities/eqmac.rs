@@ -9,7 +9,7 @@ use serde::Serialize;
 /// Abilities with implemented `EQMac` requests and session validation.
 /// Frenzy has no class dispatch on these servers. Fishing and Bind Wound
 /// still need their resource/completion exchanges ported.
-pub const SUPPORTED: [Ability; 15] = [
+pub const SUPPORTED: [Ability; 16] = [
     Ability::Kick,
     Ability::Bash,
     Ability::Backstab,
@@ -25,6 +25,7 @@ pub const SUPPORTED: [Ability; 15] = [
     Ability::Mend,
     Ability::FeignDeath,
     Ability::SenseHeading,
+    Ability::Tracking,
 ];
 
 /// An `EQMac` skill's numeric rank, including an eligible zero rank.
@@ -72,6 +73,11 @@ pub fn known(ability: Ability, skills: &[u32], race: u32, class: Option<u32>) ->
         Ability::Hide | Ability::Sneak | Ability::Forage => rank > 0,
         Ability::Taunt => matches!(class, Some(1 | 3 | 4 | 5)),
         Ability::SenseHeading => true,
+        // Both servers kick any other class for `OP_Track` (6.619); a rank
+        // of zero is pressed, and the server makes it one.
+        Ability::Tracking => {
+            class.is_some_and(|class| crate::tracking::eqmac::TRACKERS.contains(&class))
+        }
         _ => false,
     }
 }
@@ -120,6 +126,8 @@ pub fn encode(ability: Ability, target: Option<u16>, own: u16) -> Result<Encoded
             0xac40
         }
         Ability::SenseHeading => 0x8741,
+        // Empty, once per press (TAKP program 0x4bdf2f, read row 10d).
+        Ability::Tracking => crate::tracking::eqmac::OPCODE,
         _ => bail!("unsupported EQMac ability: {ability:?}"),
     };
     Ok(EncodedCommand { opcode, body })
@@ -181,6 +189,37 @@ pub fn reset_skill(body: &[u8]) -> Result<SkillReset> {
 mod tests {
     use super::*;
     use crate::request::{self, Request, Sender};
+
+    /// Only a Ranger, Druid or Bard with the skill at any rank, zero too,
+    /// may press Tracking; it goes out empty (6.619).
+    #[test]
+    fn tracking_is_a_trackers_empty_press() {
+        for class in 0..=20 {
+            for (value, ranked) in [
+                (0, true),
+                (1, true),
+                (252, true),
+                (254, false),
+                (255, false),
+            ] {
+                let mut skills = vec![0; 100];
+                skills[53] = value;
+                assert_eq!(
+                    known(Ability::Tracking, &skills, 1, Some(class)),
+                    ranked && [4, 6, 8].contains(&class),
+                    "class {class}, skill {value}"
+                );
+            }
+        }
+        assert!(!known(Ability::Tracking, &[0; 100], 1, None));
+        assert_eq!(
+            encode(Ability::Tracking, None, 7).unwrap(),
+            EncodedCommand {
+                opcode: 0x8441,
+                body: Vec::new(),
+            }
+        );
+    }
 
     #[test]
     fn eqmac_ability_requests_have_exact_generation_specific_bytes() {

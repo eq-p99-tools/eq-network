@@ -934,6 +934,8 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Logout => Ok(crate::quarm::logout()),
         Request::Posture(posture) => crate::quarm::posture(sender.spawn(), *posture),
         Request::Position(sample) => crate::quarm::client_update(sample),
+        Request::BoardBoat(name) => crate::boats::riders::eqmac_board(name),
+        Request::LeaveBoat => Ok(crate::boats::riders::eqmac_leave()),
         Request::EnvironmentalDamage { hazard, amount } => {
             hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
         }

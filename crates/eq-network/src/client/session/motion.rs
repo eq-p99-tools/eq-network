@@ -37,6 +37,9 @@ pub(super) struct Body {
     last_sent: Instant,
     /// Carrier named by the last accepted motion proposal, never a rejected one.
     carrier_support: Option<eq_network_game::movement::CarrierSample>,
+    /// Accepted samples in a row, up to now, that named no carrier: the
+    /// Mac-era program's frames off its vehicle (6.618).
+    unlinked_samples: u8,
 }
 
 impl Default for Body {
@@ -44,6 +47,7 @@ impl Default for Body {
         Self {
             motion: None,
             carrier_support: None,
+            unlinked_samples: 0,
             stationary: PositionPacket {
                 spawn_id: 0,
                 sequence: 0,
@@ -90,6 +94,16 @@ impl Body {
         support: Option<eq_network_game::movement::CarrierSample>,
     ) {
         self.carrier_support = support;
+        self.unlinked_samples = if support.is_some() {
+            0
+        } else {
+            self.unlinked_samples.saturating_add(1)
+        };
+    }
+
+    /// Accepted samples in a row, up to now, that named no carrier.
+    pub(super) const fn unlinked_samples(&self) -> u8 {
+        self.unlinked_samples
     }
 
     /// Previous accepted point for corroborating a current pad entrance.
@@ -1054,6 +1068,7 @@ impl Feature for Motion {
                     .with_falls(self.falls)
                     .with_rooted_jumps(out.wire.dialect().root().jumps)
                     .with_heading_snapshots(out.wire.dialect().supports_heading_snapshots())
+                    .with_airborne_speed(out.wire.dialect().sends_airborne_speed())
                     .with_swimming(
                         self.swimming
                             && match out.wire.dialect() {

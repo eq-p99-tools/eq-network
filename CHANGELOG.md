@@ -22,6 +22,46 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     needs it instead of `PlayerInspection` (Titanium sessions offer both);
     `WorldEvent::InspectedBy { session_id, inspector_id, name, string_id }`;
     `inspection::eqmac::answer`.
+- Build the Mac-era program's boat boarding and leaving (TAKP 0x4c131d,
+  read 9a, checklist 6.618), not offered yet: Quarm and TAKP keep
+  `BoatRiding` off until the Mac-era arrival is read.
+  - New: `boats::riders::{EQMAC_BOARD_OPCODE, EQMAC_LEAVE_OPCODE,
+    eqmac_board, eqmac_leave}`. The Mac request encoder now carries
+    `Request::BoardBoat` (0xbb41 in this crate's byte order, the
+    program's 0x41bb: the name, its NUL and three zero bytes) and
+    `Request::LeaveBoat` (0xbc41, the program's 0x41bc, empty).
+  - On the Mac era, the riders feature boards, reliable, on the first
+    accepted sample that stands on a boat, and leaves, unreliable, after two
+    unlinked samples in a row. Titanium keeps its 1 s tick. Samples stand in
+    for the program's frames (inferred).
+- Quarm and TAKP offer the Tracking ability (checklist 6.619; TAKP program
+  read row 10d; source-derived from `Client::Handle_OP_Track` at TAKP 44afcbf
+  and Quarm fc75fcf, not live): each press sends an empty `OP_Track`
+  (0x8441), as the program does, with no send per skill roll. Only a
+  Ranger, Druid or Bard with the skill at any rank may press it, since both
+  servers kick any other class; a press while a trade is open is refused
+  (the program ignores it; which window its flag is, is inferred). The list
+  is the host's to build (row 10c). Its 10-second reuse is the program's
+  own (read 10e). `abilities::eqmac::SUPPORTED` grows to 16; not breaking
+  beyond that constant's length.
+- A jump or fall on land sends the player's own vertical speed, as the
+  Titanium program's update does (0x465244, read R49-27 (c), checklist
+  6.617). Other clients draw our jumps and falls from it. Until now we sent
+  a vertical speed of 0, so they drew us standing.
+  - **Breaking:** `MovementRequest` gains `vertical_speed: Option<f32>`
+    (with the builder `airborne_at`). It is the host's own vertical speed at
+    the sample, in units a second, up positive, and none on the ground and
+    on landing.
+  - The session sends that speed, bounded by the read jump's take-off speed
+    and the derived fall limit, and 0 when none is given. This is
+    capture-derived: the official recordings show the speed at each update,
+    and 0 on the ground and on landing.
+  - New `GameDialect::sends_airborne_speed` and
+    `MotionSession::with_airborne_speed`. Titanium sends the speed, and RoF2
+    is inferred to. The Mac-era field is unread, so the Mac era keeps
+    sending 0.
+  - Departures, labelled: 0 over bumpy ground, where the program sends
+    small values, and 0 in flight, which is unread.
 - Begging and Pick Pockets reach as the Titanium program measures them
   (read R49-31 b, checklist 6.631): from origin to origin, flat in (x, y),
   height ignored, at most 15, rather than the bandage's reach. **Breaking:**

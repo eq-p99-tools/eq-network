@@ -262,6 +262,13 @@ pub struct MovementRequest {
     /// rising lift may carry the player up with it
     /// ([`MovementGuard::allow_lift_rise`]).
     pub support: Option<Support>,
+    /// The player's own vertical speed at the moment of the sample, in world
+    /// units a second, up positive: some while the host has the player in
+    /// the air, none on the ground and on the sample that lands. A rider's
+    /// is its own, without the boat's. The session sends it, bounded, as
+    /// the generation's program sends its actor's vertical speed
+    /// ([`super::GameDialect::sends_airborne_speed`], checklist 6.617).
+    pub vertical_speed: Option<f32>,
 }
 
 /// A moving thing the player stands on, which may carry them.
@@ -290,6 +297,7 @@ impl MovementRequest {
             heading: HeadingUpdate::Rate,
             created,
             support: None,
+            vertical_speed: None,
         }
     }
 
@@ -297,6 +305,13 @@ impl MovementRequest {
     #[must_use]
     pub const fn supported_by(mut self, support: Support) -> Self {
         self.support = Some(support);
+        self
+    }
+
+    /// The same request, in the air at `speed` units a second, up positive.
+    #[must_use]
+    pub const fn airborne_at(mut self, speed: f32) -> Self {
+        self.vertical_speed = Some(speed);
         self
     }
 }
@@ -1342,6 +1357,7 @@ mod tests {
             },
             created: now,
             support: None,
+            vertical_speed: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.z = 2.0;
@@ -1365,6 +1381,7 @@ mod tests {
             },
             created: now,
             support: None,
+            vertical_speed: None,
         };
         // Without the player's climb, one riser a sample however long.
         assert!(guard.accept(&request, now).is_err());
@@ -1418,6 +1435,7 @@ mod tests {
             },
             created: now,
             support: None,
+            vertical_speed: None,
         };
         // Grounded modes still refuse the drop.
         assert!(guard.accept(&request, now).is_err());
@@ -1443,6 +1461,7 @@ mod tests {
             },
             created,
             support: None,
+            vertical_speed: None,
         }
     }
 
@@ -1534,6 +1553,7 @@ mod tests {
             },
             created,
             support: None,
+            vertical_speed: None,
         }
     }
 
@@ -1622,6 +1642,7 @@ mod tests {
             },
             created: now,
             support: None,
+            vertical_speed: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.x = 0.5;
@@ -1643,6 +1664,7 @@ mod tests {
             },
             created: start,
             support: None,
+            vertical_speed: None,
         };
         assert!(guard.accept(&request, start).is_err());
         guard
@@ -1682,6 +1704,7 @@ mod tests {
             },
             created: now,
             support: None,
+            vertical_speed: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.x = 0.5;
@@ -1722,6 +1745,7 @@ mod tests {
                     },
                     created: now,
                     support: None,
+                    vertical_speed: None,
                 },
                 now
             )
