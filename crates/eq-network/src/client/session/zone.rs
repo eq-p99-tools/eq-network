@@ -332,6 +332,7 @@ fn run_connected(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::for_zone(session_id, config);
+    world.ruleset = context.world_ruleset.get();
     let mut recording_only = false;
     let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
@@ -974,7 +975,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 148;
+    const KINDS: usize = 149;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1112,6 +1113,7 @@ mod tests {
             ClientCommand::ReportBug { .. } => 118,
             ClientCommand::SendFeedback { .. } => 119,
             ClientCommand::ChallengeDuel { .. } => 120,
+            ClientCommand::DeclineDuel { .. } => 148,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1651,6 +1653,10 @@ mod tests {
             ClientCommand::ChallengeDuel {
                 session_id,
                 target: 2,
+                created: Instant::now(),
+            },
+            ClientCommand::DeclineDuel {
+                session_id,
                 created: Instant::now(),
             },
             ClientCommand::DropInvisibility {
@@ -3368,12 +3374,15 @@ mod tests {
                 Capability::Yelling,
                 Capability::ApplyingPoison,
                 Capability::ServerFilters,
+                Capability::Dueling,
                 Capability::Surnaming,
                 Capability::Petitioning,
                 Capability::ReportingBugs,
                 Capability::Shielding,
                 Capability::BazaarSearching,
-                Capability::DisciplineReuse
+                Capability::DisciplineReuse,
+                Capability::InspectAnswer,
+                Capability::DecliningDuels
             ]
         );
         let mut expected = features(crate::client::ServerProtocol::Quarm);

@@ -14,6 +14,73 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   R49-30 b). The program's 0x30d3, for a tracked spawn it no longer holds
   while still tracking, is a state removal never leaves here, so it isn't
   said (inferred). Not breaking: only which line is sent.
+- Pick Pockets on a player follows the world's ruleset (6.631 follow-up),
+  read from the world's rules packet (`OP_LogServer`, the value
+  `WorldRules::pvp` already decodes). Under ruleset 4 the two flag lines
+  (0x307a, 0x307b) are skipped; the player is refused with 0x307c when
+  not eligible for player combat, and with 0x307d when the target's level
+  is outside five of theirs either way or is 5 or lower. The program's
+  eligibility test reads a team value no packet field is mapped to yet:
+  the player's own PvP flag stands in for it (inferred). Under any other
+  ruleset only the flag lines apply, and this library's own level-range
+  words are gone. A session that hasn't read the rules (the Mac-era and
+  RoF2 worlds today) keeps the flags and the level range in this
+  library's words. Not breaking: the new state is internal.
+- **Breaking:** A same-zone zone line places the player locally on stock
+  EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
+  program's 0x48aaa6 sends one position record and lands the player itself,
+  with no 0x5dd8 and no wait, on any server). `WorldEvent::SameZoneBoundary`
+  is removed: nothing waits for the server to move the player any more, and
+  exhaustive matches drop its arm. The EQEmu profile now takes the host's
+  `InstalledZoneBoundaries`. Quarm, TAKP and RoF2 are unread and still refuse
+  a same-zone line, as before.
+- P99's expansion list is read: its `OP_ExpansionInfo` body is 46 bytes (capture-derived: the mask first, then bytes that differ per session and zeros), and `rules::expansions` refused any body but 4 bytes, so P99's mask was dropped. It now takes the first word from a 4- or 46-byte body (`rules::P99_EXPANSIONS_LENGTH`) and leaves the rest unread. P99 recordings give 0x3 (Kunark and Velious), so `WorldEvent::Expansions` now reaches P99 sessions too.
+
+- TAKP and Quarm keep a duel as the `EQMac` program does (checklist 6.622;
+  TAKP program reads 11g and 11h; source-derived from TAKP 44afcbf's
+  `Handle_OP_RequestDuel`, `Handle_OP_DuelResponse` and
+  `Handle_OP_DuelAccept` and Quarm fc75fcf's `Handle_OP_RequestDuel`,
+  `Handle_OP_DuelResponse` and `Handle_OP_DuelResponse2`, not live). `/duel`
+  takes any spawn but a corpse; accepting sends 0xcf40 then 0x5d41; the
+  program's own refusals and `/decline` send the 6-byte 0xd040 with the
+  reason; TAKP's relayed refusal is `TurnedDown`; a kill in the duel sends
+  0x5e41, which neither server names. The host's question works as on
+  Titanium, its no staying local. The old held `EQMac` duel in the
+  confirmations module is gone.
+  - **Breaking:** `GameCommand::DeclineDuel`; `Capability::DecliningDuels`
+    (93); `DuelNews::{Declining, NothingToDecline, DecliningWhileDueling}`;
+    `socials::{EQMAC_DUEL_WON_OPCODE, eqmac_duel_auto_decline,
+    eqmac_duel_won}`; `Request::AutoDeclineDuel` and `Request::DuelOver`
+    now encode on `EQMac`.
+- Quarm and TAKP answer another player's inspection as the `EQMac` program
+  does (checklist 6.621; TAKP program read row 11e, 0x4e769d;
+  source-derived from `Client::Handle_OP_InspectAnswer` at TAKP 44afcbf and
+  Quarm fc75fcf, which pass the 1,744-byte answer on unread, not live):
+  `OP_InspectAnswer` (0xb640) names the asker and the player, each worn
+  place's item name and icon (`EQMac` slots 0 to 21, the program's order;
+  0xffff for an empty place) and the player's inspect message. At most one
+  answer goes each second; a request inside it is dropped. The program's
+  unwritten bytes and its 32-byte string (inferred to be a title) are sent
+  as zero, a labelled departure. Each answer says line 0x57c naming the
+  asker when they are a known spawn other than the player; the program's
+  option for it is unread, so it is always said. Asking to inspect, and
+  showing an answer received, stay unoffered on `EQMac`.
+  - **Breaking:** `Capability::InspectAnswer` (92); `SetInspectNote` now
+    needs it instead of `PlayerInspection` (Titanium sessions offer both);
+    `WorldEvent::InspectedBy { session_id, inspector_id, name, string_id }`;
+    `inspection::eqmac::answer`.
+- Build the Mac-era program's boat boarding and leaving (TAKP 0x4c131d,
+  read 9a, checklist 6.618), not offered yet: Quarm and TAKP keep
+  `BoatRiding` off until the Mac-era arrival is read.
+  - New: `boats::riders::{EQMAC_BOARD_OPCODE, EQMAC_LEAVE_OPCODE,
+    eqmac_board, eqmac_leave}`. The Mac request encoder now carries
+    `Request::BoardBoat` (0xbb41 in this crate's byte order, the
+    program's 0x41bb: the name, its NUL and three zero bytes) and
+    `Request::LeaveBoat` (0xbc41, the program's 0x41bc, empty).
+  - On the Mac era, the riders feature boards, reliable, on the first
+    accepted sample that stands on a boat, and leaves, unreliable, after two
+    unlinked samples in a row. Titanium keeps its 1 s tick. Samples stand in
+    for the program's frames (inferred).
 - Quarm and TAKP offer the Tracking ability (checklist 6.619; TAKP program
   read row 10d; source-derived from `Client::Handle_OP_Track` at TAKP 44afcbf
   and Quarm fc75fcf, not live): each press sends an empty `OP_Track`

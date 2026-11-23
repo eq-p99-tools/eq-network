@@ -753,12 +753,20 @@ pub enum Capability {
     /// The Titanium client can report Velious water's cold through
     /// environmental damage ([`crate::hazards::LiquidHazard::Cold`]).
     ColdWater,
+    /// Answering another player's inspection of the player: on Titanium
+    /// with the player's inspect message (the server fills the equipment),
+    /// and on TAKP and Quarm with the worn items as well, which the `EQMac`
+    /// program sends itself.
+    InspectAnswer,
+    /// `EQMac`'s `/decline` of a waiting duel challenge
+    /// ([`crate::command::GameCommand::DeclineDuel`]).
+    DecliningDuels,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 92] = [
+    pub const ALL: [Self; 94] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -851,6 +859,8 @@ impl Capability {
         Self::WeaponStances,
         Self::Melody,
         Self::ColdWater,
+        Self::InspectAnswer,
+        Self::DecliningDuels,
     ];
 }
 
@@ -1065,12 +1075,6 @@ pub enum WorldEvent {
         session_id: u64,
         /// Credential-free reason for the rejection.
         reason: String,
-    },
-    /// A local-only `EQEmu` boundary is staying in this admission. Ordinary
-    /// movement may continue. No landing has been received.
-    SameZoneBoundary {
-        /// Admission that submitted the crossing.
-        session_id: u64,
     },
     /// Received movement within this exact zone admission.
     SameZoneRelocated(crate::zoning::SameZoneRelocation),
@@ -2146,6 +2150,19 @@ pub enum WorldEvent {
         /// Who asks, as their client names them.
         inspector_id: u16,
     },
+    /// The player's program answered another player's inspection (the
+    /// `EQMac` program's line 0x57c, %1 their name, colour 0x111; shown
+    /// always, its option being unread: 6.621).
+    InspectedBy {
+        /// The admission that answered.
+        session_id: u64,
+        /// Who asked.
+        inspector_id: u16,
+        /// Their name, as the spawn table has it.
+        name: String,
+        /// The line, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// A decoded Titanium inspection response.
     InspectAnswer(crate::inspection::Inspection),
     /// A received response matched to the host's current inspection request.
@@ -2977,6 +2994,8 @@ mod tests {
             Capability::WeaponStances => 89,
             Capability::Melody => 90,
             Capability::ColdWater => 91,
+            Capability::InspectAnswer => 92,
+            Capability::DecliningDuels => 93,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
