@@ -419,6 +419,11 @@ pub enum Request {
         /// Whether the player chose it, rather than hunger or thirst.
         by_hand: bool,
     },
+    /// Put the poison in a slot on the weapon ([`crate::poisons`]).
+    ApplyPoison {
+        /// Where the poison is.
+        slot: InventorySlot,
+    },
     /// Where the player is: a position sample.
     Position(PositionPacket),
     /// The player jumped.
@@ -638,6 +643,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             meal,
             by_hand,
         } => food::consume(*slot, *meal, *by_hand),
+        Request::ApplyPoison { slot } => crate::poisons::titanium_request(*slot)?,
         Request::Position(sample) => sample.packet()?,
         Request::Jump => movement::titanium_jump(),
         Request::EnvironmentalDamage { hazard, amount } => {
@@ -716,6 +722,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             meal,
             by_hand,
         } => food::eqmac_consume(*slot, *meal, *by_hand),
+        Request::ApplyPoison { slot } => crate::poisons::eqmac_request(*slot),
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
         Request::CastItem {
             spell_id,

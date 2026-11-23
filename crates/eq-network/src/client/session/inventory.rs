@@ -16,6 +16,7 @@ mod meals;
 mod merchant;
 #[cfg(test)]
 mod merchant_outcomes;
+mod poisons;
 mod resync;
 mod sharing;
 
@@ -507,6 +508,8 @@ pub(super) struct Belongings {
     meals: meals::Meals,
     /// A split or a banker's change waiting for its answer.
     sharing: sharing::Sharing,
+    /// The poison request in flight.
+    poisons: poisons::Poisons,
     /// Whether the zone said anything of the inventory before admitting
     /// the player: a snapshot, an item or a packet it could not read.
     heard: bool,
@@ -550,6 +553,7 @@ impl Belongings {
             quotes,
             meals: meals::Meals::new(auto_eat, hungry),
             sharing: sharing::Sharing::default(),
+            poisons: poisons::Poisons::default(),
             heard: false,
         }
     }
@@ -1039,6 +1043,7 @@ impl Feature for Belongings {
         let mut offered = Vec::new();
         if self.allows.items {
             offered.push(Capability::Inventory);
+            offered.push(Capability::ApplyingPoison);
         }
         if self.allows.ground_drop {
             offered.push(Capability::GroundDropping);
@@ -1124,7 +1129,9 @@ impl Feature for Belongings {
 
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
-            ClientCommand::MoveInventory(_) => self.allows.items,
+            ClientCommand::MoveInventory(_) | ClientCommand::ApplyPoison { .. } => {
+                self.allows.items
+            }
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::DropItem(_) => self.allows.ground_drop,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
@@ -1179,6 +1186,18 @@ impl Feature for Belongings {
                         string_id,
                     }))
                 }
+                None => Ok(()),
+            },
+            ClientCommand::ApplyPoison {
+                session_id, slot, ..
+            } => match self.poisons.apply(*slot, world, out)? {
+                Some(reason) => out
+                    .log
+                    .send(ClientEvent::World(WorldEvent::ApplyPoisonRefused {
+                        session_id: *session_id,
+                        reason: reason.into(),
+                        string_id: None,
+                    })),
                 None => Ok(()),
             },
             _ => self.trade(command, world, out),
@@ -1268,6 +1287,9 @@ impl Feature for Belongings {
     ) -> Result<()> {
         if matches!(message, Message::Event(WorldEvent::Coins(_))) {
             self.trades.coins_replaced();
+        }
+        if let Message::Event(WorldEvent::PoisonAnswered(answer)) = message {
+            self.poisons.answered(*answer, out)?;
         }
         if training_cost_uncertain(message) {
             purse_uncertain(world, out)?;
@@ -1710,6 +1732,137 @@ mod tests {
             .result
             .unwrap();
         (belongings, world)
+    }
+
+    /// The poison in a bag's first slot and a ration beside it.
+    fn poisoned(
+        belongings: &mut Belongings,
+        wire: &'static dyn super::super::wire::Wire,
+    ) -> (World, InventorySlot) {
+        let mut world = World::new(5);
+        let mut bag = item(23);
+        bag.bag_slots = 4;
+        let vial = InventorySlot(23).child(0).unwrap();
+        let mut poison = item(vial.0);
+        poison.rules.item_type = eq_network_game::poisons::POISON_ITEM_TYPE;
+        let mut ration = item(22);
+        ration.rules.item_type = 14;
+        let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            ration, bag, poison,
+        ])));
+        belongings.admit(&snapshot, &mut world).unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        testing::run_on(wire, |out| belongings.admitted(&mut world, out))
+            .result
+            .unwrap();
+        (world, vial)
+    }
+
+    #[test]
+    fn a_poison_goes_on_from_the_slot_it_sits_in_and_stays_until_the_server_says() {
+        use eq_network_game::poisons;
+        for wire in [
+            &super::super::wire::Titanium as &'static dyn super::super::wire::Wire,
+            &super::super::wire::EqMac,
+        ] {
+            let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+            assert!(belongings
+                .capabilities()
+                .contains(&crate::world::Capability::ApplyingPoison));
+            let (mut world, vial) = poisoned(&mut belongings, wire);
+            let apply = |slot| ClientCommand::ApplyPoison {
+                session_id: 5,
+                slot,
+                created: Instant::now(),
+            };
+            assert!(belongings.owns(&apply(vial)));
+            assert_eq!(
+                apply(vial).capability(),
+                Some(crate::world::Capability::ApplyingPoison)
+            );
+            let before = world.inventory.items().clone();
+            let outcome =
+                testing::run_on(wire, |out| belongings.handle(&apply(vial), &mut world, out));
+            outcome.result.unwrap();
+            let expected = if wire.dialect() == eq_network_game::GameDialect::EqMac {
+                poisons::eqmac_request(vial)
+            } else {
+                poisons::titanium_request(vial)
+            }
+            .unwrap();
+            assert_eq!(outcome.sent, [expected]);
+            assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+            // The server's own record takes it out.
+            assert_eq!(world.inventory.items(), &before);
+            // One request in flight: a second waits for the answer.
+            let again =
+                testing::run_on(wire, |out| belongings.handle(&apply(vial), &mut world, out));
+            again.result.unwrap();
+            assert_eq!(
+                again.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
+            assert!(matches!(
+                again.events.as_slice(),
+                [ClientEvent::World(WorldEvent::ApplyPoisonRefused { reason, .. })]
+                    if reason == "Wait for the poison you are applying"
+            ));
+            let answer = |slot| {
+                Message::Event(WorldEvent::PoisonAnswered(poisons::PoisonAnswer {
+                    slot,
+                    applied: true,
+                }))
+            };
+            let heard = testing::run_on(wire, |out| {
+                belongings.observe(&answer(vial), &mut world, out)
+            });
+            heard.result.unwrap();
+            assert!(heard.events.is_empty(), "{:?}", heard.events);
+            // A stray answer is told once.
+            for told in [1, 0] {
+                let heard = testing::run_on(wire, |out| {
+                    belongings.observe(&answer(InventorySlot(22)), &mut world, out)
+                });
+                heard.result.unwrap();
+                assert_eq!(heard.events.len(), told, "{:?}", heard.events);
+            }
+            for (slot, reason) in [
+                (InventorySlot(22), "That is not a poison"),
+                (InventorySlot(24), "There is no item there"),
+            ] {
+                let outcome =
+                    testing::run_on(wire, |out| belongings.handle(&apply(slot), &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(
+                    outcome.sent,
+                    [] as [eq_network_game::command::EncodedCommand; 0]
+                );
+                assert!(
+                    matches!(
+                        outcome.events.as_slice(),
+                        [ClientEvent::World(WorldEvent::ApplyPoisonRefused {
+                            session_id: 5,
+                            reason: said,
+                            string_id: None,
+                        })] if said == reason
+                    ),
+                    "{:?}",
+                    outcome.events
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_observer_applies_no_poison() {
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        belongings.allows = Allowances::default();
+        assert!(!belongings.owns(&ClientCommand::ApplyPoison {
+            session_id: 5,
+            slot: InventorySlot(22),
+            created: Instant::now(),
+        }));
     }
 
     #[test]
@@ -2435,6 +2588,7 @@ mod tests {
             belongings.capabilities(),
             [
                 crate::world::Capability::Inventory,
+                crate::world::Capability::ApplyingPoison,
                 crate::world::Capability::Trading,
                 crate::world::Capability::Meals
             ]

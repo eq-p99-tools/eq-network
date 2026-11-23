@@ -489,6 +489,17 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Put the poison in a slot on the weapon, as a right-click on it does
+    /// ([`crate::poisons`]; what starts it in the program is pending read
+    /// R49-1, recording checklist 6.493).
+    ApplyPoison {
+        /// Current zone admission.
+        session_id: u64,
+        /// The poison's slot.
+        slot: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// What the session may eat and drink on its own from now on. Each zone
     /// session starts with the client's configured choice, so a host that
     /// lets the player change it says so again after each admission.
@@ -1099,6 +1110,7 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
             Self::LiquidDamage { .. } => "LiquidDamage",
             Self::Consume { .. } => "Consume",
+            Self::ApplyPoison { .. } => "ApplyPoison",
             Self::AutoEat { .. } => "AutoEat",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
             Self::SetMovementOptions { .. } => "SetMovementOptions",
@@ -1220,6 +1232,7 @@ impl GameCommand {
             | Self::LiquidDamage { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
+            | Self::ApplyPoison { session_id, .. }
             | Self::AutoEat { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
             | Self::SetMovementOptions { session_id, .. }
@@ -1343,6 +1356,7 @@ impl GameCommand {
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
+            Self::ApplyPoison { .. } => Capability::ApplyingPoison,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SendChat(_)
             | Self::SendChatInAdmission { .. }
@@ -1537,6 +1551,7 @@ impl GameCommand {
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
+            | Self::ApplyPoison { created, .. }
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
             | Self::UseDiscipline { created, .. }
@@ -1735,6 +1750,7 @@ pub fn encode(
         | GameCommand::ClimbReach { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
+        | GameCommand::ApplyPoison { .. }
         | GameCommand::AutoEat { .. }
         | GameCommand::AnswerListPolls { .. }
         | GameCommand::SetMovementOptions { .. }
