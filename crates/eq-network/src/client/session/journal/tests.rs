@@ -4,20 +4,20 @@ use eq_network_game::tasks::{Step, TaskKind};
 
 /// Builds records field by field, as `EQEmu`'s senders write them.
 #[derive(Default)]
-struct Record(Vec<u8>);
+pub(super) struct Record(pub(super) Vec<u8>);
 
 impl Record {
-    fn word(mut self, value: u32) -> Self {
+    pub(super) fn word(mut self, value: u32) -> Self {
         self.0.extend_from_slice(&value.to_le_bytes());
         self
     }
 
-    fn byte(mut self, value: u8) -> Self {
+    pub(super) fn byte(mut self, value: u8) -> Self {
         self.0.push(value);
         self
     }
 
-    fn string(mut self, text: &str) -> Self {
+    pub(super) fn string(mut self, text: &str) -> Self {
         self.0.extend_from_slice(text.as_bytes());
         self.0.push(0);
         self

@@ -21,8 +21,13 @@
 //! starts empty in each zone. Durations and start times are kept as sent:
 //! the session does no clock arithmetic. The task's words reach the host
 //! in the events only; no gap or diagnostic carries them.
+//!
+//! An NPC's offer and a finished task's steps come only as answers to
+//! the admitted player, so one heard before the admission is refused. The
+//! player's requests are in [`requests`].
 
 use super::feature::{Feature, Out, World};
+use super::ClientCommand;
 use crate::client::{ClientEvent, GapKind};
 use anyhow::Result;
 use eq_network_game::{
@@ -31,6 +36,8 @@ use eq_network_game::{
     world::WorldEvent,
 };
 use std::collections::{BTreeMap, HashMap};
+
+mod requests;
 
 /// The most refusals the journal keeps before the admission, so that a
 /// zone that sends stale steps without end holds no growing list. A whole
@@ -63,17 +70,43 @@ pub(super) struct Journal {
     refused: Vec<Refused>,
     /// How many refusals before the admission came past the bound.
     dropped: usize,
+    /// The player's requests, where the session offers them.
+    requests: Option<requests::Requests>,
 }
 
 impl Journal {
+    /// A journal that also takes the player's requests (6.555).
+    pub(super) fn with_requests() -> Self {
+        Self {
+            requests: Some(requests::Requests::default()),
+            ..Self::default()
+        }
+    }
+
     /// Applies one message, returning the event the host hears, or the
     /// refusal to tell.
     fn apply(
         &mut self,
         news: &News,
         session_id: u64,
+        admitted: bool,
     ) -> std::result::Result<WorldEvent, &'static str> {
         match news {
+            News::Offered(_) if !admitted => Err("a task offer before the admission"),
+            News::History(_) if !admitted => Err("a task history before the admission"),
+            News::Offered(offers) => {
+                if let Some(requests) = &mut self.requests {
+                    requests.offer = Some(offers.clone());
+                }
+                Ok(WorldEvent::TasksOffered {
+                    session_id,
+                    offers: offers.clone(),
+                })
+            }
+            News::History(history) => Ok(WorldEvent::TaskHistory {
+                session_id,
+                history: history.clone(),
+            }),
             News::Described(description) => {
                 let entry = self.entries.entry(description.at).or_insert_with(|| Entry {
                     description: description.clone(),
@@ -119,6 +152,9 @@ impl Journal {
             }
             News::Removed(at) => {
                 self.entries.remove(at);
+                if let Some(requests) = &mut self.requests {
+                    requests.cancelling.remove(at);
+                }
                 Ok(WorldEvent::TaskRemoved {
                     session_id,
                     at: *at,
@@ -135,6 +171,8 @@ impl Journal {
             News::Concluded(_) => (tasks::COMPLETION_OPCODE, "OP_TaskActivityComplete"),
             News::Completed(_) => (tasks::COMPLETED_OPCODE, "OP_CompletedTasks"),
             News::Removed(_) => (tasks::REMOVAL_OPCODE, "OP_CancelTask"),
+            News::Offered(_) => (tasks::offers::OFFERS_OPCODE, "OP_TaskSelectWindow"),
+            News::History(_) => (tasks::offers::HISTORY_OPCODE, "OP_TaskHistoryReply"),
         }
     }
 
@@ -151,9 +189,39 @@ impl Journal {
 }
 
 impl Feature for Journal {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        if self.requests.is_some() {
+            vec![crate::world::Capability::Tasks]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        self.requests.is_some() && requests::Requests::owns(command)
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Some(requests) = &mut self.requests else {
+            return Ok(());
+        };
+        requests.handle(
+            command,
+            &self.entries,
+            self.completed.as_deref(),
+            world,
+            out,
+        )
+    }
+
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Message::Journal { news, length } = message {
-            if let Err(why) = self.apply(news, world.session_id) {
+            if let Err(why) = self.apply(news, world.session_id, false) {
                 if self.refused.len() == MAX_REFUSED {
                     self.dropped += 1;
                     return Ok(());
@@ -216,7 +284,7 @@ impl Feature for Journal {
         let Message::Journal { news, length } = message else {
             return Ok(());
         };
-        match self.apply(news, world.session_id) {
+        match self.apply(news, world.session_id, true) {
             Ok(event) => out.log.send(ClientEvent::World(event)),
             Err(why) => Self::tell(
                 Refused {
@@ -229,9 +297,14 @@ impl Feature for Journal {
         }
     }
 
-    /// Each zone sends the whole journal again as it admits the player.
+    /// Each zone sends the whole journal again as it admits the player,
+    /// and a new zone holds no offer and no cancel.
     fn connection_ended(&mut self, _world: &mut World) {
+        let requests = self.requests.is_some();
         *self = Self::default();
+        if requests {
+            self.requests = Some(requests::Requests::default());
+        }
     }
 }
 

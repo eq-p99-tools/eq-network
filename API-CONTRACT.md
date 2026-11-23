@@ -1873,6 +1873,48 @@ journal message's gap keeps a sample, and no diagnostic or error carries a
 task's words. Inferred until read R49-38: the official program's use of
 each field, and whether it clears its journal at zone-in.
 
+### Offers and requests
+
+The same sessions read an NPC's offer and a finished task's steps
+(checklist 6.555, from `EQEmu`'s source and not yet checked live), each
+heard only after the admission, its words in the event alone:
+
+- `WorldEvent::TasksOffered { offers }`: `TaskOffers` from `OP_TaskSelectWindow`,
+  1 to 40 `OfferedTask`s from the giver's spawn, with the steps the window
+  shows. It replaces any earlier offer, which stands until the player takes
+  one or declines, the next offer, or the zone's end.
+- `WorldEvent::TaskHistory { history }`: a finished task's done steps, as
+  asked for.
+
+`Capability::Tasks` covers five commands. It is offered only on a local
+stock `EQEmu` session until its live row passes, because a wrong
+acceptance can bring down a zone other players share. Each refusal is
+`WorldEvent::TaskRefused { reason }`, and nothing is sent:
+
+- `GameCommand::AcceptTask { task_id }` sends `OP_AcceptNewTask` (12 bytes:
+  the kind as offered, the task and the giver) only for a task in the
+  current offer, not already held, while the giver is an NPC spawn the
+  session holds. `EQEmu`'s `CanAcceptNewTask` dereferences the giver
+  without a null check, so a giver gone from the zone is refused here; one
+  that leaves between this check and the server's read can't be guarded.
+  One send ends the offer, as `EQEmu` clears its own.
+- `GameCommand::DeclineTasks` ends the offer and sends nothing, since
+  `EQEmu` ignores an acceptance of task 0 (inferred until read R49-38).
+- `GameCommand::CancelTask { at }` sends `OP_CancelTask` (8 bytes) only for
+  a slot that exists and holds an entry, once until the server's removal or
+  the zone's end. `EQEmu`'s `RemoveTask` doesn't check the slot, so a quest
+  slot past 18 or a second cancel would corrupt its count of quests.
+- `GameCommand::AskTaskHistory { index }` sends `OP_TaskHistoryRequest`
+  for an index in the last finished list. `GameCommand::ListTaskTimers`
+  sends `/tasktimers` with an empty body, which `EQEmu` doesn't read (the
+  program's body is inferred until read R49-38); the server answers in
+  chat. Each is paced at one per second, this library's floor (inferred).
+
+A host sends `AcceptTask` and `CancelTask` only on the player's own choice,
+never from a script, social or hotbutton: this library's safeguard, not
+the program's. A cancel loses the entry's progress, so a host confirms it
+first.
+
 ## Resurrection and translocate consent
 
 A live session exposes `WorldEvent::Resurrection` and

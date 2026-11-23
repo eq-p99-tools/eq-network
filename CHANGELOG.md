@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read an NPC's task offer and a finished task's steps, and send the
+  player's task requests (checklist 6.555), from stock `EQEmu`'s source
+  and not yet checked live. The new `tasks::offers` module reads
+  `OP_TaskSelectWindow` (0x5e7c) and `OP_TaskHistoryReply` (0x397d), and
+  encodes `OP_AcceptNewTask` (0x207f, 12 bytes), `OP_CancelTask` (0x3ba8),
+  `OP_TaskHistoryRequest` (0x5df4) and `/tasktimers` (0x6a1d, empty body,
+  inferred). New events for the client's ignore arms: `WorldEvent::TasksOffered`,
+  `TaskHistory` and `TaskRefused`. New commands `GameCommand::AcceptTask`,
+  `DeclineTasks`, `CancelTask`, `AskTaskHistory` and `ListTaskTimers` under
+  the new `Capability::Tasks`, which only a local stock `EQEmu` session
+  offers until the live row passes. The session accepts only a task in the
+  current offer while its giver is an NPC it holds, and sends one cancel
+  per held slot until the removal, against two faults in `EQEmu`'s
+  handlers; declining sends nothing (inferred). Both new coverage rows keep
+  no sample. **Breaking:** the new `News`, `Request`, `GameCommand`,
+  `WorldEvent` and `Capability` variants.
 - Read RoF2's corpse money and loot close, the surname answer, the title
   list and title changes as stock `EQEmu` sends them, labelled inferred for
   RoF2 (6.552). The new `rof2_loot_titles` module reads `OP_MoneyOnCorpse`

@@ -454,6 +454,22 @@ pub enum Request {
     DestroyCoins(CoinDestroy),
     /// A Warrior's `/shield` of this player ([`crate::shielding`]).
     Shield(u16),
+    /// Take an offered task ([`crate::tasks::offers`]).
+    AcceptTask {
+        /// The kind the offer was sent as.
+        kind: crate::tasks::TaskKind,
+        /// The task.
+        task_id: u32,
+        /// The offering NPC's spawn.
+        giver: u16,
+    },
+    /// Cancel a journal entry ([`crate::tasks::offers`]).
+    CancelTask(crate::tasks::TaskSlot),
+    /// Ask for the done steps of the finished task at this index of the
+    /// last finished list ([`crate::tasks::offers`]).
+    TaskHistory(u32),
+    /// `/tasktimers` ([`crate::tasks::offers`]).
+    TaskTimers,
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -716,6 +732,14 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::MoveCoins(transfer) => transfer.encode()?,
         Request::DestroyCoins(destroy) => destroy.encode()?,
         Request::Shield(target) => crate::shielding::titanium_shield(*target)?,
+        Request::AcceptTask {
+            kind,
+            task_id,
+            giver,
+        } => crate::tasks::offers::titanium_accept(*kind, *task_id, *giver)?,
+        Request::CancelTask(at) => crate::tasks::offers::titanium_cancel(*at)?,
+        Request::TaskHistory(index) => crate::tasks::offers::titanium_history(*index)?,
+        Request::TaskTimers => crate::tasks::offers::titanium_timers(),
         Request::Consume {
             slot,
             meal,
@@ -987,6 +1011,32 @@ mod tests {
         };
         assert!(eqmac(&Request::BledOut { level: 34 }, unspawned).is_err());
         assert!(titanium(&Request::BledOut { level: 34 }, PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_sends_the_task_requests() {
+        use crate::tasks::{TaskKind, TaskSlot};
+        let requests = [
+            Request::AcceptTask {
+                kind: TaskKind::Quest,
+                task_id: 9,
+                giver: 77,
+            },
+            Request::CancelTask(TaskSlot {
+                kind: TaskKind::Quest,
+                slot: 3,
+            }),
+            Request::TaskHistory(2),
+            Request::TaskTimers,
+        ];
+        let opcodes: Vec<_> = requests
+            .iter()
+            .map(|request| titanium(request, PLAYER).unwrap().opcode)
+            .collect();
+        assert_eq!(opcodes, [0x207f, 0x3ba8, 0x5df4, 0x6a1d]);
+        for request in &requests {
+            assert!(eqmac(request, PLAYER).is_err(), "{request:?}");
+        }
     }
 
     #[test]
