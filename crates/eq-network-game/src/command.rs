@@ -14,6 +14,22 @@ pub enum Posture {
     Ducking,
 }
 
+/// The geometry-owning host's answer to the stand attempt at jump launch.
+///
+/// Both programs try to stand a ducking player through their clearance-tested
+/// posture routine, then jump whether that stand succeeded or not (Titanium
+/// 0x4aba14, Mac 0x53df6e; ducked move/jump read 2026-11-24). The session has
+/// no geometry and never chooses this answer for the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum JumpPosture {
+    /// Keep the current posture, including ducking after a refused stand.
+    Keep,
+    /// The host found room to stand: send that posture before the jump if
+    /// the player is still ducking. Other postures are not changed here.
+    StandIfDucked,
+}
+
 impl Posture {
     /// The appearance parameter for this persistent stance, the same in
     /// Titanium and `EQMac`.
@@ -514,6 +530,8 @@ pub enum GameCommand {
     Jump {
         /// Current zone admission.
         session_id: u64,
+        /// The host's clearance-tested posture decision for this launch.
+        posture: JumpPosture,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },

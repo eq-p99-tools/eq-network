@@ -139,35 +139,31 @@ pub const EQMAC_ENTRY: EntryStand = EntryStand {
 pub struct DuckRules {
     /// A ducking player moves ducked: nothing stands them for forward,
     /// back, strafe or autorun, and auto-stand stands only a seated player
-    /// (Titanium read R23; the can-move flag at 0x4a1d74 passes ducking,
-    /// read R19 c). The speeds are the sneaking ones
-    /// ([`crate::movement::SpeedState::ducking`]). Off, a move
+    /// (Titanium 0x4a1d74, Mac 0x53f337; ducked move/jump read 2026-11-24).
+    /// The ducked speeds are supplied by
+    /// [`crate::movement::SpeedState::ducking`]. Off, a move
     /// stands the player first.
     pub moves_ducked: bool,
-    /// A jump while ducking stands the player through the posture routine,
-    /// then launches; it is never refused for ducking (Titanium 0x4aba14,
-    /// read R23). Moving, both go in the same frame; standing still, the
-    /// player stays crouched for the jump's crouch first, which the host
-    /// times. The stand is a posture change, so it sends the standing
-    /// report and ends autorun (R19).
-    pub jump_stands: bool,
+    /// A ducked jump asks the geometry-owning host to try a clearance-tested
+    /// stand at launch, then launches even if that stand fails (Titanium
+    /// 0x4aba14, Mac 0x53df6e; ducked move/jump read 2026-11-24). This is not
+    /// permission for the session to stand the player itself: the jump
+    /// command carries the host's answer.
+    pub jump_attempts_stand: bool,
 }
 
-/// Titanium's ducking (program read R23). Headroom is the host's: moving
-/// ducked takes a clearance of the player's size plus one, and a stand under
-/// a lower ceiling is refused, the player staying ducked (R23). Whether the
-/// jump after such a refused stand still launches is inferred (recording
-/// checklist 6.460).
+/// Titanium's ducked input (0x4a1d74/0x4aba14, read 2026-11-24).
+/// Headroom and the jump's stand attempt belong to the host; a refused
+/// stand leaves the jump ducked and does not cancel it.
 pub const TITANIUM_DUCK: DuckRules = DuckRules {
     moves_ducked: true,
-    jump_stands: true,
+    jump_attempts_stand: true,
 };
 
-/// The Mac-era client's ducking: unread, so this library's earlier rule,
-/// where a move stands a ducking player first (recording checklist 6.460).
+/// Mac's ducked input follows the same read rule (0x53f337/0x53df6e).
 pub const EQMAC_DUCK: DuckRules = DuckRules {
-    moves_ducked: false,
-    jump_stands: false,
+    moves_ducked: true,
+    jump_attempts_stand: true,
 };
 
 /// Which postures a client generation's program lets the player jump from.
