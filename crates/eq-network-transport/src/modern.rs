@@ -31,6 +31,16 @@ struct Pending {
     attempts: u8,
 }
 
+/// How many bytes an application opcode takes on a stream: two on a zone's,
+/// world's or login's, one on a chat server's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpcodeWidth {
+    /// One byte, from 1 to 0xff.
+    One,
+    /// Two bytes, little-endian, a low byte of 0 escaped with a lead 0.
+    Two,
+}
+
 /// One independent, reliable EQ UDP session. Sequence numbers and CRC state
 /// belong to this socket and are discarded on world/zone transitions.
 pub struct Session {
@@ -40,6 +50,7 @@ pub struct Session {
     crc_bytes: usize,
     compression: bool,
     max_datagram: usize,
+    opcodes: OpcodeWidth,
     next_send: u16,
     next_receive: u16,
     ack_pending: bool,
@@ -72,6 +83,35 @@ impl Session {
     pub fn local_address(&self) -> Result<SocketAddr> {
         Ok(self.socket.local_addr()?)
     }
+    /// Carry application opcodes in one byte, as a chat server's stream
+    /// does: `EQEmu`'s chat server reads and writes its opcodes as one byte
+    /// (`ucs/clientlist.cpp`, `opcode_size = 1`), where a zone's are two.
+    /// Only opcodes from 1 to 0xff can then be sent: any other is refused
+    /// with an error, never cut to its low byte. A zone's, world's or login's
+    /// session keeps two bytes, which is every session's default.
+    #[must_use]
+    pub const fn with_one_byte_opcodes(mut self) -> Self {
+        self.opcodes = OpcodeWidth::One;
+        self
+    }
+
+    /// The application's opcode as this stream writes it.
+    fn opcode_bytes(&self, opcode: u16) -> Result<Vec<u8>> {
+        if self.opcodes == OpcodeWidth::One {
+            let byte = u8::try_from(opcode)
+                .ok()
+                .filter(|&byte| byte != 0)
+                .ok_or_else(|| anyhow::anyhow!("opcode does not fit one byte"))?;
+            return Ok(vec![byte]);
+        }
+        let mut bytes = Vec::with_capacity(3);
+        if opcode.to_le_bytes()[0] == 0 {
+            bytes.push(0);
+        }
+        bytes.extend_from_slice(&opcode.to_le_bytes());
+        Ok(bytes)
+    }
+
     /// Return whole seconds since the last valid server datagram.
     pub fn last_received_seconds(&self) -> u64 {
         self.last_receive.elapsed().as_secs()
@@ -157,6 +197,7 @@ impl Session {
                 crc_bytes,
                 compression: buffer[11] == 1,
                 max_datagram,
+                opcodes: OpcodeWidth::Two,
                 next_send: 0,
                 next_receive: 0,
                 ack_pending: false,
@@ -216,11 +257,7 @@ impl Session {
     pub fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
         self.open()?;
         ensure!(body.len() <= MAX_APPLICATION - 3, "application too large");
-        let mut application = Vec::with_capacity(body.len() + 3);
-        if opcode.to_le_bytes()[0] == 0 {
-            application.push(0);
-        }
-        application.extend_from_slice(&opcode.to_le_bytes());
+        let mut application = self.opcode_bytes(opcode)?;
         application.extend_from_slice(body);
         let capacity = self.max_datagram - 4 - self.crc_bytes - usize::from(self.compression);
         if application.len() <= capacity {
@@ -248,9 +285,9 @@ impl Session {
             opcode & 0xff != 0,
             "unreliable opcode requires nonzero low byte"
         );
-        let op = opcode.to_le_bytes();
+        let op = self.opcode_bytes(opcode)?;
         let mut packet = vec![op[0]];
-        let mut rest = vec![op[1]];
+        let mut rest = op[1..].to_vec();
         rest.extend_from_slice(body);
         if self.compression {
             packet.push(0x5a);
@@ -596,17 +633,34 @@ impl Session {
 
     fn application(&mut self, mut bytes: &[u8], depth: usize) -> Result<()> {
         ensure!(
-            depth < 8 && bytes.len() >= 2,
+            depth < 8
+                && bytes.len()
+                    >= if self.opcodes == OpcodeWidth::One {
+                        1
+                    } else {
+                        2
+                    },
             "invalid nested application packet"
         );
-        if bytes[..2] == [0, 0x19] {
+        if bytes.starts_with(&[0, 0x19]) {
             for part in combined::app_parts(&bytes[2..])? {
                 self.application(part, depth + 1)?;
             }
             return Ok(());
         }
+        // A message that would start with 0 is sent with a 0 before it, so
+        // that it is not taken for a transport message; this holds whatever
+        // the opcode's width.
         if bytes[0] == 0 {
             bytes = &bytes[1..];
+        }
+        if self.opcodes == OpcodeWidth::One {
+            ensure!(!bytes.is_empty(), "truncated escaped application opcode");
+            self.applications.push_back(Application {
+                opcode: u16::from(bytes[0]),
+                body: bytes[1..].to_vec(),
+            });
+            return Ok(());
         }
         ensure!(bytes.len() >= 2, "truncated escaped application opcode");
         self.applications.push_back(Application {
@@ -689,6 +743,7 @@ mod tests {
                 crc_bytes: 2,
                 compression: true,
                 max_datagram: 512,
+                opcodes: OpcodeWidth::Two,
                 next_send: 0,
                 next_receive: 0,
                 ack_pending: false,
@@ -742,6 +797,73 @@ mod tests {
             .unwrap();
         assert!(session.applications.is_empty());
         assert!(session.reorder.is_empty());
+    }
+
+    #[test]
+    fn a_one_byte_stream_writes_and_reads_its_opcode_in_one_byte() {
+        let (session, peer) = session();
+        let mut session = session.with_one_byte_opcodes();
+        session.compression = false;
+        // A chat server's login: opcode 0x01, then a body that leads with 0.
+        session.send(0x01, b"\0SOE.EQ.x").unwrap();
+        let sent = &session.pending[0].packet;
+        assert_eq!(&sent[..2], &[0, 9]);
+        assert_eq!(&sent[4..sent.len() - 2], b"\x01\0SOE.EQ.x");
+        // Only an opcode from 1 to 0xff fits.
+        assert!(session.send(0x100, b"x").is_err());
+        assert!(session.send(0, b"x").is_err());
+        assert!(session.send_unreliable(0x100, b"x").is_err());
+        // What the server sends reads the same way, an empty body too.
+        for (seq, data) in [(0, &b"\x03hello"[..]), (1, &b"\x06"[..])] {
+            let frame = packet(&session, 9, seq, data);
+            peer.send_to(&frame, session.socket.local_addr().unwrap())
+                .unwrap();
+        }
+        let first = session.receive().unwrap().unwrap();
+        assert_eq!((first.opcode, first.body), (0x03, b"hello".to_vec()));
+        let second = session.receive().unwrap().unwrap();
+        assert_eq!((second.opcode, second.body), (0x06, Vec::new()));
+    }
+
+    #[test]
+    fn a_session_carries_two_byte_opcodes_unless_told_otherwise() {
+        let (mut session, _peer) = session();
+        assert_eq!(session.opcodes, OpcodeWidth::Two);
+        session.compression = false;
+        session.send(0x4110, b"hi").unwrap();
+        session.send(0x4100, b"").unwrap();
+        let first = &session.pending[0].packet;
+        assert_eq!(&first[4..first.len() - 2], b"\x10\x41hi");
+        let second = &session.pending[1].packet;
+        assert_eq!(&second[4..second.len() - 2], b"\0\0\x41");
+        session.application(b"\x10\x41hi", 0).unwrap();
+        let read = session.applications.pop_front().unwrap();
+        assert_eq!((read.opcode, read.body), (0x4110, b"hi".to_vec()));
+    }
+
+    #[test]
+    fn a_one_byte_stream_reads_a_combined_packet_part_by_part() {
+        let (session, _peer) = session();
+        let mut session = session.with_one_byte_opcodes();
+        session
+            .application(&[0, 0x19, 3, 0x03, b'h', b'i', 1, 0x06], 0)
+            .unwrap();
+        let first = session.applications.pop_front().unwrap();
+        assert_eq!((first.opcode, first.body), (0x03, b"hi".to_vec()));
+        let second = session.applications.pop_front().unwrap();
+        assert_eq!((second.opcode, second.body), (0x06, Vec::new()));
+    }
+
+    #[test]
+    fn a_one_byte_stream_reads_an_escaped_opcode_0() {
+        // A chat server's keep-alive: opcode 0 with nothing after it, sent
+        // with the escaping 0 before it.
+        let (session, _peer) = session();
+        let mut session = session.with_one_byte_opcodes();
+        session.application(&[0, 0], 0).unwrap();
+        let read = session.applications.pop_front().unwrap();
+        assert_eq!((read.opcode, read.body), (0, Vec::new()));
+        assert!(session.application(&[0], 0).is_err());
     }
 
     #[test]

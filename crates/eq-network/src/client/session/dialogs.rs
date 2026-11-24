@@ -86,6 +86,19 @@ impl Dialogs {
         else {
             return actions::refuse(command, "The selected player has changed.", out.log);
         };
+        self.inspect_spawn(command, id, (own, position), world, out)
+    }
+
+    /// Sends the inspect request for this spawn: the player's own, or a
+    /// visible player in reach.
+    fn inspect_spawn(
+        &mut self,
+        command: &ClientCommand,
+        id: u16,
+        (own, position): (u16, Position),
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let name = if id == own {
             out.sender.name
         } else {
@@ -111,7 +124,9 @@ impl Dialogs {
                 out.log,
             );
         }
-        let ClientCommand::InspectPlayer { created, .. } = command else {
+        let (ClientCommand::InspectPlayer { created, .. }
+        | ClientCommand::InspectSpawn { created, .. }) = command
+        else {
             unreachable!("only inspection commands inspect");
         };
         if self.pending.get(&id).is_some_and(|pending| {
@@ -243,6 +258,7 @@ impl Feature for Dialogs {
             command,
             ClientCommand::RespondToPopup { .. }
                 | ClientCommand::InspectPlayer { .. }
+                | ClientCommand::InspectSpawn { .. }
                 | ClientCommand::SetInspectNote { .. }
         )
     }
@@ -279,6 +295,12 @@ impl Feature for Dialogs {
             }
             ClientCommand::InspectPlayer { target, .. } => {
                 self.inspect(command, *target, world, out)
+            }
+            ClientCommand::InspectSpawn { spawn_id, .. } => {
+                let Some(at) = world.player_at() else {
+                    return actions::refuse(command, "The player's spawn is unknown.", out.log);
+                };
+                self.inspect_spawn(command, *spawn_id, at, world, out)
             }
             ClientCommand::SetInspectNote { note, .. } => {
                 if note
@@ -501,6 +523,58 @@ mod tests {
         let late = testing::run(|out| feature.observe(&reply(7), &mut world, out));
         late.result.unwrap();
         assert!(late.events.is_empty());
+    }
+
+    #[test]
+    fn a_spawn_inspection_needs_no_target_and_keeps_the_reach() {
+        let mut feature = Dialogs::default();
+        let mut world = players();
+        let mut far = testing::spawn(13, SpawnKind::Player);
+        far.position.x = 20.0;
+        world.spawns.insert(far);
+        world.spawns.insert(testing::spawn(14, SpawnKind::Npc));
+        let inspect = |spawn_id| ClientCommand::InspectSpawn {
+            session_id: 5,
+            spawn_id,
+            created: Instant::now(),
+        };
+        // The player themself and another player, with nothing selected:
+        // the right-click never targets.
+        for id in [7, 12] {
+            let sent = testing::run(|out| feature.handle(&inspect(id), &mut world, out));
+            sent.result.unwrap();
+            assert_eq!(sent.sent, [inspection::titanium_request(id, 7).unwrap()]);
+        }
+        assert_eq!(world.target.state().spawn_id, None);
+        // At 20 or more, and a creature, are refused and send nothing.
+        for id in [13, 14] {
+            let refused = testing::run(|out| feature.handle(&inspect(id), &mut world, out));
+            refused.result.unwrap();
+            assert_eq!(refused.sent, [], "{id}");
+            assert!(
+                matches!(
+                    refused.events.first(),
+                    Some(ClientEvent::World(WorldEvent::PlayerInspectionRefused {
+                        session_id: 5,
+                        ..
+                    }))
+                ),
+                "{id}: {:?}",
+                refused.events
+            );
+        }
+        // The latest request's answer comes back as a selected player's does.
+        let answer = Message::Event(WorldEvent::InspectAnswer(Inspection {
+            recipient_id: 7,
+            player_id: 12,
+            equipment: Vec::new(),
+            text: "Synthetic".into(),
+        }));
+        let shown = testing::run(|out| feature.observe(&answer, &mut world, out));
+        shown.result.unwrap();
+        assert!(matches!(shown.events.as_slice(), [
+            ClientEvent::World(WorldEvent::PlayerInspection(PlayerInspection { session_id: 5, name, .. }))
+        ] if name == "Spawn 12"));
     }
 
     #[test]

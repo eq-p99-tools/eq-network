@@ -761,12 +761,19 @@ pub enum Capability {
     /// `EQMac`'s `/decline` of a waiting duel challenge
     /// ([`crate::command::GameCommand::DeclineDuel`]).
     DecliningDuels,
+    /// The Titanium program's gem timers for a Bard (read R49-21 c): a
+    /// refresh of the Bard's own gem (`OP_MemorizeSpell` kind 3) starts no
+    /// wait before the next spell, where anyone else's starts the spell's
+    /// recovery. Offered with the Titanium song rules (P99 and stock
+    /// `EQEmu`); the Mac-era program is unread. The host keeps the timers;
+    /// the session sends nothing for it.
+    BardRefreshTimers,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 94] = [
+    pub const ALL: [Self; 95] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -861,6 +868,7 @@ impl Capability {
         Self::ColdWater,
         Self::InspectAnswer,
         Self::DecliningDuels,
+        Self::BardRefreshTimers,
     ];
 }
 
@@ -2303,6 +2311,28 @@ pub enum WorldEvent {
         /// A verified stun state, not generic control ownership.
         state: crate::control::StunState,
     },
+    /// The Titanium program's own roll on a hit cleared the player's cast
+    /// locally (mode 1 of 0x40f8a0, read R49-50), with no line: the server
+    /// was not told and may still finish it. A song's clear says
+    /// [`WorldEvent::SongStopped`]; a song still in its cast window, which
+    /// the session also holds as a cast, sends both.
+    CastCleared {
+        /// The admission whose cast was cleared.
+        session_id: u64,
+        /// The spell the player was casting.
+        spell_id: u32,
+    },
+    /// The Titanium program's own stun roll on a bash or a kick (its hit
+    /// routine 0x41c905, read R49-50) was saved by one of the player's stun
+    /// resists, which the program says in colour 10. The session rolls it,
+    /// as the program does, and sends nothing for it.
+    StunSaved {
+        /// The admission whose player was saved.
+        session_id: u64,
+        /// The line: 0x1679 for the frontal stun resist, 0x2375 for the
+        /// stun resist.
+        string_id: u32,
+    },
     /// A player's charm takes hold or ends, or the server gives a player
     /// back the control it took for a charm or a fear.
     Charm(crate::control::Charm),
@@ -2898,6 +2928,7 @@ fn float(bytes: &[u8], offset: usize) -> Result<f32> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one arm per capability")]
     fn every_capability_is_listed_once_in_order() {
         use super::Capability;
         // A new capability is a compile error here until it has a place.
@@ -2996,6 +3027,7 @@ mod tests {
             Capability::ColdWater => 91,
             Capability::InspectAnswer => 92,
             Capability::DecliningDuels => 93,
+            Capability::BardRefreshTimers => 94,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

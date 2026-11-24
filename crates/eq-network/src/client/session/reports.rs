@@ -228,6 +228,9 @@ mod tests {
                     spawn_id: 9,
                     name: "Synthetic_Door00".into(),
                 }),
+                repeatable: false,
+                crash: false,
+                character_flags: false,
             },
             created: Instant::now(),
         }

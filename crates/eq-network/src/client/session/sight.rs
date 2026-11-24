@@ -18,6 +18,12 @@ impl Sight {
         }
     }
 
+    /// The installed recast of a spell, where the host's catalog knows it
+    /// (Titanium only, as the catalog is).
+    pub(super) fn recast(&self, spell_id: u32) -> Option<std::time::Duration> {
+        self.catalog.as_ref()?.recast(spell_id)
+    }
+
     pub(super) fn clear(&mut self) {
         self.slots.clear();
         self.landings.clear();
@@ -88,6 +94,23 @@ impl Sight {
                 .landings
                 .iter()
                 .any(|(&spell, &level)| catalog.grants_divine_aura(u32::from(spell), level, true))
+        })
+    }
+
+    /// The total of an SPA's values over the player's buffs, as far as the
+    /// host's catalog knows (0x4106a3's buff part, 0x417b9c; read R49-50b).
+    /// Worn items (0x417bcf) are not counted: the session has no item
+    /// effects yet, so they count 0 (inferred).
+    pub(super) fn effect_total(&self, spa: u16) -> i32 {
+        self.catalog.as_ref().map_or(0, |catalog| {
+            let slots = self.slots.values().map(|buff| {
+                catalog.effect_total(buff.spell_id, u16::from(buff.caster_level), false, spa)
+            });
+            let landings = self
+                .landings
+                .iter()
+                .map(|(&spell, &level)| catalog.effect_total(u32::from(spell), level, true, spa));
+            slots.chain(landings).fold(0, i32::saturating_add)
         })
     }
 

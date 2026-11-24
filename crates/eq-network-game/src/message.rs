@@ -21,6 +21,11 @@ pub enum Message {
     /// reaches the host as chat; this tells the session the query was
     /// answered.
     WhoUnmatched,
+    /// The Titanium program's own roll on a hit interrupts what the player
+    /// casts or sings (0x41c905's interrupt branch, read R49-50): its local
+    /// clear, mode 1 of 0x40f8a0, which sends nothing. The session makes it
+    /// for its casting feature to clear; the host hears what that changes.
+    HitInterrupt,
     /// TAKP or Quarm refused the player's split, with string 12328 or 13112
     /// ([`crate::split::eqmac_refused`]); the additions that follow give the
     /// coins back. The line itself still reaches the host as chat.
