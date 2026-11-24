@@ -7,7 +7,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The Titanium program's own hit roll now interrupts** (mode 1 of 0x40f8a0, reads R49-50 and R49-21d; checklist 6.645 S2). When the interrupt branch interrupts, the session clears what the program's +0xf98 holds: the song, else the cast in flight. Spells 859 to 1023 are exempt. Nothing is sent, so the server keeps the cast or song going, as with the original.
   - A Bard's song of the class's spell ends with `WorldEvent::SongStopped` and line 0x318e (Titanium song rules, Bard only), so the host resets the gems as at any song stop.
-  - A cast the session holds is released, and the host hears the new `WorldEvent::CastCleared { session_id, spell_id }` (no line), so the next gem press casts. A request still awaiting its answer also says `CastPending { spell_id: None }`.
+  - A cast the session holds is released, and the host hears the new `WorldEvent::CastCleared { session_id, spell_id }` (no line), so the next gem press casts. A request still awaiting its answer also says `CastPending { spell_id: None }`. A song still in its cast window sends both `SongStopped` and `CastCleared`.
   - A new session-internal `Message::HitInterrupt` carries the roll to the casting feature. Breaking for an exhaustive `WorldEvent` or `Message` match.
   - Not built: the program would print 0x318f again when the server's later `OP_ManaChange` for that spell arrives, as it finds the song by the packet's spell. Ours has cleared the song and says nothing.
 - **The Titanium program's own stun roll on a bash or a kick** (its hit routine 0x41c905, reads R49-50 and R49-50b; checklist 6.646). This holds on P99 and Titanium EQEmu alike, with no setting.

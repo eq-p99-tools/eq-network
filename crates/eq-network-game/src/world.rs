@@ -2314,7 +2314,8 @@ pub enum WorldEvent {
     /// The Titanium program's own roll on a hit cleared the player's cast
     /// locally (mode 1 of 0x40f8a0, read R49-50), with no line: the server
     /// was not told and may still finish it. A song's clear says
-    /// [`WorldEvent::SongStopped`] instead.
+    /// [`WorldEvent::SongStopped`]; a song still in its cast window, which
+    /// the session also holds as a cast, sends both.
     CastCleared {
         /// The admission whose cast was cleared.
         session_id: u64,

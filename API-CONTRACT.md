@@ -576,8 +576,9 @@ line (0x1679 or 0x2375), which the program prints in colour 10.
 The roll's interrupt branch clears locally what the player casts or sings,
 sending nothing: a Bard's song of the class's spell ends with
 `WorldEvent::SongStopped` and line 0x318e, and a cast the session held ends
-with `WorldEvent::CastCleared` (no line). Hosts should drop their cast bar
-on `CastCleared` and treat that `SongStopped` as any song stop. The server
+with `WorldEvent::CastCleared` (no line). A song still in its cast window
+is both, so it sends both events. Hosts should drop their cast bar on
+`CastCleared` and treat that `SongStopped` as any song stop. The server
 may still finish the cast or keep the song going.
 
 The chance and the resists are totals over the player's buffs, from
