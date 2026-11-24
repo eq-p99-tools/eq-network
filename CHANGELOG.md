@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The Titanium program's own stun roll on a bash or a kick** (its hit routine 0x41c905, reads R49-50 and R49-50b; checklist 6.646). This holds on P99 and Titanium EQEmu alike, with no setting.
+  - **When it rolls:** for a hit over 0 to the player from a player's bash (kind 10), or from a kick (kind 30) by a Warrior above level 54, unless the player is an Ogre or an Oggok citizen (races 10, 93). Nothing is sent: the server rolls its own, as `EQEmu`'s `Mob::CommonDamage` does with the same numbers.
+  - **The roll:** r1 = random 0 to 100, with 0 counted as 1. If r1 < 99 and r1 <= 55 - t, the interrupt branch rolls 0 to 9, and over 1 interrupts. Its result comes back from the roll but acts only in 6.645 S2. t is the stun-bash chance (SPA 0xe7), for a bash only.
+  - **Otherwise the stun branch:**
+    - the frontal stun resist (SPA 0x125) at or above random 1 to 100 saves, with line 0x1679;
+    - else random 0 to 100 under the stun resist (SPA 0xc3) saves, with line 0x2375;
+    - else a 2000 ms stun goes into the one stun slot. As there, the first stun stands, the hit's or the server's: neither extends nor replaces the other.
+  - **New `WorldEvent::StunSaved { session_id, string_id }`** names a save's line (breaking for an exhaustive match). New `SightCatalog::effect_total` (default 0) gives an SPA's total for a buff.
+  - **Inferred or not built:**
+    - worn items' SPA values count 0 (0x417bcf; no item effects in the session yet);
+    - the victim's +0x70 term in the second save counts 0 (untraced);
+    - the early clear 0x417948 (after a mez fades, or the hit routine's spell 0x26b branch) isn't modelled, so a stun always runs to its deadline;
+    - the bash gate's spawn +0x218 is taken as any player spawn;
+    - the HP after the hit uses the server's report (which on stock `EQEmu` comes before the damage record) plus what the items add. No Titanium item count exists yet, so the roll can't tell a lethal hit from one the items survive, and it rolls.
+  - **For 6.645 S2, not built here:** once the interrupt acts, a later `OP_ManaChange` for that spell would print 0x318f again in the program (it finds the song by the packet's spell); ours won't, as the song is already cleared.
 - A gem's forget goes mid-cast, as the Titanium program's right click does (0x4eccc6, read R49-34 d; checklist 6.639, slice G4). The Mac-era and RoF2 programs are taken to match (inferred). `ClientCommand::ForgetSpell` no longer waits on a cast in flight. It waits only while a cast request is unacknowledged (the program's pending action), with "Wait for the server to acknowledge the cast". The casting feature now also holds the new `PendingCast` resource while its request is pending. Memorize, delete, swap and scribe still wait on the cast. Before, a forget mid-cast was refused in the session and never reached the server (local look, eq-client #663 L7).
 
 - Fixed: another class's cast end no longer reports a Bard's song stop. The server's cast update (`OP_ManaChange`, keep-casting clear) at the end of a cleric's cast or fizzle sent `WorldEvent::SongStopped`, so the host printed "Your song ends." (0x318f) after it. Only a Bard sings (the program's song test 0x40db0b needs class 8, read R49-21b), so the event now goes for a Bard only (checklist 6.542, from the L5 live look).

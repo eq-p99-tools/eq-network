@@ -30,6 +30,9 @@ mod groups;
 mod guilds;
 pub(super) mod hazards;
 mod hiding;
+mod hit_roll;
+#[cfg(test)]
+mod hit_stun_tests;
 mod inspect_answer;
 mod inventory;
 mod journal;

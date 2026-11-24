@@ -2311,6 +2311,17 @@ pub enum WorldEvent {
         /// A verified stun state, not generic control ownership.
         state: crate::control::StunState,
     },
+    /// The Titanium program's own stun roll on a bash or a kick (its hit
+    /// routine 0x41c905, read R49-50) was saved by one of the player's stun
+    /// resists, which the program says in colour 10. The session rolls it,
+    /// as the program does, and sends nothing for it.
+    StunSaved {
+        /// The admission whose player was saved.
+        session_id: u64,
+        /// The line: 0x1679 for the frontal stun resist, 0x2375 for the
+        /// stun resist.
+        string_id: u32,
+    },
     /// A player's charm takes hold or ends, or the server gives a player
     /// back the control it took for a charm or a fear.
     Charm(crate::control::Charm),

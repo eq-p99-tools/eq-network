@@ -97,6 +97,23 @@ impl Sight {
         })
     }
 
+    /// The total of an SPA's values over the player's buffs, as far as the
+    /// host's catalog knows (0x4106a3's buff part, 0x417b9c; read R49-50b).
+    /// Worn items (0x417bcf) are not counted: the session has no item
+    /// effects yet, so they count 0 (inferred).
+    pub(super) fn effect_total(&self, spa: u16) -> i32 {
+        self.catalog.as_ref().map_or(0, |catalog| {
+            let slots = self.slots.values().map(|buff| {
+                catalog.effect_total(buff.spell_id, u16::from(buff.caster_level), false, spa)
+            });
+            let landings = self
+                .landings
+                .iter()
+                .map(|(&spell, &level)| catalog.effect_total(u32::from(spell), level, true, spa));
+            slots.chain(landings).fold(0, i32::saturating_add)
+        })
+    }
+
     pub(super) fn changed(&mut self) -> Option<bool> {
         let visible = self.sees_invisible();
         (visible != std::mem::replace(&mut self.published, visible)).then_some(visible)
