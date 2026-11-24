@@ -97,6 +97,14 @@ impl Sight {
         })
     }
 
+    /// Whether the spell binds (SPA 25), as far as the host's catalog
+    /// knows; see [`SightCatalog::bind_slot`].
+    pub(super) fn binds(&self, spell_id: u16) -> bool {
+        self.catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.bind_slot(u32::from(spell_id)).is_some())
+    }
+
     /// The total of an SPA's values over the player's buffs, as far as the
     /// host's catalog knows (0x4106a3's buff part, 0x417b9c; read R49-50b).
     /// Worn items (0x417bcf) are not counted: the session has no item

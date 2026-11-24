@@ -946,6 +946,7 @@ fn admit(
         ))?;
     }
     world.gravity = zone.description.as_ref().map(|zone| zone.gravity);
+    world.time_type = zone.sky.map_or(1, |sky| sky.time_type);
     world.safe_point = zone.description.as_ref().map(|zone| {
         let [x, y, z] = zone.safe_point;
         crate::world::Position {

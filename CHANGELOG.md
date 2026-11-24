@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Save on a bind landing as the Titanium program does (checklist 6.615 slice
+  2, reads R49-22i and R49-22j): a bind spell (SPA 25) taking hold on the
+  player sends `OP_Save` with reason 0x0e on stock `EQEmu`, or says the
+  program's refusal line, by the program's zone flag, era, time type, bind
+  areas and caster.
+  - **Breaking:** `WorldEvent::BindRefused { session_id, string_id }` (line
+    0x69 or 0x103, colour 0x121).
+  - New: `binding` (`titanium_landing`, `titanium_no_bind_zone`,
+    `titanium_later_era`, `titanium_bind_area`, `Bind`, `Landing`, the line
+    constants); `zoning::save_reason::BIND_LANDED`;
+    `vision::SightCatalog::bind_slot`, defaulted to `None`.
+  - Inferred and labelled: the GM byte as the program's +0x256; the era of
+    zone 77 and of the "minus a few" zones, kept as later eras; the read's
+    no-bind ids, which are 50 against its count of 48; the server's
+    `OP_LogServer` words taken as 0.
 - A Titanium scribe goes out after the program's own wait (read R49-34 b,
   slice G, G3, checklist 6.639): its gauge starts at 92 and loses 3 at each
   draw, so the scribe goes at the 31st draw. Taken at 60 draws a second

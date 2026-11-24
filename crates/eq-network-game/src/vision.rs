@@ -72,6 +72,14 @@ pub trait SightCatalog: std::fmt::Debug + Send + Sync {
         false
     }
 
+    /// Whether the spell binds, as Titanium SPA 25 (Bind Affinity), which
+    /// the spell-landing routine 0x414913 takes as the bind (read R49-22i):
+    /// the bind table slot, its base less 1, 0 outside 0 to 4. None, the
+    /// default, where the spell has no SPA 25 or the host does not know.
+    fn bind_slot(&self, _spell_id: u32) -> Option<u8> {
+        None
+    }
+
     /// The total of a Titanium SPA's values that the known application
     /// grants, as the program's buff sum (0x417b9c) counts them: the hit
     /// roll's stun-bash chance (0xe7) and its two stun saves (0x125, 0xc3;

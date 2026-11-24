@@ -1029,6 +1029,24 @@ or a trade open. A refused or paced toggle, and a loot close with no loot
 open, send no save. Stock `EQEmu` saves the character on any `OP_Save` and
 reads nothing in the body. Reads R49-22g and R49-22h, checklist 6.615.
 
+### A bind landing (slice 2)
+
+A spell that takes hold on the player (`WorldEvent::SpellEffect`, kind 231,
+the took-hold flag, target the own spawn) and that the host's
+`SightCatalog::bind_slot` names a bind (Titanium SPA 25) goes through the
+Titanium program's decision (`binding::titanium_landing`, reads R49-22i and
+R49-22j): a zone with the table's no-bind flag says line 0x69; a self bind,
+or a GM caster's, sends `OP_Save` with reason 0x0e (`save_reason::BIND_LANDED`)
+where the zone permits it, and otherwise says line 0x103; anyone else's bind
+sends nothing and says 0x103 unless the zone's time type is 2-4 or the player
+stands in one of the program's bind areas. A line reaches the host as
+`WorldEvent::BindRefused { session_id, string_id }`, to show in colour 0x121
+with no arguments, on every Titanium server type; the save follows the event
+saves' server types and gates above. The catalog's default (`None`) keeps
+this off, and the `EQMac` and RoF2 generations get no catalog here. The
+server's `OP_LogServer` words, which the program reads for the zone term,
+are taken as 0 (stock `EQEmu`'s) until they reach the zone session.
+
 ## Modern session termination
 
 `eq_network_transport::modern::SessionTermination` is an additive typed error

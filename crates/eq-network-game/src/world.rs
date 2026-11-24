@@ -1820,6 +1820,16 @@ pub enum WorldEvent {
         /// The program's line for it, as an `eqstr_us.txt` string ID.
         string_id: u32,
     },
+    /// A bind spell landed on the player and the Titanium program refused
+    /// it ([`crate::binding`]): the host says `string_id` (0x69 in a no-bind
+    /// zone, else 0x103) in colour [`crate::binding::LINE_COLOUR`], with no
+    /// arguments. Nothing was sent.
+    BindRefused {
+        /// The admission it happened in.
+        session_id: u64,
+        /// The program's line for it, as an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// What the chat server told about its channels
     /// ([`crate::chat_server`]).
     Channel(crate::chat_server::ChannelEvent),

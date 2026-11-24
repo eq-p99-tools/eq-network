@@ -145,6 +145,9 @@ pub mod save_reason {
     /// The server's `OP_LootComplete` (0xa94) or `OP_EndLootRequest`
     /// (0x2316), whose handler saves (0x52b05d).
     pub const LOOT_ENDED: u8 = 0x15;
+    /// A bind spell (SPA 25) landing on the player where the zone lets them
+    /// bind (0x415354; reads R49-22i, R49-22j; see [`crate::binding`]).
+    pub const BIND_LANDED: u8 = 0x0e;
 }
 
 /// Titanium's checksum 0x4b6c04 (read R36c): the reflected CRC-32 table

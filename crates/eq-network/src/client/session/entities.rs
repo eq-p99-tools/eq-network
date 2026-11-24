@@ -427,6 +427,9 @@ impl Feature for Entities {
         } else {
             world.sight.apply(event, world.own_spawn);
         }
+        if let WorldEvent::SpellEffect(effect) = event {
+            super::saves::bind_landing(world, effect, out)?;
+        }
         let sneak_ends_itself = match self.dialect {
             GameDialect::Titanium => false,
             // Titanium's, inferred for RoF2 (6.489).
