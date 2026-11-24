@@ -107,9 +107,11 @@ impl Doors {
                 for door in doors {
                     world.lifts.spawned(door, now);
                     // A type 40 or 45 door spawned away from its rest
-                    // schedules no return click: whether the program sends
-                    // one then is unread, and sending none is the cautious
-                    // side (recording checklist 6.423).
+                    // schedules no return click. The program's mover takes
+                    // its click path for these once the delay since spawn
+                    // has passed (read R49-28b), which isn't built: the
+                    // session sends nothing the server didn't ask for
+                    // (recording checklist 6.423).
                     self.return_clicks.remove(&door.id);
                 }
             }
@@ -524,11 +526,14 @@ mod tests {
     fn a_lift_is_clicked_where_it_stands_now() {
         let mut doors = Doors::default();
         let mut world = World::new(5);
-        // A lift spawned raised, 45 up.
+        // A lift spawned opening 6 s ago: risen its 45 at 9 a second, and
+        // standing there until its 20 s since spawn have passed.
         let mut lift = titanium_door(1, 59, 45);
         lift.state_at_spawn = 1;
-        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift]));
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift.clone()]));
         doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let six_ago = Instant::now().checked_sub(Duration::from_secs(6)).unwrap();
+        world.lifts.spawned(&lift, six_ago);
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 1,
