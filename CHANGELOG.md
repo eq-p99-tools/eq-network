@@ -20,6 +20,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     zone 77 and of the "minus a few" zones, kept as later eras; the read's
     no-bind ids, which are 50 against its count of 48; the server's
     `OP_LogServer` words taken as 0.
+- A Titanium scribe goes out after the program's own wait (read R49-34 b,
+  slice G, G3, checklist 6.639): its gauge starts at 92 and loses 3 at each
+  draw, so the scribe goes at the 31st draw. Taken at 60 draws a second
+  (inferred, the 60-step frame clock), that's about 0.52 s, where it was
+  this library's unmeasured 5 s. Memorizing and the Mac-era program's
+  scribe keep the 5 s, as their waits aren't read.
 - An item use refused where the Titanium program's cast start says its own
   line now names that line (read R49-34 e 8, slice G, checklist 6.639):
   0x88 for a level below the item's, 0xb3 for a worn-only effect on an
