@@ -174,8 +174,9 @@ impl Stuns {
     }
 
     /// The Titanium program's own roll on a hit (0x41c905, read R49-50):
-    /// its stun branch stuns or says a save, and nothing is sent. What the
-    /// roll came to, where it rolled; the interrupt branch acts in 6.645 S2.
+    /// its stun branch stuns or says a save, and its interrupt branch has
+    /// the casting feature clear what is held. Nothing is sent. What the
+    /// roll came to, where it rolled.
     pub(super) fn hit(
         damage: &eq_network_game::combat::Damage,
         now: Instant,
@@ -200,7 +201,9 @@ impl Stuns {
                     string_id,
                 }))?;
             }
-            Some(HitRoll::Kept | HitRoll::Interrupt) | None => {}
+            // The casting feature clears what is held (6.645 S2).
+            Some(HitRoll::Interrupt) => world.happened(Message::HitInterrupt),
+            Some(HitRoll::Kept) | None => {}
         }
         Ok(roll)
     }

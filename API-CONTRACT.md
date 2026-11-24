@@ -573,6 +573,14 @@ the result reaches the host as `WorldEvent::OwnStun`. When one of the
 player's stun resists saves them instead, `WorldEvent::StunSaved` names the
 line (0x1679 or 0x2375), which the program prints in colour 10.
 
+The roll's interrupt branch clears locally what the player casts or sings,
+sending nothing: a Bard's song of the class's spell ends with
+`WorldEvent::SongStopped` and line 0x318e, and a cast the session held ends
+with `WorldEvent::CastCleared` (no line). A song still in its cast window
+is both, so it sends both events. Hosts should drop their cast bar on
+`CastCleared` and treat that `SongStopped` as any song stop. The server
+may still finish the cast or keep the song going.
+
 The chance and the resists are totals over the player's buffs, from
 `SightCatalog::effect_total` (default 0). Worn items aren't counted and
 count 0. A host that knows a spell's SPA values should implement it.

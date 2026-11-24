@@ -2311,6 +2311,17 @@ pub enum WorldEvent {
         /// A verified stun state, not generic control ownership.
         state: crate::control::StunState,
     },
+    /// The Titanium program's own roll on a hit cleared the player's cast
+    /// locally (mode 1 of 0x40f8a0, read R49-50), with no line: the server
+    /// was not told and may still finish it. A song's clear says
+    /// [`WorldEvent::SongStopped`]; a song still in its cast window, which
+    /// the session also holds as a cast, sends both.
+    CastCleared {
+        /// The admission whose cast was cleared.
+        session_id: u64,
+        /// The spell the player was casting.
+        spell_id: u32,
+    },
     /// The Titanium program's own stun roll on a bash or a kick (its hit
     /// routine 0x41c905, read R49-50) was saved by one of the player's stun
     /// resists, which the program says in colour 10. The session rolls it,
