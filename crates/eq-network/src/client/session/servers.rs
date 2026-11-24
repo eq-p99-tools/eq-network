@@ -3121,6 +3121,7 @@ mod tests {
         let mut world = World::new(5);
         let jump = ClientCommand::Jump {
             session_id: 5,
+            posture: eq_network_game::command::JumpPosture::Keep,
             created: Instant::now(),
         };
         let before = testing::run(|out| feature.handle(&jump, &mut world, out));

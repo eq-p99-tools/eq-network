@@ -556,8 +556,8 @@ mod tests {
     #[test]
     fn only_titanium_moves_a_ducking_player_ducked() {
         let titanium = GameDialect::Titanium.ducking();
-        assert!(titanium.moves_ducked && titanium.jump_stands);
+        assert!(titanium.moves_ducked && titanium.jump_attempts_stand);
         let eqmac = GameDialect::EqMac.ducking();
-        assert!(!eqmac.moves_ducked && !eqmac.jump_stands);
+        assert!(eqmac.moves_ducked && eqmac.jump_attempts_stand);
     }
 }

@@ -296,6 +296,7 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
         features.handle(
             &ClientCommand::Jump {
                 session_id: 5,
+                posture: eq_network_game::command::JumpPosture::Keep,
                 created: Instant::now(),
             },
             &mut world,

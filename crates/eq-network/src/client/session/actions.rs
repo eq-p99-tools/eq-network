@@ -970,6 +970,7 @@ mod tests {
         ));
         let jump = ClientCommand::Jump {
             session_id: 1,
+            posture: eq_network_game::command::JumpPosture::Keep,
             created: now,
         };
         assert!(refusal(&jump, "No").is_none());

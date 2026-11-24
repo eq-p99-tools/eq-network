@@ -96,7 +96,7 @@ fn titanium_moves_no_lying_player_and_stands_no_one_to_move() {
     // A grant is not taken away: the motion session keeps its calibration.
     assert!(world.body.motion_mut().unwrap().calibration().is_some());
     let motion = Motion::new(true, true, None);
-    let output = testing::run(|out| motion.jump(now, &mut world, out));
+    let output = testing::run(|out| motion.jump(now, JumpPosture::StandIfDucked, &mut world, out));
     output.result.unwrap();
     assert!(output.sent.is_empty(), "{:?}", output.sent);
 }

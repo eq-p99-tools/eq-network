@@ -184,6 +184,7 @@ fn move_and_jump(features: &mut Features, world: &mut World, protocol: ServerPro
         features.handle(
             &ClientCommand::Jump {
                 session_id: 5,
+                posture: eq_network_game::command::JumpPosture::Keep,
                 created: Instant::now(),
             },
             world,

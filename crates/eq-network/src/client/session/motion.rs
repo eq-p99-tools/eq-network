@@ -9,7 +9,7 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     appearance::AppearanceChange,
-    command::Posture,
+    command::{JumpPosture, Posture},
     inventory::MAX_CARRIED_WEIGHT,
     message::Message,
     movement::{
@@ -978,12 +978,16 @@ impl Motion {
 
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
-    /// The samples after it may rise as the jump does. Where the program
-    /// stands a ducking player to jump (read R23), the session sends the
-    /// standing report first, then the jump. For a jump from standing still
-    /// the host times the crouch and sends the jump at its end; the session
-    /// then stands the player if they still duck, and launches.
-    fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// The host decides the clearance-tested stand and carries its answer.
+    /// Keeping a ducked posture does not itself refuse the jump. The usual
+    /// admission, control and jump checks still run before any posture send.
+    fn jump(
+        &self,
+        created: Instant,
+        posture: JumpPosture,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         if let Some(reason) = world.control.input_refusal(created) {
             return out.log.diagnostic(format!("Rejected jump: {reason}"));
         }
@@ -1015,7 +1019,7 @@ impl Motion {
         match jump {
             // A failed send ends the admission like any other.
             Ok(packet) => {
-                if out.wire.dialect().ducking().jump_stands
+                if posture == JumpPosture::StandIfDucked
                     && world.posture.current() == Some(PostureState::Ducking)
                 {
                     if let Some(own) = world.own_spawn {
@@ -1118,7 +1122,9 @@ impl Feature for Motion {
         self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
-            ClientCommand::Jump { created, .. } => self.jump(*created, world, out),
+            ClientCommand::Jump {
+                created, posture, ..
+            } => self.jump(*created, *posture, world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
