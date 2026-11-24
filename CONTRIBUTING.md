@@ -26,6 +26,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo test --workspace --all-targets --all-features
 ```
 
+Record a change's changelog entry as a new file in `changelog.d/`, not as an
+edit to `CHANGELOG.md`, so that pull requests never conflict over the
+changelog; [changelog.d/README.md](changelog.d/README.md) has the details.
+Maintainers fold the fragments in with `python3 contrib/fold-changelog.py`.
+
 Every unsafe block is forbidden at the workspace lint level. Dependencies must
 pass `cargo deny check` for advisories, acceptable licenses, duplicate-version
 policy, and approved registries.
