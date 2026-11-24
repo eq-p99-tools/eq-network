@@ -202,13 +202,23 @@ fn the_stun_bash_chance_lowers_a_bash_only() {
 }
 
 #[test]
-fn the_interrupt_branchs_result_is_returned_and_nothing_else_happens_yet() {
-    // 6.645 S2 acts on the interrupt; here it only comes back.
+fn the_interrupt_branch_has_the_casting_feature_clear_what_is_held() {
+    // The session's own news, which the casting feature hears next
+    // (6.645 S2); the host hears nothing of the roll itself.
     let dice = Script::of(&[10, 9]);
     let mut world = fighting(&dice);
     let heard = roll(&hit(KICKER, KICK, 10), &mut world);
     assert_eq!(heard.result, Some(HitRoll::Interrupt));
     assert!(heard.events.is_empty() && !world.control.stunned());
+    assert!(matches!(world.take_news()[..], [Message::HitInterrupt]));
+    // A kept roll makes no news.
+    let dice = Script::of(&[10, 1]);
+    let mut world = fighting(&dice);
+    assert_eq!(
+        roll(&hit(KICKER, KICK, 10), &mut world).result,
+        Some(HitRoll::Kept)
+    );
+    assert!(world.take_news().is_empty());
 }
 
 #[test]

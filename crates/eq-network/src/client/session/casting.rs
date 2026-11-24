@@ -583,6 +583,18 @@ impl Casting {
     /// stop of mode 0 (the player's) or 3 (the server's cast update) says
     /// 0x318f. The Mac-era program is unread, so it says nothing there.
     fn report_song_stopped(&self, song: Song, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.report_song_line(song, SONG_STOP_LINE, world, out)
+    }
+
+    /// Tells the host a song stopped with this line, under the Titanium
+    /// program's rules, for a Bard only.
+    fn report_song_line(
+        &self,
+        song: Song,
+        string_id: u32,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         // Only a Bard sings: the program's song test (0x40db0b) needs class
         // 8, so another class's cast end is no song stop and says no line
         // (6.542), however the server's cast update ends it.
@@ -596,8 +608,49 @@ impl Casting {
         out.log.send(ClientEvent::World(WorldEvent::SongStopped {
             session_id: world.session_id,
             spell_id: song.spell,
-            string_id: SONG_STOP_LINE,
+            string_id,
         }))
+    }
+
+    /// The program's local clear on its own hit roll's interrupt (mode 1 of
+    /// 0x40f8a0, reads R49-50 and R49-21d), of what +0xf98 holds: the song,
+    /// else the cast in flight. Spells 859 to 1023 are exempt. A Bard's
+    /// song of the class's spell says 0x318e; anything else clears with no
+    /// line. Nothing is sent, so the server keeps the cast or song going,
+    /// as with the original. A cast the guard holds is released and the
+    /// host told (`CastCleared`), so the next gem press casts.
+    fn hit_interrupt(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some(spell) = self
+            .song
+            .map(|song| song.spell)
+            .or_else(|| self.guard.held_spell())
+        else {
+            return Ok(());
+        };
+        if HIT_EXEMPT_SPELLS.contains(&spell) {
+            return Ok(());
+        }
+        if let Some(song) = self.song.take() {
+            self.item_cast = false;
+            if class_song(song, world) {
+                self.report_song_line(song, SONG_ENDS_ABRUPTLY_LINE, world, out)?;
+            }
+        }
+        if self.guard.held_spell() == Some(spell) {
+            let pending = self.guard.pending().is_some();
+            self.guard.release();
+            if pending {
+                out.log.send(ClientEvent::World(WorldEvent::CastPending {
+                    session_id: world.session_id,
+                    spell_id: None,
+                }))?;
+            }
+            out.log.send(ClientEvent::World(WorldEvent::CastCleared {
+                session_id: world.session_id,
+                spell_id: spell,
+            }))?;
+        }
+        Ok(())
     }
 
     /// The server's cast update for a spell, keep-casting clear, ends the
@@ -1095,6 +1148,7 @@ impl Feature for Casting {
             }
         }
         match message {
+            Message::HitInterrupt => self.hit_interrupt(world, out)?,
             Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,
             Message::Event(WorldEvent::Spell(update)) => {
                 let Some(own) = world.player.as_ref().map(|player| player.spawn_id) else {
@@ -1153,6 +1207,14 @@ const SONG_STOPPED: &str = "The song stopped; the gem did not cast";
 /// The program's line at a song stop of mode 0 or 3 (0x40f06d, read R49-21).
 const SONG_STOP_LINE: u32 = 0x318f;
 
+/// The program's line at a song stop of mode 1, its own hit roll's
+/// interrupt (0x40f06d, reads R49-21d and R49-50).
+const SONG_ENDS_ABRUPTLY_LINE: u32 = 0x318e;
+
+/// The spells the program's hit roll never interrupts (0x35b to 0x3ff,
+/// read R49-50).
+const HIT_EXEMPT_SPELLS: std::ops::RangeInclusive<u32> = 859..=1023;
+
 fn report_unconfirmed_stop(
     session_id: u64,
     spell_id: Option<u32>,
@@ -1193,6 +1255,8 @@ mod song_rules_tests;
 
 #[cfg(test)]
 mod cast_stop_tests;
+#[cfg(test)]
+mod hit_interrupt_tests;
 
 #[cfg(test)]
 mod tests {
