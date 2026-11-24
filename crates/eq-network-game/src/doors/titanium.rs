@@ -332,7 +332,16 @@ pub const fn return_action(door: &Door) -> u8 {
 /// model (read R1b), which the session does not have; this takes the
 /// program's value for a door without one, 100, and the 10, measured in three
 /// dimensions from the door's current position (recording checklist 6.426).
-pub const RIDER_REACH: f32 = 10.0 + 100.0 + 200.0;
+/// A door whose radius the host gave ([`Lifts::set_radii`]) takes that
+/// radius instead of the 100.
+pub const RIDER_REACH: f32 = rider_reach(100.0);
+
+/// The rider reach for a door model of this radius: the player's 10, the
+/// door's radius, and 200 (0x4368b3).
+#[must_use]
+pub const fn rider_reach(radius: f32) -> f32 {
+    10.0 + radius + 200.0
+}
 
 /// One vertical door's motion since its last received action.
 #[derive(Clone, Debug, PartialEq)]
@@ -411,6 +420,8 @@ impl Leg {
 #[derive(Clone, Debug, Default)]
 pub struct Lifts {
     legs: BTreeMap<u8, Leg>,
+    /// The host's model radius for each door, with the model it holds for.
+    radii: BTreeMap<u8, (String, f32)>,
 }
 
 impl Lifts {
@@ -451,9 +462,33 @@ impl Lifts {
             .insert(door.id, Leg::new(door, motion, from, to, now));
     }
 
-    /// Forgets every door, as a zone's door removal does.
+    /// Forgets every door's motion, as a zone's door removal does. The
+    /// host's radii stay: a server can send the table again within a zone,
+    /// and the host, whose list hasn't changed, doesn't send it again. Each
+    /// radius holds only while its door draws the model it was given for.
     pub fn clear(&mut self) {
         self.legs.clear();
+    }
+
+    /// Takes the host's model radius for each door it draws, replacing the
+    /// last list. A radius that is not a positive number is left out.
+    pub fn set_radii(&mut self, radii: &[crate::doors::DoorRadius]) {
+        self.radii = radii
+            .iter()
+            .filter(|door| door.radius.is_finite() && door.radius > 0.0)
+            .map(|door| (door.door_id, (door.model.clone(), door.radius)))
+            .collect();
+    }
+
+    /// How near a player must stand to door `door` for its motion to carry
+    /// them: [`rider_reach`] of the host's radius while the door draws the
+    /// model the radius was given for, else [`RIDER_REACH`].
+    #[must_use]
+    pub fn reach(&self, door: &Door) -> f32 {
+        self.radii
+            .get(&door.id)
+            .filter(|(model, _)| *model == door.model)
+            .map_or(RIDER_REACH, |(_, radius)| rider_reach(*radius))
     }
 
     /// How far door `id` stands above (or below) its placed height at `now`.
@@ -489,7 +524,7 @@ impl Lifts {
     /// How far a player standing on door `id` in zone `zone_id` may rise
     /// between `from` and `to`: the door's own rise over the interval, when
     /// it is a floor the program stands players on and the player, at `at`
-    /// at the instant `then`, is within [`RIDER_REACH`] of where the door
+    /// at the instant `then`, is within [`Self::reach`] of where the door
     /// stood then. Anything else carries no one.
     #[must_use]
     pub fn carry(
@@ -510,7 +545,7 @@ impl Lifts {
         let distance = (door.x - at.x)
             .hypot(door.y - at.y)
             .hypot(door.z + leg.offset(then) - at.z);
-        if distance > RIDER_REACH {
+        if distance > self.reach(&leg.door) {
             return 0.0;
         }
         self.rise(id, from, to)
@@ -912,6 +947,65 @@ mod tests {
         step.action = Some(2);
         lifts.moved(&step, start);
         assert_eq!(lifts.carry(4, 1, (at(0.0, 0.0), start), start, from), 0.0);
+    }
+
+    #[test]
+    fn a_door_takes_the_hosts_radius_while_it_draws_that_model() {
+        let radius = |door_id, model: &str, radius| crate::doors::DoorRadius {
+            door_id,
+            model: model.into(),
+            radius,
+        };
+        let mut lifts = Lifts::default();
+        let lift = door(59);
+        assert_eq!(lifts.reach(&lift), RIDER_REACH);
+        assert!(near(RIDER_REACH, 310.0));
+        lifts.set_radii(&[radius(3, "LIFT", 40.0), radius(4, "LIFT", 55.0)]);
+        assert!(near(lifts.reach(&lift), 250.0));
+        // Another model under the same ID keeps the program's no-model reach.
+        let other = Door {
+            model: "GATE".into(),
+            ..door(59)
+        };
+        assert_eq!(lifts.reach(&other), RIDER_REACH);
+        // Each list replaces the last, and a radius that is not a positive
+        // number is left out.
+        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            lifts.set_radii(&[radius(3, "LIFT", bad)]);
+            assert_eq!(lifts.reach(&lift), RIDER_REACH, "{bad}");
+        }
+        // A door removal forgets the motion but not the radii, which the
+        // host sends once for a list that doesn't change.
+        lifts.set_radii(&[radius(3, "LIFT", 40.0)]);
+        lifts.clear();
+        assert!(near(lifts.reach(&lift), 250.0));
+    }
+
+    #[test]
+    fn a_lift_carries_a_rider_within_its_own_reach() {
+        let start = Instant::now();
+        let mut lifts = Lifts::default();
+        let mut lift = with_field(59, 45);
+        lifts.spawned(&lift, start);
+        lifts.set_radii(&[crate::doors::DoorRadius {
+            door_id: 3,
+            model: "LIFT".into(),
+            radius: 40.0,
+        }]);
+        lift.action = Some(2);
+        lifts.moved(&lift, start);
+        let from = start + Duration::from_secs(1);
+        let to = from + Duration::from_millis(500);
+        // At 1 s the lift stands 9 up; a rider at that height is judged by
+        // the 10 + 40 + 200 = 250 reach, not the no-model 310.
+        let at = |x: f32| crate::world::Position {
+            x,
+            z: 9.0,
+            ..crate::world::Position::default()
+        };
+        assert!(near(lifts.carry(3, 1, (at(249.99), from), from, to), 4.5));
+        assert_eq!(lifts.carry(3, 1, (at(250.01), from), from, to), 0.0);
+        assert_eq!(lifts.carry(3, 1, (at(300.0), from), from, to), 0.0);
     }
 
     #[test]

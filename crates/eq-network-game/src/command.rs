@@ -1424,6 +1424,17 @@ pub enum GameCommand {
         /// number is ignored.
         per_step: f32,
     },
+    /// The radius of each door model the host draws, at the door's size,
+    /// which the session's lift carry measures its rider reach with
+    /// ([`crate::doors::titanium::Lifts::set_radii`]). Each list replaces the
+    /// last; a door it doesn't name, or one now drawing another model, keeps
+    /// the program's reach for a door without a model.
+    DoorRadii {
+        /// Current zone-admission identifier.
+        session_id: u64,
+        /// The radii, by door.
+        radii: Vec<crate::doors::DoorRadius>,
+    },
     /// Propose fresh motion for the current zone session.
     Move(crate::movement::MovementRequest),
 }
@@ -1588,6 +1599,7 @@ impl GameCommand {
             Self::ConfigureMotion { .. } => "ConfigureMotion",
             Self::SpeedInputs { .. } => "SpeedInputs",
             Self::ClimbReach { .. } => "ClimbReach",
+            Self::DoorRadii { .. } => "DoorRadii",
             Self::Move(..) => "Move",
         }
     }
@@ -1750,7 +1762,8 @@ impl GameCommand {
             | Self::DepopLocalNpc { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
             | Self::SpeedInputs { session_id, .. }
-            | Self::ClimbReach { session_id, .. } => Some(*session_id),
+            | Self::ClimbReach { session_id, .. }
+            | Self::DoorRadii { session_id, .. } => Some(*session_id),
         }
     }
 
@@ -1796,7 +1809,7 @@ impl GameCommand {
             Self::UseBeltItem(_) => Capability::UsingPotionBelt,
             Self::BoatControl { .. } => Capability::BoatControl,
             Self::ArrivalPlacement { .. } => Capability::BoatRiding,
-            Self::ClickDoor { .. } => Capability::Doors,
+            Self::ClickDoor { .. } | Self::DoorRadii { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
             Self::SetPosture { .. } | Self::FeignLanded { .. } => Capability::Posture,
@@ -1951,6 +1964,7 @@ impl GameCommand {
             // The latest report stands however long it waited.
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. }
+            | Self::DoorRadii { .. }
             | Self::WhoAll { .. }
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
@@ -2271,6 +2285,7 @@ pub fn encode(
         | GameCommand::SpeedInputs { .. }
         | GameCommand::FeignLanded { .. }
         | GameCommand::ClimbReach { .. }
+        | GameCommand::DoorRadii { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::ApplyPoison { .. }

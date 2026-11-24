@@ -95,6 +95,20 @@ impl std::fmt::Display for Ignored {
 
 impl std::error::Error for Ignored {}
 
+/// The radius of the model a host draws a door with, at the door's size:
+/// the door's part of the program's lift rider reach (0x4368b3, read
+/// R49-28 (b); recording checklist 6.426).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DoorRadius {
+    /// ID from this zone's door table.
+    pub door_id: u8,
+    /// The door's model name, as the table gives it; the radius holds only
+    /// while the door with this ID draws this model.
+    pub model: String,
+    /// The radius in world units.
+    pub radius: f32,
+}
+
 /// A door clicked from out of reach: the program says string 1462 (both
 /// generations' reads) and sends nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
