@@ -8,6 +8,10 @@ instead of editing this file; merged entries not yet folded in are listed there.
 
 ## [Unreleased]
 
+- Restore the intended local TAKP alternate advancement offer (6.548,
+  6.562, 6.581) by carrying the connection's local-endpoint constraint
+  into zone feature setup. Public server offers and `EQEmu`-only fixture
+  permissions are unchanged.
 - Save on a bind landing as the Titanium program does (checklist 6.615 slice
   2, reads R49-22i and R49-22j): a bind spell (SPA 25) taking hold on the
   player sends `OP_Save` with reason 0x0e on stock `EQEmu`, or says the

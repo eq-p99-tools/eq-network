@@ -273,6 +273,13 @@ impl Features {
     }
 }
 
+/// The connection preferences used to construct the zone's features.
+fn zone_setup(config: &crate::client::ClientConfig) -> servers::Setup<'_> {
+    let mut setup = servers::Setup::new(&config.character, config.auto_eat);
+    setup.local_only = config.local_only;
+    setup
+}
+
 /// Enter the zone, keep the character stationary, and collect communications.
 pub(super) fn run(
     context: &CharacterSession<'_>,
@@ -338,8 +345,7 @@ fn run_connected(
     let mut entry_position_superseded = false;
     let mut unheard = Unheard::new(Stage::Zone);
     let mut list_replies = super::list_poll::Replies::default();
-    let mut setup = servers::Setup::new(&config.character, config.auto_eat);
-    setup.local_only = world.local_eqemu();
+    let mut setup = zone_setup(config);
     // Channels are offered only where the world offered a chat server and
     // a link was opened from it (the server's own signal).
     setup.chat = Some(std::sync::Arc::clone(&context.chat)).filter(|link| link.opened());
@@ -3834,6 +3840,9 @@ mod terminal_tests;
 
 #[cfg(test)]
 mod admission_tests;
+
+#[cfg(test)]
+mod setup_tests;
 
 #[cfg(test)]
 mod command_batch_tests;
