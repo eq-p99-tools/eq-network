@@ -59,6 +59,10 @@ pub(super) enum Resource {
     /// (read R49-21d): it holds only what a command waiting on `Casting`
     /// still waits for during a song (`goes_during_song`).
     Song,
+    /// A cast request the server hasn't acknowledged yet: the Titanium
+    /// program's pending action ([0x9248d0], read R49-34 d). Only a gem's
+    /// forget waits on it without waiting on `Casting` too.
+    PendingCast,
     /// The spellbook and memorized gems.
     Spellbook,
     /// Inventory contents, including the cursor.
@@ -122,11 +126,10 @@ fn goes_during_song(command: &ClientCommand) -> bool {
         // A gem click while singing stops the song and casts nothing
         // (0x4ecb56): the casting feature does that, so it must reach it.
         | ClientCommand::CastSpell { .. }
-        // [I] The answers leave the song alone (memorize) or stop it
-        // (forget, at the answer); the requests' own gate is unread
-        // (R49-48 a, 6.542).
-        | ClientCommand::MemorizeSpell { .. }
-        | ClientCommand::ForgetSpell { .. } => true,
+        // [I] The answer leaves the song alone; the request's own gate is
+        // unread (R49-48 a, 6.542). A forget waits on no cast at all, only
+        // on a pending request (R49-34 d).
+        | ClientCommand::MemorizeSpell { .. } => true,
         _ => false,
     }
 }
@@ -157,7 +160,9 @@ fn touches_cursor_or_station(command: &ClientCommand) -> bool {
 /// a decision here.
 #[allow(clippy::too_many_lines)] // Keep the exhaustive resource table together.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
-    use Resource::{Casting, CursorAndStation, GroundPickup, Inventory, Shopping, Spellbook};
+    use Resource::{
+        Casting, CursorAndStation, GroundPickup, Inventory, PendingCast, Shopping, Spellbook,
+    };
     match command {
         ClientCommand::Shop { open: true, .. } => &[Shopping],
         ClientCommand::CastSpell { .. }
@@ -182,8 +187,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // until R49-45 b).
         ClientCommand::SwapBandolier { .. } => &[Casting, Inventory, CursorAndStation, Shopping],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
+        // A right click forgets a filled gem at once, even mid-cast, while
+        // no request is pending (0x4eccc6, read R49-34 d).
+        ClientCommand::ForgetSpell { .. } => &[PendingCast, Spellbook],
         ClientCommand::MemorizeSpell { .. }
-        | ClientCommand::ForgetSpell { .. }
         | ClientCommand::DeleteSpell { .. }
         | ClientCommand::SwapSpell { .. } => &[Casting, Spellbook],
         // `EQEmu` and TAKP disconnect a player who moves an item from anywhere

@@ -5,6 +5,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A gem's forget goes mid-cast, as the Titanium program's right click does (0x4eccc6, read R49-34 d; checklist 6.639, slice G4). `ClientCommand::ForgetSpell` no longer waits on a cast in flight. It waits only while a cast request is unacknowledged (the program's pending action), with "Wait for the server to acknowledge the cast". The casting feature now also holds the new `PendingCast` resource while its request is pending. Memorize, delete, swap and scribe still wait on the cast. Before, a forget mid-cast was refused in the session and never reached the server (local look, eq-client #663 L7).
+
 - Chat-channel commands go as the program sends them: the text as typed (`/join x`, `;1 hello`) and a NUL, with no lead byte. The chat server skips the first byte, the `/` or `;`, and reads `join x` or `1 hello`. The lead 0 that `chat_server::command` put first left stock UCS reading `/join x`, which it doesn't take (local look). `command` now refuses text that doesn't start with `/` or `;`, and the chat pace finds the command's word past that first byte.
 
 - The chat-channel link reads past the chat server's keep-alive: opcode 0 with nothing after it, which arrives with the transport's escaping 0 before it (a local look got its first 14 s after the login and dropped the link as unreadable). The one-byte stream now takes off that escaping 0, as the two-byte one does, and `chat_server::KEEP_ALIVE_OPCODE` is read as saying nothing.

@@ -2640,6 +2640,77 @@ mod tests {
     }
 
     #[test]
+    fn a_forget_waits_only_on_a_pending_cast_request_as_the_programs_right_click() {
+        use super::super::{casting::Casting, feature::testing};
+        use eq_network_game::spells::SpellUpdate;
+
+        let mut features = Features {
+            provided: vec![Box::new(Casting::default())],
+            choices: Vec::new(),
+            spell_landing_flag: None,
+            answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
+            gameplay_departures: false,
+        };
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        player.memorized_spells[1] = Some(203);
+        world.player.admit(player);
+        let cast = ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let forget = ClientCommand::ForgetSpell {
+            session_id: 5,
+            gem: 1,
+            spell_id: 203,
+            created: Instant::now(),
+        };
+        let memorize = ClientCommand::MemorizeSpell {
+            session_id: 5,
+            gem: 2,
+            spell_id: 204,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| -> Result<()> {
+            assert_eq!(features.refusal(&forget, &world, Instant::now()), None);
+            apply_commands(&[cast.clone()], &mut features, &mut world, out, true)?;
+            // While the request is pending, the program's right click does
+            // nothing (0x4eccc6's [0x9248d0] test, read R49-34 d).
+            assert_eq!(
+                features.refusal(&forget, &world, Instant::now()),
+                Some("Wait for the server to acknowledge the cast")
+            );
+            hear(
+                vec![Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 7,
+                    spell_id: 202,
+                    duration_ms: 3000,
+                }))],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            // Mid-cast it forgets at once; a memorize still waits.
+            assert_eq!(features.refusal(&forget, &world, Instant::now()), None);
+            assert_eq!(
+                features.refusal(&memorize, &world, Instant::now()),
+                Some("Wait for the current cast to finish or interrupt it")
+            );
+            Ok(())
+        });
+        outcome.result.unwrap();
+    }
+
+    #[test]
     fn an_unconfirmed_cast_precedes_the_same_spell_retry_and_its_begin() {
         use super::super::{casting::Casting, feature::testing};
         use eq_network_game::spells::SpellUpdate;
