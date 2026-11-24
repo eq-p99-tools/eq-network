@@ -29,6 +29,8 @@ struct Script {
     aa_actions_at_selections: Vec<usize>,
     /// The bodies of the server filter packets sent.
     filters: Vec<Vec<u8>>,
+    /// Canonical remove requests, captured without a server or guild mutation.
+    guild_removals: Vec<Vec<u8>>,
     closed: bool,
     refuse_list_reply: bool,
     /// Once drained, the script stays idle until then before it stops.
@@ -53,6 +55,7 @@ impl Script {
             aa_actions: Vec::new(),
             aa_actions_at_selections: Vec::new(),
             filters: Vec::new(),
+            guild_removals: Vec::new(),
             closed: false,
             refuse_list_reply: false,
             idle_until: None,
@@ -96,6 +99,9 @@ impl Transport for Script {
         }
         if opcode == eq_network_game::filters::TITANIUM_OPCODE {
             self.filters.push(body.to_vec());
+        }
+        if opcode == eq_network_game::guild::REMOVE_OPCODE {
+            self.guild_removals.push(body.to_vec());
         }
         if opcode == list_poll::OPCODE {
             assert_eq!(body, [3, 0, 0, 0, 0]);
@@ -162,6 +168,7 @@ fn context<'a>(
         answer_list_polls: Cell::new(false),
         server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
+        guild_roster: crate::client::session::guilds::RosterTransfer::default(),
         chat: std::sync::Arc::default(),
         chat_pace: std::sync::Arc::default(),
         world_ruleset: std::cell::Cell::new(None),
@@ -189,6 +196,159 @@ fn run_script(
         log,
         Instant::now,
     )
+}
+
+/// One received member, with no private server, character or item data.
+fn guild_member_list() -> Vec<u8> {
+    let mut body = b"Synthetic Guild\0".to_vec();
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(b"Member\0");
+    for number in [10u32, 0, 1, 0, 0, 0, 0, 0, 1] {
+        body.extend_from_slice(&number.to_be_bytes());
+    }
+    body.extend_from_slice(&[0, 0, 0, 0, 1]);
+    body
+}
+
+fn guild_script(host_crossing: bool) -> Script {
+    use eq_network_game::guild;
+    let mut first = Script::titanium(1.0);
+    first.incoming[1].body[238..242].copy_from_slice(&3u32.to_le_bytes());
+    first.packet(guild::MEMBER_LIST_OPCODE, guild_member_list());
+    first.transfer();
+    if host_crossing {
+        // The host initiates the crossing; the first answer immediately
+        // approves it, consuming the lifecycle's pending destination.
+        first.incoming.remove(first.incoming.len() - 2);
+        let mut approved = vec![0; 88];
+        approved[..6].copy_from_slice(b"Tester");
+        approved[64..66].copy_from_slice(&2u16.to_le_bytes());
+        approved[84..88].copy_from_slice(&1i32.to_le_bytes());
+        first.incoming.insert(
+            first.incoming.len() - 1,
+            Application {
+                opcode: eq_network_game::zoning::CHANGE_OPCODE,
+                body: approved,
+            },
+        );
+        *first.incoming.back_mut().unwrap() = Application {
+            opcode: 0x3cdc,
+            body: Vec::new(),
+        };
+    }
+    first
+}
+
+fn guild_names_across_zones(camp: bool, destination: u16, host_crossing: bool) {
+    use eq_network_game::guild;
+
+    let config = config();
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let (sender, commands) = mpsc::channel();
+    let mut context = context(&config, &identity, &credentials, &stop, Some(&commands));
+    let mut first = guild_script(host_crossing);
+    let mut second = Script::titanium(1.0);
+    second.incoming[0].body[13276..13278].copy_from_slice(&destination.to_le_bytes());
+    second.incoming[1].body[238..242].copy_from_slice(&3u32.to_le_bytes());
+    second.stop_when_drained = Some(stop.clone());
+    let mut visits = Vec::new();
+    let mut current = None;
+    let mut position = None;
+    let mut lists = 0;
+    let mut refused = Vec::new();
+    let mut handler = |event| {
+        let remove = match event {
+            ClientEvent::World(WorldEvent::Entered {
+                session_id, player, ..
+            }) => {
+                current = Some(session_id);
+                position = Some(player.position);
+                visits.push(session_id);
+                visits.len() == 2
+            }
+            ClientEvent::World(WorldEvent::Guild(guild::GuildUpdate::Members(_))) => {
+                lists += 1;
+                true
+            }
+            ClientEvent::World(WorldEvent::GuildRefused { reason, .. }) => {
+                refused.push(reason);
+                false
+            }
+            _ => false,
+        };
+        if remove {
+            sender.send(ClientCommand::GuildRemove {
+                session_id: current.unwrap(),
+                name: " member ".into(),
+            })?;
+            if host_crossing && visits.len() == 1 {
+                sender.send(ClientCommand::CrossZoneLine {
+                    session_id: current.unwrap(),
+                    destination: eq_network_game::zoning::ZoneLineDestination::Absolute {
+                        zone_id: 2,
+                        position: position.unwrap(),
+                    },
+                    position: position.unwrap(),
+                    created: Instant::now(),
+                })?;
+            }
+        }
+        Ok(())
+    };
+    let mut log = Events::new(&config, &mut handler);
+    let exit = run_script(&context, &mut first, &mut log).unwrap();
+    if host_crossing {
+        assert!(matches!(exit, ZoneExit::World));
+    } else {
+        assert!(matches!(exit, ZoneExit::Direct(_)));
+    }
+    context.on_zone_exit(&exit);
+    if camp {
+        context.on_zone_exit(&ZoneExit::CharacterSelect);
+        // The world may select the same character again after camping.
+        context.config.character = "Tester".into();
+    }
+    assert!(matches!(
+        run_script(&context, &mut second, &mut log).unwrap(),
+        ZoneExit::Stopped
+    ));
+    assert_eq!(visits.len(), 2);
+    assert_ne!(visits[0], visits[1]);
+    assert_eq!(lists, 1, "the new zone deliberately sends no full list");
+    let expected = guild::titanium_remove("Member", "Tester", 3).unwrap().body;
+    assert_eq!(
+        first.guild_removals.as_slice(),
+        std::slice::from_ref(&expected)
+    );
+    if camp || destination != 2 {
+        assert_eq!(refused, ["Wait for your guild's member list."]);
+        assert_eq!(second.guild_removals, Vec::<Vec<u8>>::new());
+    } else {
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(second.guild_removals, [expected]);
+    }
+}
+
+#[test]
+fn a_received_guild_name_survives_its_characters_bound_zone_transfer() {
+    guild_names_across_zones(false, 2, false);
+}
+
+#[test]
+fn a_character_list_visit_withdraws_the_previous_rosters_command_names() {
+    guild_names_across_zones(true, 2, false);
+}
+
+#[test]
+fn a_zone_other_than_the_offered_destination_cannot_inherit_roster_names() {
+    guild_names_across_zones(false, 9, false);
+}
+
+#[test]
+fn a_host_crossing_binds_roster_names_before_the_immediate_approval() {
+    guild_names_across_zones(false, 2, true);
 }
 
 #[test]
@@ -818,6 +978,7 @@ impl Script {
             aa_actions: Vec::new(),
             aa_actions_at_selections: Vec::new(),
             filters: Vec::new(),
+            guild_removals: Vec::new(),
             closed: false,
             refuse_list_reply: false,
             idle_until: Some(Instant::now() + idle),

@@ -214,6 +214,9 @@ impl Features {
             return Ok(false);
         };
         owner.handle(command, world, out)?;
+        for feature in &mut self.provided {
+            feature.after_command(world);
+        }
         Ok(true)
     }
 
@@ -350,6 +353,7 @@ fn run_connected(
     // a link was opened from it (the server's own signal).
     setup.chat = Some(std::sync::Arc::clone(&context.chat)).filter(|link| link.opened());
     setup.chat_pace = std::sync::Arc::clone(&context.chat_pace);
+    setup.guild_roster = context.guild_roster.clone();
     world.riding = std::sync::Arc::clone(&context.riding);
     let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();

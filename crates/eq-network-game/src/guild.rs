@@ -2,7 +2,8 @@
 //! invitations.
 //!
 //! `EQEmu` sends a player their guild's whole member list
-//! (`OP_GuildMemberList`) as they enter a zone, when their list is out of
+//! (`OP_GuildMemberList`) on entry when its login or list-dirty flag calls
+//! for one, when their list is out of
 //! date, as they join, and as they reload their interface; after the
 //! reload, it also sends them a record for each guild member online then,
 //! with the zone they are in (`OP_GuildMemberUpdate`). As the world
@@ -26,7 +27,10 @@
 //! succeeded; it reads as what it says, so it is no proof of the roster.
 //!
 //! Guild numbers name guilds from the guild list ([`crate::listing`]). The
-//! session keeps no roster: each update passes to the host.
+//! session passes each update to the host. Its command worker keeps only
+//! canonical member names, including across a transfer bound to the same
+//! character, guild and offered destination; rank and membership changes
+//! still require server evidence.
 //!
 //! Ranks are Titanium's three ([`GuildRank`](crate::listing::GuildRank)),
 //! onto which `EQEmu`'s encoders map its own eight; TAKP and Quarm number
