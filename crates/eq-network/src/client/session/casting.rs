@@ -658,14 +658,74 @@ impl Casting {
     /// stop of mode 0 (the player's) or 3 (the server's cast update) says
     /// 0x318f. The Mac-era program is unread, so it says nothing there.
     fn report_song_stopped(&self, song: Song, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.song_rules != SongRules::Titanium {
+        self.report_song_line(song, SONG_STOP_LINE, world, out)
+    }
+
+    /// Tells the host a song stopped with this line, under the Titanium
+    /// program's rules, for a Bard only.
+    fn report_song_line(
+        &self,
+        song: Song,
+        string_id: u32,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        // Only a Bard sings: the program's song test (0x40db0b) needs class
+        // 8, so another class's cast end is no song stop and says no line
+        // (6.542), however the server's cast update ends it.
+        let bard = world
+            .player
+            .as_ref()
+            .is_some_and(|player| player.class == Some(BARD_CLASS));
+        if self.song_rules != SongRules::Titanium || !bard {
             return Ok(());
         }
         out.log.send(ClientEvent::World(WorldEvent::SongStopped {
             session_id: world.session_id,
             spell_id: song.spell,
-            string_id: SONG_STOP_LINE,
+            string_id,
         }))
+    }
+
+    /// The program's local clear on its own hit roll's interrupt (mode 1 of
+    /// 0x40f8a0, reads R49-50 and R49-21d), of what +0xf98 holds: the song,
+    /// else the cast in flight. Spells 859 to 1023 are exempt. A Bard's
+    /// song of the class's spell says 0x318e; anything else clears with no
+    /// line. Nothing is sent, so the server keeps the cast or song going,
+    /// as with the original. A cast the guard holds is released and the
+    /// host told (`CastCleared`), so the next gem press casts.
+    fn hit_interrupt(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some(spell) = self
+            .song
+            .map(|song| song.spell)
+            .or_else(|| self.guard.held_spell())
+        else {
+            return Ok(());
+        };
+        if HIT_EXEMPT_SPELLS.contains(&spell) {
+            return Ok(());
+        }
+        if let Some(song) = self.song.take() {
+            self.item_cast = false;
+            if class_song(song, world) {
+                self.report_song_line(song, SONG_ENDS_ABRUPTLY_LINE, world, out)?;
+            }
+        }
+        if self.guard.held_spell() == Some(spell) {
+            let pending = self.guard.pending().is_some();
+            self.guard.release();
+            if pending {
+                out.log.send(ClientEvent::World(WorldEvent::CastPending {
+                    session_id: world.session_id,
+                    spell_id: None,
+                }))?;
+            }
+            out.log.send(ClientEvent::World(WorldEvent::CastCleared {
+                session_id: world.session_id,
+                spell_id: spell,
+            }))?;
+        }
+        Ok(())
     }
 
     /// The server's cast update for a spell, keep-casting clear, ends the
@@ -692,10 +752,11 @@ impl Casting {
         {
             self.song = None;
             // The program's stop (0x40f06d, mode 3) says its line only for
-            // a song, or for another class's player; a Bard's non-song, the
-            // item cast's end among them, clears it with no line (read
-            // R49-21e). A Bard's memorized spell is taken as a song ([I],
-            // 6.442), another spell as not.
+            // a song; a Bard's non-song, the item cast's end among them,
+            // clears it with no line (read R49-21e). A Bard's memorized
+            // spell is taken as a song ([I], 6.442), another spell as not.
+            // Another class's cast end clears it too, and
+            // `report_song_stopped` says no line for it (6.542).
             let ends_a_song = spell == u32::MAX || song.spell == spell || class_spell || !bard;
             return ends_a_song.then_some(song);
         }
@@ -992,6 +1053,11 @@ impl Feature for Casting {
         if self.melody == MelodyUse::Offered {
             offered.push(Capability::Melody);
         }
+        // A Bard's refresh starts no recovery (read R49-21 c), with the
+        // rest of the Titanium song rules.
+        if self.song_rules == SongRules::Titanium {
+            offered.push(Capability::BardRefreshTimers);
+        }
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);
         }
@@ -1011,17 +1077,27 @@ impl Feature for Casting {
     /// A cast in flight holds casting; a Bard's own song, under the
     /// Titanium program's rules, holds only what a song holds (read
     /// R49-21d). An item cast alongside the song holds as any cast.
+    /// A request the server hasn't acknowledged also holds the program's
+    /// pending action, which a gem's forget waits on (read R49-34 d).
     fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         let Some(hold) = self.guard.hold() else {
             return Vec::new();
         };
-        if self
+        let pending = self.guard.pending().map(|_| {
+            (
+                Resource::PendingCast,
+                "Wait for the server to acknowledge the cast",
+            )
+        });
+        let cast = if self
             .singing(world)
             .is_some_and(|song| self.guard.held_spell() == Some(song.spell))
         {
-            return vec![(Resource::Song, hold.1)];
-        }
-        vec![hold]
+            (Resource::Song, hold.1)
+        } else {
+            hold
+        };
+        std::iter::once(cast).chain(pending).collect()
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -1045,6 +1121,17 @@ impl Feature for Casting {
         let now = Instant::now();
         if let (Some(reuse), Message::KnightRefresh(remaining)) = (&mut self.knights, message) {
             reuse.received(*remaining, now);
+        }
+        // The server's refresh of gem 9 starts the program's local wait
+        // (R49-29 b, 0x458ed8).
+        if let (
+            Some(reuse),
+            Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh { slot, spell_id, .. })),
+        ) = (&mut self.knights, message)
+        {
+            if *slot == u32::from(eq_network_game::knights::CAST_SLOT) {
+                reuse.refreshed(*spell_id, |spell| world.sight.recast(spell), now);
+            }
         }
         let own = (self.use_disciplines == DisciplineUse::Titanium)
             .then(|| {
@@ -1169,6 +1256,7 @@ impl Feature for Casting {
             }
         }
         match message {
+            Message::HitInterrupt => self.hit_interrupt(world, out)?,
             Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,
             Message::Event(WorldEvent::Spell(update)) => {
                 let Some(own) = world.player.as_ref().map(|player| player.spawn_id) else {
@@ -1227,6 +1315,14 @@ const SONG_STOPPED: &str = "The song stopped; the gem did not cast";
 /// The program's line at a song stop of mode 0 or 3 (0x40f06d, read R49-21).
 const SONG_STOP_LINE: u32 = 0x318f;
 
+/// The program's line at a song stop of mode 1, its own hit roll's
+/// interrupt (0x40f06d, reads R49-21d and R49-50).
+const SONG_ENDS_ABRUPTLY_LINE: u32 = 0x318e;
+
+/// The spells the program's hit roll never interrupts (0x35b to 0x3ff,
+/// read R49-50).
+const HIT_EXEMPT_SPELLS: std::ops::RangeInclusive<u32> = 859..=1023;
+
 fn report_unconfirmed_stop(
     session_id: u64,
     spell_id: Option<u32>,
@@ -1267,6 +1363,8 @@ mod song_rules_tests;
 
 #[cfg(test)]
 mod cast_stop_tests;
+#[cfg(test)]
+mod hit_interrupt_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1479,7 +1577,8 @@ mod tests {
                 ..
             })]
         ));
-        assert_eq!(casting.holds(&world, Instant::now()).len(), 1);
+        // The cast, and the request the server hasn't acknowledged yet.
+        assert_eq!(casting.holds(&world, Instant::now()).len(), 2);
         // A gem that does not hold the spell sends nothing and says why.
         let outcome = testing::run(|out| casting.handle(&cast(1), &mut world, out));
         outcome.result.unwrap();
@@ -1862,12 +1961,6 @@ mod tests {
                 spell_id: 73,
                 created,
             },
-            ClientCommand::ForgetSpell {
-                session_id: 1,
-                gem: 0,
-                spell_id: 73,
-                created,
-            },
             ClientCommand::DeleteSpell {
                 session_id: 1,
                 slot: 0,
@@ -1886,6 +1979,13 @@ mod tests {
         assert!(commands.iter().all(|command| !guard.blocks(command)));
         guard.observe(12, &begin(12));
         assert!(commands.iter().all(|command| guard.blocks(command)));
+        // A gem's forget goes mid-cast (read R49-34 d).
+        assert!(!guard.blocks(&ClientCommand::ForgetSpell {
+            session_id: 1,
+            gem: 0,
+            spell_id: 73,
+            created,
+        }));
         assert!(!guard.blocks(&ClientCommand::SetPosture {
             session_id: 1,
             spawn_id: 12,
