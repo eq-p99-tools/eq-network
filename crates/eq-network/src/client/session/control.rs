@@ -4,8 +4,12 @@
 //! 0x422198 expires it strictly after its deadline. P99's receive dispatcher
 //! passes this opcode through; stock `EQEmu` sends the same Titanium duration.
 //! This is not TAKP, charm, fear or mez policy.
+//!
+//! The program's own hit roll ([`super::hit_roll`]) stuns through the same
+//! slot: the first stun stands, the hit's or the server's (R49-50b 4).
 use super::{
     feature::{Feature, Out, World},
+    hit_roll::{HitRoll, AVOIDED_LINE, HIT_STUN, SHOOK_OFF_LINE},
     ClientEvent,
 };
 use anyhow::Result;
@@ -21,11 +25,19 @@ pub(super) struct OwnControl {
     revision: u64,
     /// Commands queued before a transition must not replay after release.
     changed: Option<Instant>,
+    /// The program's own roll on a bash or a kick.
+    pub(super) hit: super::hit_roll::HitRoller,
 }
 
 impl OwnControl {
     pub(super) const fn stunned(&self) -> bool {
         self.deadline.is_some()
+    }
+
+    /// When the running stun ends.
+    #[cfg(test)]
+    pub(super) const fn deadline(&self) -> Option<Instant> {
+        self.deadline
     }
 
     fn state(&self) -> StunState {
@@ -105,6 +117,16 @@ impl OwnControl {
     }
 }
 
+/// Whether a generation's program rolls its own stun and interrupt on a
+/// hit: the Titanium program's 0x41c905 (read R49-50). The others are
+/// unread and roll nothing.
+const fn rolls_on_hits(dialect: eq_network_game::GameDialect) -> bool {
+    match dialect {
+        eq_network_game::GameDialect::Titanium => true,
+        eq_network_game::GameDialect::EqMac | eq_network_game::GameDialect::Rof2 => false,
+    }
+}
+
 /// Enabled only by server policies with the verified Titanium handler.
 pub(super) struct Stuns;
 
@@ -126,14 +148,61 @@ impl Stuns {
         if world.control.expire(now) {
             Self::publish(world, out)?;
         }
-        if let Message::Event(WorldEvent::Stun(duration)) = message {
-            // 0x417839 ignores a stun while effect 40's total is positive
-            // (divine aura; R49-6b), as far as the host's catalog knows.
-            if !world.sight.divine_aura() && world.control.receive(*duration, now) {
-                Self::publish(world, out)?;
+        match message {
+            Message::Event(WorldEvent::Stun(duration)) => Self::stun(*duration, now, world, out)?,
+            Message::Event(WorldEvent::Damage(damage)) => {
+                Self::hit(damage, now, world, out)?;
             }
+            _ => {}
         }
         Ok(())
+    }
+
+    /// A stun into the one slot: 0x417839 ignores it while effect 40's total
+    /// is positive (divine aura; R49-6b), as far as the host's catalog
+    /// knows, and while a stun runs.
+    fn stun(
+        duration: Option<Duration>,
+        now: Instant,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if !world.sight.divine_aura() && world.control.receive(duration, now) {
+            Self::publish(world, out)?;
+        }
+        Ok(())
+    }
+
+    /// The Titanium program's own roll on a hit (0x41c905, read R49-50):
+    /// its stun branch stuns or says a save, and nothing is sent. What the
+    /// roll came to, where it rolled; the interrupt branch acts in 6.645 S2.
+    pub(super) fn hit(
+        damage: &eq_network_game::combat::Damage,
+        now: Instant,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<Option<HitRoll>> {
+        if !rolls_on_hits(out.wire.dialect()) {
+            return Ok(None);
+        }
+        let roll =
+            super::hit_roll::facts(damage, world).map(|facts| world.control.hit.roll(&facts));
+        match roll {
+            Some(HitRoll::Stunned) => Self::stun(Some(HIT_STUN), now, world, out)?,
+            Some(HitRoll::Avoided | HitRoll::ShookOff) => {
+                let string_id = if roll == Some(HitRoll::Avoided) {
+                    AVOIDED_LINE
+                } else {
+                    SHOOK_OFF_LINE
+                };
+                out.log.send(ClientEvent::World(WorldEvent::StunSaved {
+                    session_id: world.session_id,
+                    string_id,
+                }))?;
+            }
+            Some(HitRoll::Kept | HitRoll::Interrupt) | None => {}
+        }
+        Ok(roll)
     }
 }
 

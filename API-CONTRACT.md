@@ -560,6 +560,24 @@ this projection on entry or loss of the world. A known ordinary invisible
 player or NPC with a known non-GM flag can be visible to an observer with
 See Invisible. Other values and incomplete metadata stay conservative.
 
+## Titanium hit roll
+
+On the Titanium generation the session rolls the program's own roll when a
+bash or a kick hits the player (0x41c905, reads R49-50 and R49-50b). It
+rolls for a hit over 0 to the player from a player's bash (damage kind 10)
+or from a kick (kind 30) by a class 1 spawn above level 54, unless the
+player's race is 10 or 93. The session sends nothing for it, as the program
+sends nothing. Its stun branch puts a 2000 ms stun into the one own-player
+stun slot, with the same rules as a server stun: the first stun stands, and
+the result reaches the host as `WorldEvent::OwnStun`. When one of the
+player's stun resists saves them instead, `WorldEvent::StunSaved` names the
+line (0x1679 or 0x2375), which the program prints in colour 10.
+
+The chance and the resists are totals over the player's buffs, from
+`SightCatalog::effect_total` (default 0). Worn items aren't counted and
+count 0. A host that knows a spell's SPA values should implement it.
+A hit that kills the player rolls too: the session can't yet tell one. `EQMac` and RoF2 roll nothing.
+
 ## Local EQEmu fixture cleanup
 
 `GameCommand::DepopLocalNpc` carries the current admission, creation time
