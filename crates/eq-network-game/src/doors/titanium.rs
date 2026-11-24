@@ -28,6 +28,34 @@ pub const fn field(door: &Door) -> i16 {
     low.cast_signed()
 }
 
+/// The program's state for a door the server has not moved since it
+/// spawned (0x490670, read R49-28): spawn states 1 and 2 become 1 for the
+/// types 0x4903d4 holds for (50-58 but 53, and 153-155) and 2 for every
+/// other type, 3 becomes 0, and any other state is kept. None once the
+/// server has moved the door: how the program's mover (0x4368b3) changes
+/// the state after that is unread (recording checklist 6.423).
+#[must_use]
+pub const fn spawned_state(door: &Door) -> Option<u8> {
+    if door.action.is_some() {
+        return None;
+    }
+    Some(match door.state_at_spawn {
+        1 | 2 if matches!(door.open_type, 50..=52 | 54..=58 | 153..=155) => 1,
+        1 | 2 => 2,
+        3 => 0,
+        state => state,
+    })
+}
+
+/// Whether the program ignores a click on this door, saying nothing and
+/// sending nothing: a door in state 1 whose [`field`] is -2 (0x4906c5, read
+/// R49-28). The state is known only until the server first moves the door
+/// ([`spawned_state`]); after that the rule is not applied.
+#[must_use]
+pub const fn ignores_clicks(door: &Door) -> bool {
+    field(door) == -2 && matches!(spawned_state(door), Some(1))
+}
+
 /// The travel a door takes from [`field`] (0x49030e): its size, except that
 /// -1, -2 and -3 give none.
 fn field_travel(door: &Door) -> f32 {
@@ -181,8 +209,10 @@ impl Solidity {
     /// R1's "wall contact skips 60-77").
     ///
     /// The floor sweep takes a door only when 0x490370 holds: types 30-45,
-    /// 50-51, 54-59 and 153-155, and three zones' own types. (Its second
-    /// filter 0x42ce5d is not applied here yet.)
+    /// 50-51, 54-59 and 153-155, and three zones' own types. Its second
+    /// filter 0x42ce5d is not an exclusion: a 0 there means keep looking,
+    /// and the hit already written stands (read F4b), so it changes no
+    /// door's floor.
     #[must_use]
     pub const fn of(open_type: u8, zone_id: u16) -> Self {
         let floor = matches!(open_type, 30..=45 | 50 | 51 | 54..=59 | 153..=155)
@@ -539,6 +569,47 @@ mod tests {
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn a_spawned_door_takes_the_programs_state() {
+        let spawned = |open_type: u8, state: u8| {
+            let mut door = door(open_type);
+            door.state_at_spawn = state;
+            spawned_state(&door)
+        };
+        // 0x4903d4's types keep 1 for spawn states 1 and 2; others take 2.
+        for open_type in [50, 51, 52, 54, 58, 153, 155] {
+            assert_eq!(spawned(open_type, 1), Some(1), "type {open_type}");
+            assert_eq!(spawned(open_type, 2), Some(1), "type {open_type}");
+        }
+        for open_type in [0, 53, 59, 65, 152, 156] {
+            assert_eq!(spawned(open_type, 1), Some(2), "type {open_type}");
+            assert_eq!(spawned(open_type, 2), Some(2), "type {open_type}");
+        }
+        assert_eq!(spawned(50, 3), Some(0));
+        assert_eq!(spawned(50, 0), Some(0));
+        assert_eq!(spawned(50, 7), Some(7));
+        // After the server moves it, the state is the unread mover's.
+        let mut moved = door(50);
+        moved.action = Some(2);
+        assert_eq!(spawned_state(&moved), None);
+    }
+
+    #[test]
+    fn only_state_1_with_minus_2_ignores_clicks() {
+        let marked = |open_type: u8, field: i16, state: u8| {
+            let mut door = with_field(open_type, field);
+            door.state_at_spawn = state;
+            ignores_clicks(&door)
+        };
+        assert!(marked(50, -2, 1));
+        assert!(marked(153, -2, 2));
+        assert!(!marked(50, -2, 0));
+        assert!(!marked(50, -1, 1));
+        assert!(!marked(50, -3, 1));
+        // A type the program puts in state 2.
+        assert!(!marked(0, -2, 1));
     }
 
     #[test]
