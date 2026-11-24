@@ -26,7 +26,10 @@ HEADING = re.compile(r"^## \[?Unreleased\]?[ \t]*$", re.MULTILINE)
 
 
 def added_at(path: Path) -> int:
-    """Commit time of the commit that added the fragment (0 if uncommitted)."""
+    """Commit time of the commit that added the fragment.
+
+    An uncommitted fragment sorts as the newest; folding refuses it anyway.
+    """
     out = subprocess.run(
         ["git", "log", "--diff-filter=A", "--format=%ct", "-1", "--", str(path)],
         cwd=ROOT, capture_output=True, text=True, check=True,
@@ -49,6 +52,18 @@ def main() -> int:
     if not found:
         print("No fragments to fold.")
         return 0
+    untracked = [
+        path.relative_to(ROOT)
+        for path in found
+        if subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", str(path)],
+            cwd=ROOT, capture_output=True,
+        ).returncode
+        != 0
+    ]
+    if untracked:
+        names = ", ".join(str(path) for path in untracked)
+        sys.exit(f"Commit these fragments before folding (nothing was changed): {names}")
     text = CHANGELOG.read_text(encoding="utf-8")
     heading = HEADING.search(text)
     if heading is None:
