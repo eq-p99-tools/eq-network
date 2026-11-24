@@ -1,10 +1,9 @@
-//! A ducking player, whom the Titanium program moves ducked at the
-//! sneaking speeds and stands to jump (read R23), with fabricated values and
-//! no live traffic.
+//! Ducked move and host-decided jump posture on both programs, with
+//! fabricated values and no live traffic (read 2026-11-24).
 use super::super::posture::Stances;
 use super::*;
 use crate::client::session::feature::testing;
-use eq_network_game::command::{self, EncodedCommand};
+use eq_network_game::command;
 use eq_network_game::movement::{titanium_jump, MovementMode};
 use std::time::Duration;
 
@@ -159,6 +158,7 @@ fn stand() -> ClientCommand {
 fn jump() -> ClientCommand {
     ClientCommand::Jump {
         session_id: 5,
+        posture: JumpPosture::StandIfDucked,
         created: Instant::now(),
     }
 }
@@ -247,8 +247,11 @@ fn the_grant_follows_a_duck_and_a_stand_in_place() {
 }
 
 #[test]
-fn the_mac_era_client_still_stands_a_ducking_player_to_move() {
+fn the_mac_era_client_moves_ducked_without_sending_a_stand() {
     let (mut world, mut motion) = admitted(EQMAC, PostureState::Ducking);
+    let tick = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+    tick.result.unwrap();
+    assert!(close(speed(&world), DUCKED));
     let output = forward(
         EQMAC,
         &mut world,
@@ -256,43 +259,79 @@ fn the_mac_era_client_still_stands_a_ducking_player_to_move() {
         Instant::now() + Duration::from_millis(200),
     );
     output.result.unwrap();
-    assert_eq!(
-        output.sent,
-        [eq_network_game::quarm::posture(7, command::Posture::Standing).unwrap()]
+    assert!(output.sent.is_empty(), "{:?}", output.sent);
+    assert!(
+        !output.unreliable.is_empty(),
+        "movement must reach the wire"
     );
-    assert_eq!(world.posture.current(), Some(PostureState::Standing));
+    assert!(!refused(&output.events), "{:?}", output.events);
+    assert!(world.body.position().is_some_and(|at| close(at.x, 1.0)));
+    assert_eq!(world.posture.current(), Some(PostureState::Ducking));
     assert!(grants(&output.events).0.is_empty(), "{:?}", output.events);
-    assert!(close(speed(&world), RUNNING));
-    // Its jump while ducking stands no one: its program is unread.
-    world.posture.observed(PostureState::Ducking);
-    let output = testing::run_on(EQMAC, |out| motion.handle(&jump(), &mut world, out));
+    let output = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
     output.result.unwrap();
-    assert_eq!(output.sent, [eq_network_game::quarm::jump()]);
+    assert!(close(speed(&world), DUCKED));
 }
 
 #[test]
 fn a_ducked_jump_stands_the_player_then_launches() {
-    let (mut world, mut motion) = admitted(TITANIUM, PostureState::Ducking);
-    let output = testing::run(|out| motion.handle(&jump(), &mut world, out));
-    output.result.unwrap();
-    let expected: Vec<EncodedCommand> = vec![
-        command::titanium_posture(7, command::Posture::Standing).unwrap(),
-        titanium_jump(),
-    ];
-    assert_eq!(output.sent, expected);
-    assert_eq!(world.posture.current(), Some(PostureState::Standing));
-    assert!(output.events.iter().any(|event| matches!(
-        event,
-        ClientEvent::World(WorldEvent::Posture {
-            spawn_id: 7,
-            posture: PostureState::Standing,
-        })
-    )));
+    for (wire, expected) in [
+        (
+            TITANIUM,
+            vec![
+                command::titanium_posture(7, command::Posture::Standing).unwrap(),
+                titanium_jump(),
+            ],
+        ),
+        (
+            EQMAC,
+            vec![
+                eq_network_game::quarm::posture(7, command::Posture::Standing).unwrap(),
+                eq_network_game::quarm::jump(),
+            ],
+        ),
+    ] {
+        let (mut world, mut motion) = admitted(wire, PostureState::Ducking);
+        let output = testing::run_on(wire, |out| motion.handle(&jump(), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent, expected);
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+        assert!(output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Posture {
+                spawn_id: 7,
+                posture: PostureState::Standing
+            })
+        )));
+    }
     // A jump from standing sends only the jump, once the spacing has passed.
     let mut world_standing = admitted(TITANIUM, PostureState::Standing);
     let output = testing::run(|out| world_standing.1.handle(&jump(), &mut world_standing.0, out));
     output.result.unwrap();
     assert_eq!(output.sent, [titanium_jump()]);
+}
+
+#[test]
+fn a_host_refused_stand_keeps_the_jump_ducked() {
+    for (wire, packet) in [
+        (TITANIUM, titanium_jump()),
+        (EQMAC, eq_network_game::quarm::jump()),
+    ] {
+        let (mut world, mut motion) = admitted(wire, PostureState::Ducking);
+        let jump = ClientCommand::Jump {
+            session_id: 5,
+            posture: JumpPosture::Keep,
+            created: Instant::now(),
+        };
+        let output = testing::run_on(wire, |out| motion.handle(&jump, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent, [packet]);
+        assert_eq!(world.posture.current(), Some(PostureState::Ducking));
+        assert!(!output
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::Posture { .. }))));
+    }
 }
 
 #[test]

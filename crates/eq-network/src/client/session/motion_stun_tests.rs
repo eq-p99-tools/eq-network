@@ -92,7 +92,7 @@ fn stun_refuses_horizontal_turn_new_jump_and_grounded_rise_before_any_send() {
         assert_eq!(world.body.position(), Some(Position::default()));
     }
     let motion = Motion::new(true, true, None);
-    let output = testing::run(|out| motion.jump(now, &mut world, out));
+    let output = testing::run(|out| motion.jump(now, JumpPosture::StandIfDucked, &mut world, out));
     output.result.unwrap();
     assert_eq!(
         output.sent,
@@ -211,7 +211,9 @@ fn expiry_does_not_replay_queued_move_or_jump_and_fresh_motion_uses_existing_cal
         Vec::<eq_network_game::command::EncodedCommand>::new()
     );
     let motion = Motion::new(true, true, None);
-    let output = testing::run(|out| motion.jump(queued.created, &mut world, out));
+    let output = testing::run(|out| {
+        motion.jump(queued.created, JumpPosture::StandIfDucked, &mut world, out)
+    });
     output.result.unwrap();
     assert_eq!(
         output.sent,
@@ -277,7 +279,7 @@ fn opted_in_stun_movement_keeps_transition_freshness_and_jump_restriction() {
     assert_eq!(world.body.position().unwrap().x, 0.2);
     assert_eq!(output.unreliable, []);
     let motion = Motion::new(true, true, None);
-    let output = testing::run(|out| motion.jump(now, &mut world, out));
+    let output = testing::run(|out| motion.jump(now, JumpPosture::StandIfDucked, &mut world, out));
     output.result.unwrap();
     assert_eq!(output.sent, []);
     assert!(

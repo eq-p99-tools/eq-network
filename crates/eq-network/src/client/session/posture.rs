@@ -322,7 +322,7 @@ impl OwnPosture {
         }
     }
 
-    /// Stands a seated, crouched or prone character up before it moves,
+    /// Stands a seated or prone character up before it moves,
     /// where the generation's program does.
     pub(super) fn stand_to_move(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.grounded(out.wire.dialect()) {
@@ -836,14 +836,14 @@ mod tests {
     }
 
     #[test]
-    fn only_seated_crouched_or_prone_characters_stand_to_move() {
+    fn only_seated_or_prone_characters_stand_to_move() {
         use eq_network_game::GameDialect;
         let mut posture = OwnPosture::default();
         assert!(!posture.grounded(GameDialect::EqMac));
         assert!(!posture.grounded(GameDialect::Titanium));
         for (state, grounded) in [
             (PostureState::Sitting, true),
-            (PostureState::Ducking, true),
+            (PostureState::Ducking, false),
             (PostureState::Lying, true),
             (PostureState::Standing, false),
             (PostureState::Looting, false),

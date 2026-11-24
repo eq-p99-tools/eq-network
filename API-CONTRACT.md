@@ -2014,17 +2014,19 @@ movement readiness. Hosts should gate stance buttons and hotkeys
 using the command capability, and send the usual sit then camp sequence.
 
 A step stands a seated player first. A ducking player moves ducked where
-`GameDialect::ducking().moves_ducked` holds (Titanium, program read R23): the
+`GameDialect::ducking().moves_ducked` holds (Titanium and Mac, read 2026-11-24): the
 step sends no stand, and the grant follows the stance when it changes, in
 place, at the sneaking speeds (`SpeedState::ducking`), so a frontend moves at
 the `MotionState` it then receives. A stand from a duck goes back the same
-way. Where `jump_stands` holds, a jump while ducking sends the standing report
-before the jump, and the host hears the player's `WorldEvent::Posture`
-Standing; a refused jump stands no one. Elsewhere a step stands a ducking
-player first, as before. Headroom is the frontend's: Titanium moves a ducking
-player under a clearance of their size plus one, and refuses a stand under a
-lower ceiling. The session cannot see the ceiling, so a host that holds the
-player ducked for headroom withholds the jump, which would send the stand.
+way. `jump_attempts_stand` tells the host to attempt a tested stand at a ducked
+jump's launch. `GameCommand::Jump::posture` carries the host's answer as
+`JumpPosture::StandIfDucked` or `Keep`. The first sends the standing report
+before the jump if the player still ducks; the second sends the jump alone.
+The host hears an actual stand through `WorldEvent::Posture`. A jump refused
+for its usual control/admission/spacing rules stands no one. A refused
+**stand** does not cancel an otherwise eligible jump: send `Keep` and launch
+ducked. The worker has no geometry and never chooses this answer. Sitting
+and other existing stand-to-move rules are unchanged.
 
 `GameCommand::FeignLanded` also requires `Capability::Posture`. It is the
 host's statement that a spell with the feign effect (74) landed on the

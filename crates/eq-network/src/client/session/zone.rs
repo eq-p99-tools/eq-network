@@ -1430,6 +1430,7 @@ mod tests {
             },
             ClientCommand::Jump {
                 session_id,
+                posture: eq_network_game::command::JumpPosture::Keep,
                 created,
             },
             ClientCommand::AutoAttack {
@@ -2431,6 +2432,7 @@ mod tests {
         }
         let jump = ClientCommand::Jump {
             session_id: 5,
+            posture: eq_network_game::command::JumpPosture::Keep,
             created: now,
         };
         assert_eq!(withheld.refusal(&jump, &world, now), None);
