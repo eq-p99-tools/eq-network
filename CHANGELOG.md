@@ -20,6 +20,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     zone 77 and of the "minus a few" zones, kept as later eras; the read's
     no-bind ids, which are 50 against its count of 48; the server's
     `OP_LogServer` words taken as 0.
+- An item use refused where the Titanium program's cast start says its own
+  line now names that line (read R49-34 e 8, slice G, checklist 6.639):
+  0x88 for a level below the item's, 0xb3 for a worn-only effect on an
+  item not worn, and 0xb6 for an item with no charges left, through
+  `ItemUseAction`'s `string_id` (Titanium sessions only; the Mac-era
+  program's lines aren't read). The level test now comes before the worn
+  test, in the program's order. `ItemRefusal` carries each line beside
+  this library's words. An item with a recast delay used before its
+  recast says the program's 0xec and sends nothing (read R49-34 k): a send
+  stamps the item and its recast type (0-19) with now plus the delay, in
+  wall-clock seconds as the program's 0x576e80 keeps them, and a use
+  before the later of those and the server's own stamp for the instance is
+  refused. That the serialized recast timestamp is the program's item
+  stamp is inferred. The stamps last for the zone session; the program's
+  type timers outlast a zone change (the server still refuses an early
+  use).
 - **A Titanium door spawned away from its rest moves and goes back as the program's mover does** (0x4368b3, read R49-28b; checklist 6.423). Nothing new is sent, and a server action still overrides the local state.
   - **Spawn poses:** every door is placed at its base. The new `titanium::endpoint` gives the end a door stands at or heads for: a door spawned in state 1 or 2 (state 2 after 0x490670) runs from its base to its end at its opening rate, and one in state 0 or 3 stands at its base. A vertical door spawned in state 1 used to be placed at full travel, and now rises (`Lifts::spawned`).
   - **The mover's skipped types** (new `titanium::mover_skips`: 50-52, 54-58, 153-155) stand at their base and never go back on their own, after a spawn or an action.
