@@ -17,10 +17,16 @@ use std::{
     sync::mpsc::{self, Receiver},
 };
 
+mod aa_readiness_tests;
+
 struct Script {
     incoming: VecDeque<Application>,
     stop_when_drained: Option<CancellationToken>,
     sent: Vec<u16>,
+    /// Outgoing AA requests, distinct from incoming timer facts on this opcode.
+    aa_actions: Vec<Vec<u8>>,
+    /// Outgoing AA count immediately before each exact ownership list is read.
+    aa_actions_at_selections: Vec<usize>,
     /// The bodies of the server filter packets sent.
     filters: Vec<Vec<u8>>,
     /// Canonical remove requests, captured without a server or guild mutation.
@@ -46,6 +52,8 @@ impl Script {
             incoming: VecDeque::new(),
             stop_when_drained: None,
             sent: Vec::new(),
+            aa_actions: Vec::new(),
+            aa_actions_at_selections: Vec::new(),
             filters: Vec::new(),
             guild_removals: Vec::new(),
             closed: false,
@@ -86,6 +94,9 @@ impl Transport for Script {
     fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
         assert!(!self.closed);
         self.sent.push(opcode);
+        if opcode == eq_network_game::alternate_advancement::ACTION_OPCODE {
+            self.aa_actions.push(body.to_vec());
+        }
         if opcode == eq_network_game::filters::TITANIUM_OPCODE {
             self.filters.push(body.to_vec());
         }
@@ -101,6 +112,9 @@ impl Transport for Script {
 
     fn receive(&mut self) -> Result<Option<Application>> {
         if let Some(packet) = self.incoming.pop_front() {
+            if packet.opcode == eq_network_game::alternate_advancement::SELECTIONS_OPCODE {
+                self.aa_actions_at_selections.push(self.aa_actions.len());
+            }
             return Ok(Some(packet));
         }
         if self.idle_until.is_some_and(|until| Instant::now() < until) {
@@ -961,6 +975,8 @@ impl Script {
             incoming: VecDeque::new(),
             stop_when_drained: Some(stop.clone()),
             sent: Vec::new(),
+            aa_actions: Vec::new(),
+            aa_actions_at_selections: Vec::new(),
             filters: Vec::new(),
             guild_removals: Vec::new(),
             closed: false,
