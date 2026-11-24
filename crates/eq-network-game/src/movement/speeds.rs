@@ -34,8 +34,9 @@ pub struct SpeedState {
     /// modifier added after the halving, back in water on the land rule,
     /// and a strafe halved on the selected base (program reads R23 and R28,
     /// 0x4a1d74 and 0x4bfe0f). Mac's read input also moves ducked at half
-    /// speed (0x53f337, read 2026-11-24); its conservative calibration uses
-    /// the same half-walk branch rather than the old full standing rate.
+    /// walk speed before the own-spawn factor, then adds the full modifier
+    /// (0x53f337 and 0x4caaba, read 2026-11-24). Mac strafe and backward
+    /// ducked rates retain the inferred half-walk rule.
     pub ducking: bool,
     /// The zone the player is in.
     pub zone_id: u16,
@@ -98,9 +99,9 @@ const EQMAC_UNENCUMBERED: u32 = 0x3067;
 /// is the same in both programs.
 #[derive(Clone, Copy, Debug)]
 struct Generation {
-    /// The least movement rate the modifier takes, above the root: Titanium
-    /// raises a slow to -65% (the Titanium speeds read of 10-31, part 3);
-    /// TAKP's writer has no floor.
+    /// The least movement rate the modifier takes, above the root. Both
+    /// programs' writers raise a slow to -65% (Titanium read 10-31 part3;
+    /// Mac 0x4caaba, read 2026-11-24).
     rate_floor: Option<i16>,
     /// The animation field on the wire per unit of forward input: `EQMac`'s
     /// speed byte is in tenths, Titanium's 10-bit field in fortieths.
@@ -126,7 +127,7 @@ struct Generation {
 
 /// `EQMac`'s side of the table.
 const EQMAC: Generation = Generation {
-    rate_floor: None,
+    rate_floor: Some(-65),
     animation_per_input: 10.0,
     unslowed_zone: Some(EQMAC_UNSLOWED_ZONE),
     grounded_diagonal: false,
@@ -154,7 +155,9 @@ const TITANIUM: Generation = Generation {
 /// a second for each unit of it; 0.7 runs at 29.9 and 0.46 walks at 19.6.
 ///
 /// - The modifier is the buffs' movement rate in percent of the run speed,
-///   held to 1.092006; a slowed input under 0 moves at 0.01, and a rate of
+///   with negative percent clamped to -65 before scaling (Mac writer
+///   0x4caaba, read 2026-11-24), held above to 1.092006; a slowed input
+///   under 0 moves at 0.01, and a rate of
 ///   -1000 or less roots the player. Two places in the program name the
 ///   root: the input writer at 0x4caaba zeroes the input at -1000 or less,
 ///   and the speed routine (M1 line 333) roots below -1000. They agree but
@@ -166,7 +169,9 @@ const TITANIUM: Generation = Generation {
 ///   compares with 0 under a character flag it sets elsewhere, unread); then
 ///   less half of what the player carries beyond their capacity, in parts of
 ///   it, never below 0; always 1 in zone 151.
-/// - Sneaking, the input is half the walk speed, whether running or not.
+/// - Sneaking or ducked, the input is half the walk speed, whether running
+///   or not, then multiplied by the own-spawn factor, then the modifier
+///   added in full (ducked forward: 0x53f337, read 2026-11-24).
 ///   Backing up takes the walk speed, half sneaking, less the modifier.
 ///   Strafing alone takes half the walk speed times twice the multiplier,
 ///   halved again sneaking or slowed; the modifier doesn't add to it.
@@ -180,9 +185,8 @@ const TITANIUM: Generation = Generation {
 /// the walk speed and strafing alone at the base times the multiplier with
 /// no modifier. Its strafe rate is halved when the modifier is below 0 or
 /// the player ducks, or under a flag the read doesn't name (the read
-/// corrects sitting 7's reading of that test). It differs in three places:
-/// it raises a slow to -65% before working out the modifier; with the rate
-/// at 0, running adds 0.01 per point of the base movement speed effect (271)
+/// corrects sitting 7's reading of that test). With the rate at 0,
+/// running adds 0.01 per point of the base movement speed effect (271)
 /// instead, which is 0 until the session decodes the player's alternate
 /// advancement; and the cap rises 0.01 per point of effect 290, also 0 until
 /// then. Its two tests that hold the multiplier at 1 are unread, so zone
@@ -214,7 +218,7 @@ pub fn eqmac(state: &SpeedState) -> Speeds {
     speeds(EQMAC, state)
 }
 
-/// Titanium's speeds: [`eqmac`]'s rule with Titanium's three differences,
+/// Titanium's speeds: [`eqmac`]'s rule with Titanium's differences,
 /// and its own wire values. Its client update (the Titanium client update
 /// read of 10-31, writer 0x465244) carries the forward input times 40 in
 /// its 10-bit animation field, after holding the input to -12.8..12.7, so
@@ -253,8 +257,8 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
         .map_or(state.rate, |floor| state.rate.max(floor));
     let modifier = (f32::from(rate) / 100.0 * state.run).min(EQMAC_MODIFIER_CAP);
     let slowed = modifier < 0.0;
-    // Both generations move ducked. Keep Titanium's existing half-walk
-    // calibration and give Mac that same conservative bound (read 2026-11-24).
+    // Both generations take half walk first, then the own-spawn factor,
+    // then the full spell modifier (Mac 0x53f337/0x4caaba, read 2026-11-24).
     let sneaking = state.sneaking || state.ducking;
     let walk = if sneaking {
         state.walk * 0.5
@@ -805,6 +809,62 @@ mod tests {
     }
 
     #[test]
+    fn eqmac_ducked_forward_halves_walk_then_multiplies_then_adds_the_spell() {
+        // Dry own-spawn forward path, 0x53f337; modifier writer 0x4caaba
+        // (program read 2026-11-24). The factor's inputs are unchanged here.
+        for (hp, factor) in [((500, 500), 1.0), ((99, 500), 0.75), ((49, 500), 0.5)] {
+            for rate in [0, 50, -20, -65, -999] {
+                let state = SpeedState {
+                    ducking: true,
+                    hit_points: Some(hp),
+                    rate,
+                    ..player()
+                };
+                let modifier = f32::from(rate.max(-65)) * 0.01 * state.run;
+                let expected = state.walk * 0.5 * factor + modifier;
+                let expected = if expected < 0.0 { 0.01 } else { expected };
+                let motion = eqmac(&state).motion.unwrap();
+                for actual in [
+                    motion.units_per_second,
+                    motion.walk.unwrap().units_per_second,
+                ] {
+                    assert!(
+                        (actual / EQMAC_UNITS_PER_INPUT - expected).abs() < 0.000_001,
+                        "{state:?}: {actual} versus input {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eqmac_dry_modifier_clamps_before_scaling_and_root_precedes_the_clamp() {
+        for rate in [-65, -90, -999] {
+            let state = SpeedState { rate, ..player() };
+            let motion = eqmac(&state).motion.unwrap();
+            let expected = state.run - 0.65 * state.run;
+            assert!((motion.units_per_second / EQMAC_UNITS_PER_INPUT - expected).abs() < 0.000_001);
+            let expected_walk = state.walk - 0.65 * state.run;
+            assert!(
+                (motion.walk.unwrap().units_per_second / EQMAC_UNITS_PER_INPUT - expected_walk)
+                    .abs()
+                    < 0.000_001
+            );
+        }
+        for ducking in [false, true] {
+            for rate in [-1000, -1001] {
+                let result = eqmac(&SpeedState {
+                    rate,
+                    ducking,
+                    ..player()
+                });
+                assert!(result.rooted);
+                assert!(result.motion.is_none());
+            }
+        }
+    }
+
+    #[test]
     fn a_jump_starts_at_the_health_and_weight_factor() {
         let factor = |state: SpeedState| titanium(&state).jump_factor;
         assert!(close(factor(player()), 1.0));
@@ -863,9 +923,12 @@ mod tests {
         assert!(close(snared.walk.unwrap().units_per_second, 4.7));
         assert!(close(snared.backward.unwrap().units_per_second, 4.7));
         assert!(close(snared.strafe.unwrap().units_per_second, 9.8));
-        // One past the walk speed leaves walking at its least.
+        // The writer clamps a negative percent before multiplying by run.
         let crawling = eqmac(&rate(-90)).motion.unwrap();
-        assert!(close(crawling.walk.unwrap().units_per_second, 0.43));
+        assert!(close(
+            crawling.walk.unwrap().units_per_second,
+            0.005 * EQMAC_UNITS_PER_INPUT
+        ));
         assert_eq!(crawling.walk.unwrap().animation, 0);
         // A buff adds its rate, up to the cap.
         assert!(close(running(rate(50)).unwrap(), 44.8));
