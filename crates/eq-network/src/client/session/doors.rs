@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hosts_door_radii_set_each_lifts_rider_reach() {
+    fn the_hosts_door_radii_set_each_lifts_rider_reach_and_outlast_a_door_removal() {
         let mut doors = Doors::default();
         let mut world = World::new(5);
         let lift = titanium_door(1, 59, 45);
@@ -512,9 +512,11 @@ mod tests {
         testing::run(|out| doors.observe(&Message::Event(removed), &mut world, out))
             .result
             .unwrap();
+        // The server may send the table again in the zone; the host's list
+        // stands, as it isn't sent again.
         assert_eq!(
             world.lifts.reach(&lift),
-            eq_network_game::doors::titanium::RIDER_REACH
+            eq_network_game::doors::titanium::rider_reach(40.0)
         );
     }
 

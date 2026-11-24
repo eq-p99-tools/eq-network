@@ -462,11 +462,12 @@ impl Lifts {
             .insert(door.id, Leg::new(door, motion, from, to, now));
     }
 
-    /// Forgets every door, and the host's radii with them, as a zone's door
-    /// removal does.
+    /// Forgets every door's motion, as a zone's door removal does. The
+    /// host's radii stay: a server can send the table again within a zone,
+    /// and the host, whose list hasn't changed, doesn't send it again. Each
+    /// radius holds only while its door draws the model it was given for.
     pub fn clear(&mut self) {
         self.legs.clear();
-        self.radii.clear();
     }
 
     /// Takes the host's model radius for each door it draws, replacing the
@@ -973,9 +974,11 @@ mod tests {
             lifts.set_radii(&[radius(3, "LIFT", bad)]);
             assert_eq!(lifts.reach(&lift), RIDER_REACH, "{bad}");
         }
+        // A door removal forgets the motion but not the radii, which the
+        // host sends once for a list that doesn't change.
         lifts.set_radii(&[radius(3, "LIFT", 40.0)]);
         lifts.clear();
-        assert_eq!(lifts.reach(&lift), RIDER_REACH);
+        assert!(near(lifts.reach(&lift), 250.0));
     }
 
     #[test]
