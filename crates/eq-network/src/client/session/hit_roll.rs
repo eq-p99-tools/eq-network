@@ -8,7 +8,7 @@
 //! ([`super::control::OwnControl`]), as a server stun does. Its interrupt
 //! branch is the program's local cast clear (mode 1), which is 6.645's.
 
-use super::{bleeding::ItemCount, feature::World};
+use super::feature::World;
 use eq_network_game::{
     combat::{Damage, DamageOutcome},
     world::SpawnKind,
@@ -74,7 +74,7 @@ pub(super) enum HitRoll {
 }
 
 /// The player's facts the roll reads, from one hit.
-struct Facts {
+pub(super) struct Facts {
     /// A bash, rather than a kick.
     bash: bool,
     /// The stun-bash chance's total (bash only), and the two saves' totals.
@@ -83,24 +83,55 @@ struct Facts {
     resist: i32,
 }
 
-/// The roll's state for one admission.
+/// Whether the program rolls for this hit, and what it reads if so: a bash
+/// from a player, or a kick from a Warrior above level 54, over 0 to the
+/// player, whose race isn't Ogre or Oggok citizen. None otherwise.
+///
+/// The program rolls only when the hit leaves the player alive (0x417e07,
+/// the HP after the damage applies; R49-50b 3). The server's HP report
+/// leaves out what items add, and no Titanium item count exists yet, so the
+/// session can't tell; a hit that kills the player rolls too (inferred,
+/// the stricter side, a gap row).
+pub(super) fn facts(damage: &Damage, world: &World) -> Option<Facts> {
+    let DamageOutcome::Hit(amount) = damage.outcome else {
+        return None;
+    };
+    if amount == 0 || !world.is_player(damage.target_id) {
+        return None;
+    }
+    let attacker = world.spawns.get(damage.source_id)?;
+    let bash = match damage.kind {
+        // Spawn +0x218 set: a player the client keeps full data for
+        // (R49-50b 1), taken as any player spawn (inferred).
+        BASH if attacker.kind == SpawnKind::Player => true,
+        KICK if attacker.class == Some(WARRIOR) && attacker.level > KICK_LEVEL => false,
+        _ => return None,
+    };
+    if EXEMPT_RACES.contains(&world.player.as_ref()?.race) {
+        return None;
+    }
+    let sight = &world.sight;
+    Some(Facts {
+        bash,
+        chance: if bash {
+            sight.effect_total(STUN_BASH_CHANCE)
+        } else {
+            0
+        },
+        frontal: sight.effect_total(FRONTAL_STUN_RESIST),
+        resist: sight.effect_total(STUN_RESIST),
+    })
+}
+
+/// The roll's dice for one admission.
 pub(super) struct HitRoller {
     dice: Box<dyn HitDice>,
-    /// The player's current HP in the server's last report, which leaves
-    /// out what equipped items add.
-    reported: Option<i32>,
-    /// How the server type counts what the items add; none yet on
-    /// Titanium, so the roll can't tell a hit that leaves the player alive
-    /// from one that kills them, and rolls (inferred, the stricter side).
-    items: Option<ItemCount>,
 }
 
 impl Default for HitRoller {
     fn default() -> Self {
         Self {
             dice: Box::new(ThreadDice),
-            reported: None,
-            items: None,
         }
     }
 }
@@ -111,92 +142,28 @@ impl HitRoller {
     pub(super) fn with_dice(dice: impl HitDice + 'static) -> Self {
         Self {
             dice: Box::new(dice),
-            ..Self::default()
         }
     }
 
-    /// Counts the items' HP by this rule.
-    #[cfg(test)]
-    pub(super) const fn with_item_count(mut self, items: ItemCount) -> Self {
-        self.items = Some(items);
-        self
-    }
-
-    /// Keeps the server's last report of the player's HP. On stock `EQEmu`
-    /// it comes before the hit's damage record (`Mob::CommonDamage` sends
-    /// the HP update first), so the program applies the hit again to it.
-    pub(super) const fn reported(&mut self, current: i32) {
-        self.reported = Some(current);
-    }
-
-    /// The program's roll for a hit, where it rolls: a bash from a player
-    /// or a kick from a Warrior above level 54 that leaves the player
-    /// alive, a race other than Ogre or Oggok citizen. None otherwise.
-    pub(super) fn roll(&mut self, damage: &Damage, world: &World) -> Option<HitRoll> {
-        let facts = self.facts(damage, world)?;
+    /// The program's roll for a hit it rolls for.
+    pub(super) fn roll(&mut self, facts: &Facts) -> HitRoll {
         let threshold = 55 - if facts.bash { facts.chance } else { 0 };
         let first = self.dice.roll(0, 100).max(1);
         if first < 99 && first <= threshold {
-            return Some(if self.dice.roll(0, 9) > 1 {
+            return if self.dice.roll(0, 9) > 1 {
                 HitRoll::Interrupt
             } else {
                 HitRoll::Kept
-            });
+            };
         }
         if facts.frontal >= self.dice.roll(1, 100) {
-            return Some(HitRoll::Avoided);
+            return HitRoll::Avoided;
         }
         // The victim's +0x70 term (param_1[0x1c], R49-50b 2) is untraced
         // and counts 0 (inferred).
         if self.dice.roll(0, 100) < facts.resist {
-            return Some(HitRoll::ShookOff);
+            return HitRoll::ShookOff;
         }
-        Some(HitRoll::Stunned)
-    }
-
-    fn facts(&self, damage: &Damage, world: &World) -> Option<Facts> {
-        let DamageOutcome::Hit(amount) = damage.outcome else {
-            return None;
-        };
-        if amount == 0 || !world.is_player(damage.target_id) {
-            return None;
-        }
-        let attacker = world.spawns.get(damage.source_id)?;
-        let bash = match damage.kind {
-            // Spawn +0x218 set: a player the client keeps full data for
-            // (R49-50b 1), taken as any player spawn (inferred).
-            BASH if attacker.kind == SpawnKind::Player => true,
-            KICK if attacker.class == Some(WARRIOR) && attacker.level > KICK_LEVEL => false,
-            _ => return None,
-        };
-        let player = world.player.as_ref()?;
-        if EXEMPT_RACES.contains(&player.race) || !self.alive_after(amount, world) {
-            return None;
-        }
-        let sight = &world.sight;
-        Some(Facts {
-            bash,
-            chance: if bash {
-                sight.effect_total(STUN_BASH_CHANCE)
-            } else {
-                0
-            },
-            frontal: sight.effect_total(FRONTAL_STUN_RESIST),
-            resist: sight.effect_total(STUN_RESIST),
-        })
-    }
-
-    /// Whether the program's HP after the hit is above 0 (0x417e07, read
-    /// after the damage applies): the last report with what the items add,
-    /// less the damage. Unknown HP, or items the server type can't count,
-    /// roll.
-    fn alive_after(&self, amount: u32, world: &World) -> bool {
-        let Some(reported) = self.reported else {
-            return true;
-        };
-        let Some(Ok(items)) = self.items.map(|count| count(world)) else {
-            return true;
-        };
-        i64::from(reported) + i64::from(items) - i64::from(amount) > 0
+        HitRoll::Stunned
     }
 }

@@ -150,9 +150,6 @@ impl Stuns {
         }
         match message {
             Message::Event(WorldEvent::Stun(duration)) => Self::stun(*duration, now, world, out)?,
-            Message::Event(WorldEvent::HitPoints {
-                spawn_id, current, ..
-            }) if world.is_player(*spawn_id) => world.control.hit.reported(*current),
             Message::Event(WorldEvent::Damage(damage)) => {
                 Self::hit(damage, now, world, out)?;
             }
@@ -188,9 +185,8 @@ impl Stuns {
         if !rolls_on_hits(out.wire.dialect()) {
             return Ok(None);
         }
-        let mut roller = std::mem::take(&mut world.control.hit);
-        let roll = roller.roll(damage, world);
-        world.control.hit = roller;
+        let roll =
+            super::hit_roll::facts(damage, world).map(|facts| world.control.hit.roll(&facts));
         match roll {
             Some(HitRoll::Stunned) => Self::stun(Some(HIT_STUN), now, world, out)?,
             Some(HitRoll::Avoided | HitRoll::ShookOff) => {

@@ -356,54 +356,21 @@ fn an_ogre_or_an_oggok_citizen_never_rolls() {
 }
 
 #[test]
-fn a_hit_that_takes_the_last_hit_point_rolls_nothing_and_unknown_hp_rolls() {
-    let reported = |world: &mut World, current| {
-        let update = Message::Event(WorldEvent::HitPoints {
-            spawn_id: PLAYER,
-            current,
-            maximum: 100,
-            items: eq_network_game::world::ItemHitPoints::LeftOut,
-        });
-        testing::run(|out| Stuns::observe_at(&update, Instant::now(), world, out))
-            .result
-            .unwrap();
-    };
-    let counted = |dice: &Script, items: i32| {
-        let mut world = fighting(dice);
-        let count: super::bleeding::ItemCount = match items {
-            0 => |_| Ok(0),
-            _ => |_| Ok(5),
-        };
-        world.control.hit = HitRoller::with_dice(dice.clone()).with_item_count(count);
-        world
-    };
-    // With the items counted, the report with them less the damage.
-    let dice = Script::of(&[60, 100, 100]);
-    let mut world = counted(&dice, 0);
-    reported(&mut world, 10);
-    assert_eq!(roll(&hit(KICKER, KICK, 10), &mut world).result, None);
-    assert_eq!(
-        roll(&hit(KICKER, KICK, 9), &mut world).result,
-        Some(HitRoll::Stunned)
-    );
-    let dice = Script::of(&[60, 100, 100]);
-    let mut world = counted(&dice, 5);
-    reported(&mut world, 10);
-    assert_eq!(
-        roll(&hit(KICKER, KICK, 14), &mut world).result,
-        Some(HitRoll::Stunned)
-    );
-    // No report yet, or items the server type can't count (Titanium
-    // today): it rolls.
+fn a_hit_rolls_whatever_the_hp_report_says() {
+    // The program rolls only when the hit leaves the player alive, but the
+    // report leaves out the items' HP and no Titanium item count exists:
+    // a hit the report calls lethal rolls too (inferred, a gap row).
     let dice = Script::of(&[60, 100, 100]);
     let mut world = fighting(&dice);
-    assert_eq!(
-        roll(&hit(KICKER, KICK, 10), &mut world).result,
-        Some(HitRoll::Stunned)
-    );
-    let dice = Script::of(&[60, 100, 100]);
-    let mut world = fighting(&dice);
-    reported(&mut world, 10);
+    let update = Message::Event(WorldEvent::HitPoints {
+        spawn_id: PLAYER,
+        current: 10,
+        maximum: 100,
+        items: eq_network_game::world::ItemHitPoints::LeftOut,
+    });
+    testing::run(|out| Stuns::observe_at(&update, Instant::now(), &mut world, out))
+        .result
+        .unwrap();
     assert_eq!(
         roll(&hit(KICKER, KICK, 10), &mut world).result,
         Some(HitRoll::Stunned)

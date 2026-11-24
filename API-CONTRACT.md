@@ -576,7 +576,7 @@ line (0x1679 or 0x2375), which the program prints in colour 10.
 The chance and the resists are totals over the player's buffs, from
 `SightCatalog::effect_total` (default 0). Worn items aren't counted and
 count 0. A host that knows a spell's SPA values should implement it.
-Unknown HP rolls. `EQMac` and RoF2 roll nothing.
+A hit that kills the player rolls too: the session can't yet tell one. `EQMac` and RoF2 roll nothing.
 
 ## Local EQEmu fixture cleanup
 
