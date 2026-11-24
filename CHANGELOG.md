@@ -3,6 +3,9 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Pull requests add their entry as a file in [`changelog.d/`](changelog.d/README.md)
+instead of editing this file; merged entries not yet folded in are listed there.
+
 ## [Unreleased]
 
 - Restore the intended local TAKP alternate advancement offer (6.548,
