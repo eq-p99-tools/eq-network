@@ -53,8 +53,20 @@ pub(super) const INBOUND: usize = 256;
 pub(super) type Connect =
     dyn Fn(&Login, bool, &AtomicBool) -> Result<Box<dyn Transport + Send>, LinkLoss> + Send + Sync;
 
+// Every opcode the link sends fits the chat stream's one byte, which the
+// transport would otherwise refuse with an error rather than cut short.
+const _: () = assert!(
+    chat_server::LOGIN_OPCODE <= 0xff
+        && chat_server::LOGIN_OPCODE != 0
+        && chat_server::COMMAND_OPCODE <= 0xff
+        && chat_server::COMMAND_OPCODE != 0
+);
+
 /// The production connection: the offered address through the same checks
-/// as a zone's ([`crate::client::endpoint`]), then the modern transport.
+/// as a zone's ([`crate::client::endpoint`]), then the modern transport with
+/// one-byte opcodes, as a chat server's stream carries them (`EQEmu`'s
+/// `ucs/clientlist.cpp`, `opcode_size = 1`). The Titanium program's login
+/// (read R49-12 a) is the opcode 0x01 then a 0, which this reproduces.
 fn connect(
     login: &Login,
     local_only: bool,
@@ -64,7 +76,7 @@ fn connect(
     let address = crate::client::endpoint(&server.host, server.port, local_only)
         .map_err(|_| LinkLoss::Address)?;
     crate::transport::Session::connect_cancellable(address, false, stop)
-        .map(|session| Box::new(session) as Box<dyn Transport + Send>)
+        .map(|session| Box::new(session.with_one_byte_opcodes()) as Box<dyn Transport + Send>)
         .map_err(|_| LinkLoss::Connect)
 }
 
@@ -80,6 +92,8 @@ pub(super) enum News {
     Unread { opcode: u16, length: usize },
     /// This many were dropped when the queue was full.
     Dropped(u64),
+    /// Why the link ended, for the log: never the address, key or mailbox.
+    Why(String),
 }
 
 /// What the link's thread and the session share.
@@ -351,6 +365,15 @@ fn silent(transport: &dyn Transport, checked: &mut Instant, every: Duration) -> 
     transport.last_received_seconds() > SILENCE_LIMIT_SECS
 }
 
+/// Tells the log why the link ended.
+fn why(thread: &Thread, text: String) {
+    thread
+        .inbound
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(News::Why(text));
+}
+
 /// The link's thread: connects, logs in, then carries commands out and what
 /// the server says in until it is stopped or fails; why it failed, or None
 /// when it was stopped.
@@ -371,17 +394,18 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
     let mut transport = match connected {
         Ok(transport) => transport,
         Err(_) if stop.load(Ordering::Relaxed) => return None,
-        Err(loss) => return Some(loss),
+        Err(loss) => {
+            why(thread, format!("could not connect ({loss:?})"));
+            return Some(loss);
+        }
     };
     if stop.load(Ordering::Relaxed) {
         // Closed while it connected: nothing is sent, nothing told.
         let _ = transport.close();
         return None;
     }
-    if transport
-        .send(chat_server::LOGIN_OPCODE, &login.body())
-        .is_err()
-    {
+    if let Err(error) = transport.send(chat_server::LOGIN_OPCODE, &login.body()) {
+        why(thread, format!("the login could not be sent: {error}"));
         let _ = transport.close();
         return Some(LinkLoss::Login);
     }
@@ -403,20 +427,24 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
         if !up && asked.elapsed() >= *login_wait {
             // A server that keeps the connection but never takes the login
             // ends the link once (reviewer F1).
+            why(thread, "the server never answered the login".to_owned());
             let _ = transport.close();
             return Some(LinkLoss::Login);
         }
         if up && silent(&*transport, &mut checked, *silence_check) {
             // Whether the program says anything then is unread.
+            why(thread, "the server was silent too long".to_owned());
             let _ = transport.close();
             return Some(LinkLoss::Dropped);
         }
         loop {
             match commands.try_recv() {
-                Ok(body) if transport.send(chat_server::COMMAND_OPCODE, &body).is_err() => {
-                    return Some(lost(up));
+                Ok(body) => {
+                    if let Err(error) = transport.send(chat_server::COMMAND_OPCODE, &body) {
+                        why(thread, format!("a command could not be sent: {error}"));
+                        return Some(lost(up));
+                    }
                 }
-                Ok(_) => {}
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     let _ = transport.close();
@@ -427,7 +455,11 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
         let packet = match transport.receive() {
             Ok(Some(packet)) => packet,
             Ok(None) => {
-                if transport.termination().is_some() {
+                if let Some(termination) = transport.termination() {
+                    why(
+                        thread,
+                        format!("the server ended the session ({termination:?})"),
+                    );
                     return Some(lost(up));
                 }
                 // The modern transport waits inside receive; a transport
@@ -435,31 +467,56 @@ fn run(thread: &Thread) -> Option<LinkLoss> {
                 std::thread::sleep(Duration::from_millis(2));
                 continue;
             }
-            Err(_) => return Some(lost(up)),
+            Err(error) => {
+                why(thread, format!("the transport failed: {error}"));
+                return Some(lost(up));
+            }
         };
-        let mut inbound = inbound.lock().unwrap_or_else(PoisonError::into_inner);
-        if packet.opcode == chat_server::LOGIN_OPCODE {
-            // The server's mailboxes answer a login it took.
-            if !up {
-                up = true;
-                inbound.up = true;
-                inbound.push(News::Link(ChannelLink::Up));
-            }
-            continue;
-        }
-        match chat_server::read(packet.opcode, &packet.body) {
-            Ok(Some(event)) => inbound.push(News::Event(event)),
-            Ok(None) => inbound.push(News::Unread {
-                opcode: packet.opcode,
-                length: packet.body.len(),
-            }),
-            Err(_) => {
-                drop(inbound);
-                let _ = transport.close();
-                return Some(LinkLoss::Malformed);
-            }
+        if let Err(text) = heard(inbound, &packet, &mut up) {
+            why(thread, text);
+            let _ = transport.close();
+            return Some(LinkLoss::Malformed);
         }
     }
+}
+
+/// Takes one message from the server: the login's answer brings the link
+/// up; anything else is told, or left unread. Why, when it is unreadable.
+fn heard(
+    inbound: &Mutex<Inbound>,
+    packet: &eq_network_transport::Application,
+    up: &mut bool,
+) -> Result<(), String> {
+    if packet.opcode == chat_server::KEEP_ALIVE_OPCODE {
+        // The server's keep-alive: it counts as a word from the server, as
+        // anything the transport takes does, and says nothing more.
+        return Ok(());
+    }
+    let mut inbound = inbound.lock().unwrap_or_else(PoisonError::into_inner);
+    if packet.opcode == chat_server::LOGIN_OPCODE {
+        // The server's mailboxes answer a login it took.
+        if !*up {
+            *up = true;
+            inbound.up = true;
+            inbound.push(News::Link(ChannelLink::Up));
+        }
+        return Ok(());
+    }
+    match chat_server::read(packet.opcode, &packet.body) {
+        Ok(Some(event)) => inbound.push(News::Event(event)),
+        Ok(None) => inbound.push(News::Unread {
+            opcode: packet.opcode,
+            length: packet.body.len(),
+        }),
+        Err(error) => {
+            return Err(format!(
+                "opcode {:#04x} ({} bytes) was unreadable: {error}",
+                packet.opcode,
+                packet.body.len()
+            ))
+        }
+    }
+    Ok(())
 }
 
 /// Opens the character's chat link from the world's Titanium chat-channel
@@ -577,6 +634,9 @@ impl Feature for Channels {
                 News::Dropped(count) => out.log.diagnostic(format!(
                     "Chat server link: {count} messages dropped while the queue was full"
                 ))?,
+                News::Why(text) => out
+                    .log
+                    .diagnostic(format!("Chat server link ended: {text}"))?,
             }
         }
         Ok(())
@@ -767,7 +827,7 @@ mod tests {
     #[test]
     fn a_link_logs_in_comes_up_and_carries_commands_and_messages() {
         let (link, sent, connects) = link(Some(Stub::Takes));
-        assert_eq!(link.send("list"), Err("There is no chat server link"));
+        assert_eq!(link.send("/list"), Err("There is no chat server link"));
         link.open(login(), true);
         let news = until(&link, |news| {
             news.iter().any(|n| matches!(n, News::Event(_)))
@@ -781,7 +841,7 @@ mod tests {
                 text: "hi".into(),
             })
         );
-        link.send("join test1").unwrap();
+        link.send("/join test1").unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while sent.lock().unwrap().len() < 2 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
@@ -791,7 +851,7 @@ mod tests {
         assert_eq!(sent[0].0, chat_server::LOGIN_OPCODE);
         assert_eq!(
             sent[1],
-            (chat_server::COMMAND_OPCODE, b"\0join test1\0".to_vec())
+            (chat_server::COMMAND_OPCODE, b"/join test1\0".to_vec())
         );
         assert_eq!(sent.len(), 2);
         assert_eq!(*connects.lock().unwrap(), 1);
@@ -799,6 +859,19 @@ mod tests {
         link.close();
         assert!(!link.running());
         assert!(!link.opened());
+    }
+
+    #[test]
+    fn the_servers_keep_alive_keeps_the_link_and_tells_nothing() {
+        let inbound = Mutex::new(Inbound::default());
+        let mut up = true;
+        let keep_alive = Application {
+            opcode: chat_server::KEEP_ALIVE_OPCODE,
+            body: Vec::new(),
+        };
+        assert_eq!(heard(&inbound, &keep_alive, &mut up), Ok(()));
+        assert!(up);
+        assert!(inbound.lock().unwrap().news.is_empty());
     }
 
     #[test]
@@ -819,7 +892,21 @@ mod tests {
                 .filter(|n| matches!(n, News::Link(ChannelLink::Lost { .. })))
                 .collect();
             assert_eq!(lost, [&News::Link(ChannelLink::Lost { reason: loss })]);
-            assert!(link.send("list").is_err());
+            // Why it ended is told first, for the log, without the key.
+            let why: Vec<_> = news
+                .iter()
+                .filter_map(|n| match n {
+                    News::Why(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(why.len(), 1, "{loss:?}");
+            assert!(!why[0].contains(KEY));
+            assert!(!why[0].contains("chat.example.test"));
+            if loss == LinkLoss::Malformed {
+                assert!(why[0].starts_with("opcode 0x7777 (9 bytes) was unreadable"));
+            }
+            assert!(link.send("/list").is_err());
             std::thread::sleep(Duration::from_millis(20));
             assert_eq!(*connects.lock().unwrap(), 1, "{loss:?}");
             assert_eq!(link.drain().len(), 0);
@@ -830,7 +917,7 @@ mod tests {
         link.open(login(), false);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(
-            link.send("list"),
+            link.send("/list"),
             Err("The chat server has not taken the login")
         );
         assert!(link.running());
@@ -918,6 +1005,7 @@ mod tests {
             news,
             [
                 News::Link(ChannelLink::Up),
+                News::Why("the server was silent too long".to_owned()),
                 News::Link(ChannelLink::Lost {
                     reason: LinkLoss::Dropped
                 })
@@ -936,7 +1024,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(60));
         assert!(quiet.running());
         assert_eq!(quiet.drain(), []);
-        quiet.send("list").unwrap();
+        quiet.send("/list").unwrap();
         quiet.close();
     }
 
@@ -956,9 +1044,12 @@ mod tests {
         });
         assert_eq!(
             news,
-            [News::Link(ChannelLink::Lost {
-                reason: LinkLoss::Login
-            })]
+            [
+                News::Why("the server never answered the login".to_owned()),
+                News::Link(ChannelLink::Lost {
+                    reason: LinkLoss::Login
+                })
+            ]
         );
         std::thread::sleep(Duration::from_millis(20));
         assert!(!link.running());
@@ -968,7 +1059,7 @@ mod tests {
             .iter()
             .any(|(opcode, _)| *opcode == CLOSED));
         // A lost link says it has ended, not that it is still coming up.
-        assert_eq!(link.send("list"), Err("The chat server link has ended"));
+        assert_eq!(link.send("/list"), Err("The chat server link has ended"));
         assert_eq!(*connects.lock().unwrap(), 1);
         assert_eq!(link.drain(), []);
     }
@@ -1055,7 +1146,7 @@ mod tests {
         link.open(login(), false);
         until(&link, |news| news.contains(&News::Link(ChannelLink::Up)));
         let refused = (0..OUTBOUND * 3)
-            .map(|_| link.send("list"))
+            .map(|_| link.send("/list"))
             .filter(Result::is_err)
             .collect::<Vec<_>>();
         assert!(refused.contains(&Err("Too many chat channel commands are waiting")));
@@ -1086,16 +1177,16 @@ mod tests {
         };
         for _ in 0..20 {
             assert_eq!(
-                ask("2 early").as_deref(),
+                ask(";2 early").as_deref(),
                 Some("There is no chat server link")
             );
         }
         link.open(login(), false);
         until(&link, |news| news.contains(&News::Link(ChannelLink::Up)));
         for line in 0..super::super::chat_pace::ANY_CHAT {
-            assert_eq!(ask("list"), None, "{line}");
+            assert_eq!(ask("/list"), None, "{line}");
         }
-        let refused = ask("2 a synthetic private line").expect("paced");
+        let refused = ask(";2 a synthetic private line").expect("paced");
         assert!(
             refused.starts_with("You are sending chat too fast."),
             "{refused}"
@@ -1209,7 +1300,7 @@ mod tests {
         let created = Instant::now();
         let command = |session_id| ClientCommand::ChatChannel {
             session_id,
-            text: "list".into(),
+            text: "/list".into(),
             created,
         };
         for (session_id, reason) in [

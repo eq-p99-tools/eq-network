@@ -30,6 +30,9 @@ mod groups;
 mod guilds;
 pub(super) mod hazards;
 mod hiding;
+mod hit_roll;
+#[cfg(test)]
+mod hit_stun_tests;
 mod inspect_answer;
 mod inventory;
 mod journal;
@@ -222,6 +225,10 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) chat: std::sync::Arc<chat_link::ChatLink>,
     /// The character's one pace for all chat, kept across zones (6.523).
     pub(in crate::client) chat_pace: chat_pace::SharedPace,
+    /// The world's player-versus-player ruleset, from its Titanium
+    /// `OP_LogServer` (offset 4, \[0x900478\]; read R49-31 d), once the
+    /// world sent it; kept across zones as the program keeps it.
+    pub(in crate::client) world_ruleset: std::cell::Cell<Option<u32>>,
 }
 
 impl<'a> CharacterSession<'a> {
@@ -246,6 +253,7 @@ impl<'a> CharacterSession<'a> {
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
             chat_pace: chat_pace::SharedPace::default(),
+            world_ruleset: std::cell::Cell::new(None),
         }
     }
 

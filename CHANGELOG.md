@@ -20,6 +20,124 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     zone 77 and of the "minus a few" zones, kept as later eras; the read's
     no-bind ids, which are 50 against its count of 48; the server's
     `OP_LogServer` words taken as 0.
+- **A Titanium door spawned away from its rest moves and goes back as the program's mover does** (0x4368b3, read R49-28b; checklist 6.423). Nothing new is sent, and a server action still overrides the local state.
+  - **Spawn poses:** every door is placed at its base. The new `titanium::endpoint` gives the end a door stands at or heads for: a door spawned in state 1 or 2 (state 2 after 0x490670) runs from its base to its end at its opening rate, and one in state 0 or 3 stands at its base. A vertical door spawned in state 1 used to be placed at full travel, and now rises (`Lifts::spawned`).
+  - **The mover's skipped types** (new `titanium::mover_skips`: 50-52, 54-58, 153-155) stand at their base and never go back on their own, after a spawn or an action.
+  - **Auto-close after spawn:** a door whose spawn state isn't its rest state (new `titanium::rest_state`, record +0x3f, the table's `invert_state`) goes back once its 0x48faa5 delay has passed since spawn, even while it is still opening. The target is closing for rest 0 and opening for rest 1. A door spawned shut, or in state 3, with rest 0 no longer goes back. Delays of none (+0x66 of -2 or -3, type 59 above 170) never close.
+  - **Types 110-152 except 115** go back closing as soon as a vertical one stands open, after a spawn or an action.
+  - **Not built (gap rows):** state 4's 60 s return to rest; a rest state above 1; the click path types 40 and 45 take on the mover's auto-close (no click is sent); type 109's toggle in state 1; the slide types' and types 10-27's motion (0x4366e8, untraced); close-once-open for a door that swings or slides (its swing time isn't stepped); 0x48fc2e's refusal of state changes for types 57 and 58; whether arrival re-arms +0x98 after a server action (read R1b's rule stays).
+  - **Speeds:** the vertical table's rates match read R49-28b (rate x 20 a second). Read R49-28b's table gives types 78-81 the +0x66 distance with no 22 fallback, where read R1's 0x49030e gives 22 for a 0: kept as R1 has it, labelled, pending a check. That affects only travel, never speed.
+- **A Titanium lift's rider reach now takes the drawn door's radius** (0x4368b3, read R49-28 (b); checklist 6.426). The program carries a rider within 10 + the door actor's radius + 200; the session has no models, so it used the no-actor radius 100 for every door. New `GameCommand::DoorRadii { session_id, radii }` lets the host give each door's radius at its size (new `doors::DoorRadius`, by door ID and model), and `Lifts::carry` uses it through the new `Lifts::reach` and `titanium::rider_reach`. A door the host doesn't name, or one drawing another model, keeps `RIDER_REACH`, today's value. Each list replaces the last, and a radius that isn't a positive number is left out. A door removal within the zone keeps them, since the host sends an unchanged list only once. Breaking for an exhaustive `GameCommand` match.
+- **A Titanium door in state 1 marked -2 ignores clicks** (0x4906c5, read R49-28; checklist 6.428 in part). The session sends nothing and says nothing, as the program does. The state is the program's spawn state (new `titanium::spawned_state`, from 0x490670): spawn states 1 and 2 become 1 for types 50-58 (not 53) and 153-155, and 2 for any other type; 3 becomes 0. Once the server moves a door, its state is the program's mover's, which is unread, so the rule stops applying (6.423). RoF2 takes Titanium's rule, inferred; EQMac is unchanged. New `doors::Ignored` and `titanium::ignores_clicks`. The `Solidity::of` doc now says its second filter is not an exclusion (read F4b).
+- **The Titanium program's own hit roll now interrupts** (mode 1 of 0x40f8a0, reads R49-50 and R49-21d; checklist 6.645 S2). When the interrupt branch interrupts, the session clears what the program's +0xf98 holds: the song, else the cast in flight. Spells 859 to 1023 are exempt. Nothing is sent, so the server keeps the cast or song going, as with the original.
+  - A Bard's song of the class's spell ends with `WorldEvent::SongStopped` and line 0x318e (Titanium song rules, Bard only), so the host resets the gems as at any song stop.
+  - A cast the session holds is released, and the host hears the new `WorldEvent::CastCleared { session_id, spell_id }` (no line), so the next gem press casts. A request still awaiting its answer also says `CastPending { spell_id: None }`. A song still in its cast window sends both `SongStopped` and `CastCleared`.
+  - A new session-internal `Message::HitInterrupt` carries the roll to the casting feature. Breaking for an exhaustive `WorldEvent` or `Message` match.
+  - Not built: the program would print 0x318f again when the server's later `OP_ManaChange` for that spell arrives, as it finds the song by the packet's spell. Ours has cleared the song and says nothing.
+- **The Titanium program's own stun roll on a bash or a kick** (its hit routine 0x41c905, reads R49-50 and R49-50b; checklist 6.646). This holds on P99 and Titanium EQEmu alike, with no setting.
+  - **When it rolls:** for a hit over 0 to the player (alive after it, unchecked: see below) from a player's bash (kind 10), or from a kick (kind 30) by a Warrior above level 54, unless the player is an Ogre or an Oggok citizen (races 10, 93). Nothing is sent: the server rolls its own, as `EQEmu`'s `Mob::CommonDamage` does with the same numbers.
+  - **The roll:** r1 = random 0 to 100, with 0 counted as 1. If r1 < 99 and r1 <= 55 - t, the interrupt branch rolls 0 to 9, and over 1 interrupts. Its interrupt acts in 6.645 S2 (above). t is the stun-bash chance (SPA 0xe7), for a bash only.
+  - **Otherwise the stun branch:**
+    - the frontal stun resist (SPA 0x125) at or above random 1 to 100 saves, with line 0x1679;
+    - else random 0 to 100 under the stun resist (SPA 0xc3) saves, with line 0x2375;
+    - else a 2000 ms stun goes into the one stun slot. As there, the first stun stands, the hit's or the server's: neither extends nor replaces the other.
+  - **New `WorldEvent::StunSaved { session_id, string_id }`** names a save's line (breaking for an exhaustive match). New `SightCatalog::effect_total` (default 0) gives an SPA's total for a buff.
+  - **Inferred or not built:**
+    - worn items' SPA values count 0 (0x417bcf; no item effects in the session yet);
+    - the victim's +0x70 term in the second save counts 0 (untraced);
+    - the early clear 0x417948 (after a mez fades, or the hit routine's spell 0x26b branch) isn't modelled, so a stun always runs to its deadline;
+    - the bash gate's spawn +0x218 is taken as any player spawn;
+    - the program rolls only when the hit leaves the player alive, but the session doesn't check: the server's HP report leaves out the items' HP and no Titanium item count exists yet, so a hit that kills the player rolls too (the stricter side).
+  - **For 6.645 S2, not built here:** once the interrupt acts, a later `OP_ManaChange` for that spell would print 0x318f again in the program (it finds the song by the packet's spell); ours won't, as the song is already cleared.
+- A gem's forget goes mid-cast, as the Titanium program's right click does (0x4eccc6, read R49-34 d; checklist 6.639, slice G4). The Mac-era and RoF2 programs are taken to match (inferred). `ClientCommand::ForgetSpell` no longer waits on a cast in flight. It waits only while a cast request is unacknowledged (the program's pending action), with "Wait for the server to acknowledge the cast". The casting feature now also holds the new `PendingCast` resource while its request is pending. Memorize, delete, swap and scribe still wait on the cast. Before, a forget mid-cast was refused in the session and never reached the server (local look, eq-client #663 L7).
+
+- Fixed: another class's cast end no longer reports a Bard's song stop. The server's cast update (`OP_ManaChange`, keep-casting clear) at the end of a cleric's cast or fizzle sent `WorldEvent::SongStopped`, so the host printed "Your song ends." (0x318f) after it. Only a Bard sings (the program's song test 0x40db0b needs class 8, read R49-21b), so the event now goes for a Bard only (checklist 6.542, from the L5 live look).
+- Chat-channel commands go as the program sends them: the text as typed (`/join x`, `;1 hello`) and a NUL, with no lead byte. The chat server skips the first byte, the `/` or `;`, and reads `join x` or `1 hello`. The lead 0 that `chat_server::command` put first left stock UCS reading `/join x`, which it doesn't take (local look). `command` now refuses text that doesn't start with `/` or `;`, and the chat pace finds the command's word past that first byte.
+
+- The chat-channel link reads past the chat server's keep-alive: opcode 0 with nothing after it, which arrives with the transport's escaping 0 before it (a local look got its first 14 s after the login and dropped the link as unreadable). The one-byte stream now takes off that escaping 0, as the two-byte one does, and `chat_server::KEEP_ALIVE_OPCODE` is read as saying nothing.
+
+- The chat-channel link now tells the log why it ended (a diagnostic "Chat server link ended: ...": the connect failure, an unanswered login, the server's session end, a transport error, a silent server, or an unreadable message by opcode and length), never naming the address, key or mailbox. A local look found the link ending at once after the server took the login, with nothing logged to say why.
+
+- The chat-channel link logs in to a stock chat server: a chat server's stream carries its opcodes in one byte (`EQEmu`'s `ucs/clientlist.cpp`, `opcode_size = 1`), but the link used the zones' two-byte opcodes. So the server read the login's lead 0 as an empty mailbox, refused the key as the wrong size and dropped the link (local EQEmu look, checklist 6.616). `transport::Session::with_one_byte_opcodes` carries them in one byte both ways, and the chat link uses it, so the login goes as 0x01, 0, then the mailbox, as read R49-12 a gives the Titanium program's.
+
+- **Breaking:** `BugReport` carries the Titanium bug report window's other
+  three check boxes: `repeatable`, `crash` and `character_flags` (checklist
+  6.511 C1b, read R49-23 send pass). With the target, they set the mask at
+  532 as the program's Send (0x4e9f7a) does: 1, 2, 4 and 8, the bits
+  `EQEmu`'s `Bug::InformationFlag` reads. Before, only the target's bit was
+  set. Struct literals add the three fields.
+- `GameCommand::InspectSpawn { session_id, spawn_id, created }` inspects a
+  player by spawn ID without selecting them, for the Titanium program's
+  right-click inspect (checklist 6.644, reads R49-16 and R49-16e). It sends
+  OP_InspectRequest 0x775d {target, own} under `Capability::PlayerInspection`
+  with `InspectPlayer`'s rules (a visible player or the player's own spawn,
+  under 20 units, one outstanding request per player), and its answer comes
+  back as `WorldEvent::PlayerInspection`. EQEmu and Project 1999 offer it, as
+  they list `PlayerInspection`; TAKP and Quarm do not. **Breaking:** a new
+  `GameCommand` variant, so exhaustive matches add its arm.
+- `Capability::BardRefreshTimers` (checklist 6.642): where the Titanium
+  program's gem timers for a Bard apply (read R49-21 c). A refresh of a
+  Bard's own gem (`OP_MemorizeSpell` kind 3) sets the program's wait before
+  the next spell to now, where anyone else's adds the spell's recovery. It
+  comes with the Titanium song rules, on P99 and stock `EQEmu`; not the
+  Mac-era server types, whose program is unread. The host keeps the timers;
+  nothing is sent for it. **Breaking:** a new `Capability` variant.
+- Build the Mac-era program's arrival aboard a boat (TAKP 0x53df6e, read
+  9c, checklist 6.641), not offered yet: Quarm and TAKP keep `BoatRiding`
+  off until an attended first ride.
+  - The profile's position is taken as a world point, as both servers
+    write it (TAKP 44afcbf and Quarm fc75fcf, source-derived), and
+    `Arrival::Aboard` carries it in the boat's frame. The host's placement
+    is accepted at the first try only.
+  - With the boat not in, nothing is sent; the session looks again each
+    tick and gives up at the safe point after 60 s (inferred from
+    Titanium).
+
+- A knight's special waits as the Titanium program's does (read R49-29 b,
+  checklist 6.626). The program's own slot-9 timer: 10 s from a send, and
+  the spell's recast from the server's refresh of gem 9 (`OP_MemorizeSpell`
+  kind 3). While it runs, the press is refused with the program's line
+  0x2efd and nothing is sent. The server's long reuse (the profile's
+  timer, or the estimate) is still reported in `KnightReuse` but no longer
+  holds the press: after the local wait the press goes and the server
+  refuses it as it does the program's. The program takes 1 s off the
+  recast for each point of the player's effect 0x127, which isn't totalled
+  here, so the wait is never shorter than the program's (inferred). The
+  recast comes from the host's installed spell data through the new
+  default method `SightCatalog::recast`; without it the press keeps
+  today's hold on the server's long reuse. A new zone session starts with
+  no local wait, as the program's actor does. Not breaking: the trait
+  method has a default.
+- Tracking ends silently as the Titanium program's does (read R49-30 c,
+  checklist 6.636): when six minutes pass, when the followed spawn is
+  removed, and when the player dies, `TrackingUpdate::Ended` now carries no
+  line (it carried 0x3189 and 0x30d3). A zone change ends it with the zone
+  session, as before. The two-second report runs only while the player's
+  Tracking skill reads 0 or more as the program's signed value (read
+  R49-30 b). The program's 0x30d3, for a tracked spawn it no longer holds
+  while still tracking, is a state removal never leaves here, so it isn't
+  said (inferred). Not breaking: only which line is sent.
+- Pick Pockets on a player follows the world's ruleset (6.631 follow-up),
+  read from the world's rules packet (`OP_LogServer`, the value
+  `WorldRules::pvp` already decodes). Under ruleset 4 the two flag lines
+  (0x307a, 0x307b) are skipped; the player is refused with 0x307c when
+  not eligible for player combat, and with 0x307d when the target's level
+  is outside five of theirs either way or is 5 or lower. The program's
+  eligibility test reads a team value no packet field is mapped to yet:
+  the player's own PvP flag stands in for it (inferred). Under any other
+  ruleset only the flag lines apply, and this library's own level-range
+  words are gone. A session that hasn't read the rules (the Mac-era and
+  RoF2 worlds today) keeps the flags and the level range in this
+  library's words. Not breaking: the new state is internal.
+- **Breaking:** A same-zone zone line places the player locally on stock
+  EQEmu too, as on P99 (checklist 6.640, read same-zone zone line: the
+  program's 0x48aaa6 sends one position record and lands the player itself,
+  with no 0x5dd8 and no wait, on any server). `WorldEvent::SameZoneBoundary`
+  is removed: nothing waits for the server to move the player any more, and
+  exhaustive matches drop its arm. The EQEmu profile now takes the host's
+  `InstalledZoneBoundaries`. Quarm, TAKP and RoF2 are unread and still refuse
+  a same-zone line, as before.
+- P99's expansion list is read: its `OP_ExpansionInfo` body is 46 bytes (capture-derived: the mask first, then bytes that differ per session and zeros), and `rules::expansions` refused any body but 4 bytes, so P99's mask was dropped. It now takes the first word from a 4- or 46-byte body (`rules::P99_EXPANSIONS_LENGTH`) and leaves the rest unread. P99 recordings give 0x3 (Kunark and Velious), so `WorldEvent::Expansions` now reaches P99 sessions too.
 
 - TAKP and Quarm keep a duel as the `EQMac` program does (checklist 6.622;
   TAKP program reads 11g and 11h; source-derived from TAKP 44afcbf's

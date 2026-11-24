@@ -444,6 +444,7 @@ fn actual_zone_receive_delivers_replay_before_any_profile_or_entered_event() {
             riding: std::sync::Arc::default(),
             chat: std::sync::Arc::default(),
             chat_pace: std::sync::Arc::default(),
+            world_ruleset: std::cell::Cell::new(None),
         };
         let mut received = Vec::new();
         let mut handler = |event| {

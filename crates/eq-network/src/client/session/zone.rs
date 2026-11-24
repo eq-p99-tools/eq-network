@@ -332,6 +332,7 @@ fn run_connected(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::for_zone(session_id, config);
+    world.ruleset = context.world_ruleset.get();
     let mut recording_only = false;
     let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
@@ -975,7 +976,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 149;
+    const KINDS: usize = 151;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1120,9 +1121,11 @@ mod tests {
             ClientCommand::SpeedInputs { .. } => 72,
             ClientCommand::ShowHelm { .. } => 73,
             ClientCommand::ClimbReach { .. } => 74,
+            ClientCommand::DoorRadii { .. } => 150,
             ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::RespondToPopup { .. } => 89,
             ClientCommand::InspectPlayer { .. } => 90,
+            ClientCommand::InspectSpawn { .. } => 149,
             ClientCommand::WhoFriends { .. } => 92,
             ClientCommand::Track { .. } => 103,
             ClientCommand::ChangeCoins { .. } => 93,
@@ -1185,6 +1188,9 @@ mod tests {
                     text: "A synthetic report.".into(),
                     place: None,
                     target: None,
+                    repeatable: false,
+                    crash: false,
+                    character_flags: false,
                 },
                 created,
             },
@@ -1553,7 +1559,7 @@ mod tests {
             },
             ClientCommand::ChatChannel {
                 session_id,
-                text: "list".into(),
+                text: "/list".into(),
                 created,
             },
             ClientCommand::AnswerListPolls {
@@ -1692,6 +1698,10 @@ mod tests {
             ClientCommand::ClimbReach {
                 session_id,
                 per_step: 3.15,
+            },
+            ClientCommand::DoorRadii {
+                session_id,
+                radii: Vec::new(),
             },
             ClientCommand::Random {
                 session_id,
@@ -1839,6 +1849,11 @@ mod tests {
             ClientCommand::InspectPlayer {
                 session_id,
                 target: eq_network_game::targets::TargetState::default(),
+                created,
+            },
+            ClientCommand::InspectSpawn {
+                session_id,
+                spawn_id: 1,
                 created,
             },
             ClientCommand::WhoFriends {
@@ -2628,6 +2643,83 @@ mod tests {
             event,
             ClientEvent::Diagnostic(said) if said.contains("cannot count")
         )));
+    }
+
+    #[test]
+    fn a_forget_waits_only_on_a_pending_cast_request_as_the_programs_right_click() {
+        use super::super::{casting::Casting, feature::testing};
+        use eq_network_game::spells::SpellUpdate;
+
+        let mut features = Features {
+            provided: vec![Box::new(Casting::default())],
+            choices: Vec::new(),
+            spell_landing_flag: None,
+            answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
+            gameplay_departures: false,
+        };
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        player.memorized_spells[1] = Some(203);
+        world.player.admit(player);
+        let cast = ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let forget = ClientCommand::ForgetSpell {
+            session_id: 5,
+            gem: 1,
+            spell_id: 203,
+            created: Instant::now(),
+        };
+        let memorize = ClientCommand::MemorizeSpell {
+            session_id: 5,
+            gem: 2,
+            spell_id: 204,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| -> Result<()> {
+            assert_eq!(features.refusal(&forget, &world, Instant::now()), None);
+            apply_commands(
+                std::slice::from_ref(&cast),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            // While the request is pending, the program's right click does
+            // nothing (0x4eccc6's [0x9248d0] test, read R49-34 d).
+            assert_eq!(
+                features.refusal(&forget, &world, Instant::now()),
+                Some("Wait for the server to acknowledge the cast")
+            );
+            hear(
+                vec![Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 7,
+                    spell_id: 202,
+                    duration_ms: 3000,
+                }))],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            // Mid-cast it forgets at once; a memorize still waits.
+            assert_eq!(features.refusal(&forget, &world, Instant::now()), None);
+            assert_eq!(
+                features.refusal(&memorize, &world, Instant::now()),
+                Some("Wait for the current cast to finish or interrupt it")
+            );
+            Ok(())
+        });
+        outcome.result.unwrap();
     }
 
     #[test]
@@ -3765,3 +3857,5 @@ mod discipline_tests;
 
 #[cfg(test)]
 mod local_damage_tests;
+#[cfg(test)]
+mod tracking_zone_tests;

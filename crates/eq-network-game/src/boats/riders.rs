@@ -27,16 +27,23 @@ pub enum Arrival {
         name: String,
         /// The received report of the spawn the name found.
         sample: CarrierSample,
-        /// The profile's position fields as received: x from 13116, y from
-        /// 13120, z from 13124, and the heading.
+        /// The profile's position fields as received: on Titanium x from
+        /// 13116, y from 13120, z from 13124, and the heading; on the Mac
+        /// era x from 2908, y from 2904, z from 2912 and the heading from
+        /// 2916.
         profile: Position,
         /// Where the program restores the rider in the boat's frame from
-        /// them (read R36c): the profile's y and z as x and y, and the z
-        /// the departure saved.
+        /// them. Titanium (read R36c): the profile's y and z as x and y,
+        /// and the z the departure saved. The Mac era (read 9c, 6.641): the
+        /// profile's world point in the boat's frame as it stood at the
+        /// arrival, since both Mac servers write a world point there
+        /// (source-derived).
         local: Position,
     },
-    /// The vehicle is not here. The session asked for it (0x3710) and holds
-    /// the player until the server carries them on, or 60 s pass.
+    /// The vehicle is not here. The session holds the player until the
+    /// server carries them on or, on the Mac era, the boat comes in; or 60 s
+    /// pass. On Titanium it asked for the boat (0x3710); the Mac-era program
+    /// sends nothing (read 9c).
     Waiting {
         /// The vehicle's raw saved name.
         name: String,

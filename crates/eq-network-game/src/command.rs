@@ -822,6 +822,19 @@ pub enum GameCommand {
         /// When inspection was requested.
         created: std::time::Instant,
     },
+    /// Inspect a player by their spawn, without selecting them: the
+    /// Titanium program's right-click on a player, or on the player
+    /// themself, sends its inspect request for the clicked spawn and never
+    /// targets (read R49-16, R49-16e). The caller says the program's
+    /// too-far line; the session still refuses a spawn out of reach.
+    InspectSpawn {
+        /// Current zone admission.
+        session_id: u64,
+        /// The clicked spawn: another visible player, or the player's own.
+        spawn_id: u16,
+        /// When inspection was requested.
+        created: std::time::Instant,
+    },
     /// Configure the known native inspect note for this character and admission.
     SetInspectNote {
         /// Current zone admission.
@@ -1411,6 +1424,17 @@ pub enum GameCommand {
         /// number is ignored.
         per_step: f32,
     },
+    /// The radius of each door model the host draws, at the door's size,
+    /// which the session's lift carry measures its rider reach with
+    /// ([`crate::doors::titanium::Lifts::set_radii`]). Each list replaces the
+    /// last; a door it doesn't name, or one now drawing another model, keeps
+    /// the program's reach for a door without a model.
+    DoorRadii {
+        /// Current zone-admission identifier.
+        session_id: u64,
+        /// The radii, by door.
+        radii: Vec<crate::doors::DoorRadius>,
+    },
     /// Propose fresh motion for the current zone session.
     Move(crate::movement::MovementRequest),
 }
@@ -1518,6 +1542,7 @@ impl GameCommand {
             Self::DeclineDuel { .. } => "DeclineDuel",
             Self::RespondToPopup { .. } => "RespondToPopup",
             Self::InspectPlayer { .. } => "InspectPlayer",
+            Self::InspectSpawn { .. } => "InspectSpawn",
             Self::SetInspectNote { .. } => "SetInspectNote",
             Self::DropInvisibility { .. } => "DropInvisibility",
             Self::InviteToGroup { .. } => "InviteToGroup",
@@ -1574,6 +1599,7 @@ impl GameCommand {
             Self::ConfigureMotion { .. } => "ConfigureMotion",
             Self::SpeedInputs { .. } => "SpeedInputs",
             Self::ClimbReach { .. } => "ClimbReach",
+            Self::DoorRadii { .. } => "DoorRadii",
             Self::Move(..) => "Move",
         }
     }
@@ -1666,6 +1692,7 @@ impl GameCommand {
             | Self::AnswerDuel { session_id, .. }
             | Self::RespondToPopup { session_id, .. }
             | Self::InspectPlayer { session_id, .. }
+            | Self::InspectSpawn { session_id, .. }
             | Self::SetInspectNote { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
             | Self::StopSong { session_id, .. }
@@ -1735,7 +1762,8 @@ impl GameCommand {
             | Self::DepopLocalNpc { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
             | Self::SpeedInputs { session_id, .. }
-            | Self::ClimbReach { session_id, .. } => Some(*session_id),
+            | Self::ClimbReach { session_id, .. }
+            | Self::DoorRadii { session_id, .. } => Some(*session_id),
         }
     }
 
@@ -1781,7 +1809,7 @@ impl GameCommand {
             Self::UseBeltItem(_) => Capability::UsingPotionBelt,
             Self::BoatControl { .. } => Capability::BoatControl,
             Self::ArrivalPlacement { .. } => Capability::BoatRiding,
-            Self::ClickDoor { .. } => Capability::Doors,
+            Self::ClickDoor { .. } | Self::DoorRadii { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
             Self::SetPosture { .. } | Self::FeignLanded { .. } => Capability::Posture,
@@ -1862,7 +1890,7 @@ impl GameCommand {
             Self::AnswerDuel { .. } | Self::ChallengeDuel { .. } => Capability::Dueling,
             Self::DeclineDuel { .. } => Capability::DecliningDuels,
             Self::RespondToPopup { .. } => Capability::ServerDialogs,
-            Self::InspectPlayer { .. } => Capability::PlayerInspection,
+            Self::InspectPlayer { .. } | Self::InspectSpawn { .. } => Capability::PlayerInspection,
             Self::SetInspectNote { .. } => Capability::InspectAnswer,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
@@ -1936,6 +1964,7 @@ impl GameCommand {
             // The latest report stands however long it waited.
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. }
+            | Self::DoorRadii { .. }
             | Self::WhoAll { .. }
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
@@ -2008,6 +2037,7 @@ impl GameCommand {
             Self::SwapSpell { created, .. }
             | Self::RespondToPopup { created, .. }
             | Self::InspectPlayer { created, .. }
+            | Self::InspectSpawn { created, .. }
             | Self::BoatControl { created, .. }
             | Self::ArrivalPlacement { created, .. }
             | Self::ClickDoor { created, .. }
@@ -2255,6 +2285,7 @@ pub fn encode(
         | GameCommand::SpeedInputs { .. }
         | GameCommand::FeignLanded { .. }
         | GameCommand::ClimbReach { .. }
+        | GameCommand::DoorRadii { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::ApplyPoison { .. }
@@ -2288,6 +2319,7 @@ pub fn encode(
         | GameCommand::DeclineDuel { .. }
         | GameCommand::RespondToPopup { .. }
         | GameCommand::InspectPlayer { .. }
+        | GameCommand::InspectSpawn { .. }
         | GameCommand::SetInspectNote { .. }
         | GameCommand::DropInvisibility { .. }
         | GameCommand::StopSong { .. }

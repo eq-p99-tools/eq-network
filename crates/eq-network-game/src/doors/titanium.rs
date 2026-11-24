@@ -28,6 +28,130 @@ pub const fn field(door: &Door) -> i16 {
     low.cast_signed()
 }
 
+/// Whether the program's door mover passes this door by every frame: the
+/// types 0x4903d4 holds for (50-58 but 53, and 153-155). It neither moves
+/// nor times them, so they stand at their base and never go back on their
+/// own (0x4368b3, read R49-28b). These are action doors (walk-in zone
+/// points, teleports, levers), whose state is a mark rather than a pose,
+/// inferred.
+#[must_use]
+pub const fn mover_skips(door: &Door) -> bool {
+    matches!(door.open_type, 50..=52 | 54..=58 | 153..=155)
+}
+
+/// The program's state for a door the server has not moved since it
+/// spawned (0x490670, read R49-28): spawn states 1 and 2 become 1 for the
+/// [`mover_skips`] types and 2 (opening) for every other type, 3 becomes 0,
+/// and any other state is kept. None once the server has moved the door:
+/// the program's state then is the server's action as its mover steps it.
+#[must_use]
+pub const fn spawned_state(door: &Door) -> Option<u8> {
+    if door.action.is_some() {
+        return None;
+    }
+    Some(match door.state_at_spawn {
+        1 | 2 if mover_skips(door) => 1,
+        1 | 2 => 2,
+        3 => 0,
+        state => state,
+    })
+}
+
+/// The state the program's mover sends a door back to on its own: the
+/// door's rest state +0x4c, which 0x490a43 copies from the record's +0x3f
+/// (read R49-28b), the byte the table calls `invert_state`.
+#[must_use]
+pub const fn rest_state(door: &Door) -> u8 {
+    door.invert_state
+}
+
+/// Which end a Titanium door stands at or heads for: open (true) or at its
+/// base (false). A door the server has moved follows its action
+/// ([`Door::active_endpoint`]). One it hasn't follows its
+/// [`spawned_state`]: a door spawned opening (2) runs from its base to its
+/// end, and one in state 0, or a [`mover_skips`] door in state 1, stands at
+/// its base (read R49-28b). Any other state, such as 4, is None.
+#[must_use]
+pub fn endpoint(door: &Door) -> Option<bool> {
+    match spawned_state(door) {
+        None => door.active_endpoint(),
+        Some(0 | 1) => Some(false),
+        Some(2) => Some(true),
+        Some(_) => None,
+    }
+}
+
+/// Whether the program's mover sends this door closing as soon as it stands
+/// open: types 110-152 but 115, which it turns from state 1 to 3 every frame
+/// (0x4368b3, read R49-28b).
+const fn closes_once_open(door: &Door) -> bool {
+    matches!(door.open_type, 0x6e..=0x98) && door.open_type != 0x73
+}
+
+/// When the program's mover sends a door back on its own, for a leg begun at
+/// `at` that arrives at `arrival`, and whether it goes back toward its open
+/// end (its rest is open) or its base.
+///
+/// - A [`mover_skips`] door never goes back.
+/// - A door not moved since it spawned goes back once its delay has passed
+///   since it spawned (+0x98, set at spawn), when its [`spawned_state`]
+///   isn't its [`rest_state`]. That holds even while it is still opening
+///   (read R49-28b). The program's close target is state 3 for rest 0 and
+///   state 2 (opening) for rest 1. A rest state above 1, and the 60 s of a
+///   door in state 4, aren't built: such a door doesn't go back.
+/// - A door the server moved keeps read R1b's rule: the timer runs from the
+///   action and again from arrival. Whether arrival re-arms +0x98 isn't in
+///   read R49-28b.
+/// - A [`closes_once_open`] door goes back closing at its arrival at the
+///   open end, if nothing sent it back sooner. Only a vertical door's
+///   arrival is known; one that swings or slides keeps its timer alone
+///   (its swing's time isn't stepped here, recording checklist 6.424).
+fn timed_return(door: &Door, at: Instant, arrival: Instant) -> Option<(Instant, bool)> {
+    if mover_skips(door) {
+        return None;
+    }
+    let timer = match spawned_state(door) {
+        Some(state) => {
+            let rest = rest_state(door);
+            (state != rest && rest <= 1 && state != 4)
+                .then(|| returns_after(door))
+                .flatten()
+                .map(|delay| at + delay)
+        }
+        None => away(door)
+            .then(|| returns_after(door))
+            .flatten()
+            .map(|delay| {
+                if at + delay < arrival {
+                    at + delay
+                } else {
+                    arrival + delay
+                }
+            }),
+    }
+    .map(|when| (when, return_action(door) == OPEN));
+    let once_open =
+        (closes_once_open(door) && Vertical::of(door).is_some() && endpoint(door) == Some(true))
+            .then_some((arrival, false));
+    match (timer, once_open) {
+        (Some(timer), Some(once_open)) => Some(if once_open.0 < timer.0 {
+            once_open
+        } else {
+            timer
+        }),
+        (timer, once_open) => timer.or(once_open),
+    }
+}
+
+/// Whether the program ignores a click on this door, saying nothing and
+/// sending nothing: a door in state 1 whose [`field`] is -2 (0x4906c5, read
+/// R49-28). The state is known only until the server first moves the door
+/// ([`spawned_state`]); after that the rule is not applied.
+#[must_use]
+pub const fn ignores_clicks(door: &Door) -> bool {
+    field(door) == -2 && matches!(spawned_state(door), Some(1))
+}
+
 /// The travel a door takes from [`field`] (0x49030e): its size, except that
 /// -1, -2 and -3 give none.
 fn field_travel(door: &Door) -> f32 {
@@ -181,8 +305,10 @@ impl Solidity {
     /// R1's "wall contact skips 60-77").
     ///
     /// The floor sweep takes a door only when 0x490370 holds: types 30-45,
-    /// 50-51, 54-59 and 153-155, and three zones' own types. (Its second
-    /// filter 0x42ce5d is not applied here yet.)
+    /// 50-51, 54-59 and 153-155, and three zones' own types. Its second
+    /// filter 0x42ce5d is not an exclusion: a 0 there means keep looking,
+    /// and the hit already written stands (read F4b), so it changes no
+    /// door's floor.
     #[must_use]
     pub const fn of(open_type: u8, zone_id: u16) -> Self {
         let floor = matches!(open_type, 30..=45 | 50 | 51 | 54..=59 | 153..=155)
@@ -226,23 +352,16 @@ fn travel_time(door: &Door, from: f32, to: f32) -> Duration {
     vertical.max(slide)
 }
 
-/// When a door moved by an action at `at` goes back on its own, if it does:
-/// the timer restarts with each state change, so it runs from the action and
+/// When a door spawned, or moved by an action, at `at` goes back on its
+/// own, if it does (`timed_return`). A door spawned away from its rest
+/// counts its delay from its spawn (read R49-28b). One the server moved
+/// restarts it with each state change, so it runs from the action and
 /// again from arrival, and a delay shorter than the travel fires before the
 /// door arrives (read R1b item 4).
 #[must_use]
 pub fn returns_at(door: &Door, at: Instant) -> Option<Instant> {
-    if !away(door) {
-        return None;
-    }
-    let delay = returns_after(door)?;
     let (from, to) = Vertical::of(door).map_or((0.0, 0.0), |motion| (0.0, motion.travel));
-    let arrival = at + travel_time(door, from, to);
-    Some(if at + delay < arrival {
-        at + delay
-    } else {
-        arrival + delay
-    })
+    timed_return(door, at, at + travel_time(door, from, to)).map(|(when, _)| when)
 }
 
 /// Whether the client's own return of this door is a click to the server
@@ -302,7 +421,16 @@ pub const fn return_action(door: &Door) -> u8 {
 /// model (read R1b), which the session does not have; this takes the
 /// program's value for a door without one, 100, and the 10, measured in three
 /// dimensions from the door's current position (recording checklist 6.426).
-pub const RIDER_REACH: f32 = 10.0 + 100.0 + 200.0;
+/// A door whose radius the host gave ([`Lifts::set_radii`]) takes that
+/// radius instead of the 100.
+pub const RIDER_REACH: f32 = rider_reach(100.0);
+
+/// The rider reach for a door model of this radius: the player's 10, the
+/// door's radius, and 200 (0x4368b3).
+#[must_use]
+pub const fn rider_reach(radius: f32) -> f32 {
+    10.0 + radius + 200.0
+}
 
 /// One vertical door's motion since its last received action.
 #[derive(Clone, Debug, PartialEq)]
@@ -322,24 +450,8 @@ struct Leg {
 impl Leg {
     fn new(door: &Door, motion: Vertical, from: f32, to: f32, at: Instant) -> Self {
         let arrival = at + motion.time(from, to);
-        let home = if return_action(door) == OPEN {
-            motion.travel
-        } else {
-            0.0
-        };
-        let returns = away(door)
-            .then(|| returns_after(door))
-            .flatten()
-            .map(|delay| {
-                (
-                    if at + delay < arrival {
-                        at + delay
-                    } else {
-                        arrival + delay
-                    },
-                    home,
-                )
-            });
+        let returns = timed_return(door, at, arrival)
+            .map(|(when, open)| (when, if open { motion.travel } else { 0.0 }));
         Self {
             door: door.clone(),
             motion,
@@ -381,23 +493,27 @@ impl Leg {
 #[derive(Clone, Debug, Default)]
 pub struct Lifts {
     legs: BTreeMap<u8, Leg>,
+    /// The host's model radius for each door, with the model it holds for.
+    radii: BTreeMap<u8, (String, f32)>,
 }
 
 impl Lifts {
     /// Follows a door's new definition, received at `now`.
     ///
-    /// A door spawned open (state 1) stands at its full travel. One spawned
-    /// opening (2) starts up from shut when it arrives; one spawned closing
-    /// (3) or shut stands shut. A door spawned away from its rest goes back
-    /// on its own timer from its arrival (recording checklist 6.423).
+    /// Every door spawns at its base, as the program places it, and the
+    /// program's mover runs one spawned opening from there ([`endpoint`]):
+    /// a door spawned in state 1 or 2 rises (or sinks) to its travel at its
+    /// opening rate, and one spawned in state 3 or 0 stands at its base. A
+    /// door spawned away from its rest goes back once its delay has passed
+    /// since spawn, even mid-rise (`timed_return`; read R49-28b, recording
+    /// checklist 6.423).
     pub fn spawned(&mut self, door: &Door, now: Instant) {
         let Some(motion) = Vertical::of(door) else {
             self.legs.remove(&door.id);
             return;
         };
-        let (from, to) = match door.state_at_spawn {
-            1 => (motion.travel, motion.travel),
-            2 => (0.0, motion.travel),
+        let (from, to) = match endpoint(door) {
+            Some(true) => (0.0, motion.travel),
             _ => (0.0, 0.0),
         };
         self.legs
@@ -421,9 +537,33 @@ impl Lifts {
             .insert(door.id, Leg::new(door, motion, from, to, now));
     }
 
-    /// Forgets every door, as a zone's door removal does.
+    /// Forgets every door's motion, as a zone's door removal does. The
+    /// host's radii stay: a server can send the table again within a zone,
+    /// and the host, whose list hasn't changed, doesn't send it again. Each
+    /// radius holds only while its door draws the model it was given for.
     pub fn clear(&mut self) {
         self.legs.clear();
+    }
+
+    /// Takes the host's model radius for each door it draws, replacing the
+    /// last list. A radius that is not a positive number is left out.
+    pub fn set_radii(&mut self, radii: &[crate::doors::DoorRadius]) {
+        self.radii = radii
+            .iter()
+            .filter(|door| door.radius.is_finite() && door.radius > 0.0)
+            .map(|door| (door.door_id, (door.model.clone(), door.radius)))
+            .collect();
+    }
+
+    /// How near a player must stand to door `door` for its motion to carry
+    /// them: [`rider_reach`] of the host's radius while the door draws the
+    /// model the radius was given for, else [`RIDER_REACH`].
+    #[must_use]
+    pub fn reach(&self, door: &Door) -> f32 {
+        self.radii
+            .get(&door.id)
+            .filter(|(model, _)| *model == door.model)
+            .map_or(RIDER_REACH, |(_, radius)| rider_reach(*radius))
     }
 
     /// How far door `id` stands above (or below) its placed height at `now`.
@@ -459,7 +599,7 @@ impl Lifts {
     /// How far a player standing on door `id` in zone `zone_id` may rise
     /// between `from` and `to`: the door's own rise over the interval, when
     /// it is a floor the program stands players on and the player, at `at`
-    /// at the instant `then`, is within [`RIDER_REACH`] of where the door
+    /// at the instant `then`, is within [`Self::reach`] of where the door
     /// stood then. Anything else carries no one.
     #[must_use]
     pub fn carry(
@@ -480,7 +620,7 @@ impl Lifts {
         let distance = (door.x - at.x)
             .hypot(door.y - at.y)
             .hypot(door.z + leg.offset(then) - at.z);
-        if distance > RIDER_REACH {
+        if distance > self.reach(&leg.door) {
             return 0.0;
         }
         self.rise(id, from, to)
@@ -539,6 +679,47 @@ mod tests {
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn a_spawned_door_takes_the_programs_state() {
+        let spawned = |open_type: u8, state: u8| {
+            let mut door = door(open_type);
+            door.state_at_spawn = state;
+            spawned_state(&door)
+        };
+        // 0x4903d4's types keep 1 for spawn states 1 and 2; others take 2.
+        for open_type in [50, 51, 52, 54, 58, 153, 155] {
+            assert_eq!(spawned(open_type, 1), Some(1), "type {open_type}");
+            assert_eq!(spawned(open_type, 2), Some(1), "type {open_type}");
+        }
+        for open_type in [0, 53, 59, 65, 152, 156] {
+            assert_eq!(spawned(open_type, 1), Some(2), "type {open_type}");
+            assert_eq!(spawned(open_type, 2), Some(2), "type {open_type}");
+        }
+        assert_eq!(spawned(50, 3), Some(0));
+        assert_eq!(spawned(50, 0), Some(0));
+        assert_eq!(spawned(50, 7), Some(7));
+        // After the server moves it, the state is the unread mover's.
+        let mut moved = door(50);
+        moved.action = Some(2);
+        assert_eq!(spawned_state(&moved), None);
+    }
+
+    #[test]
+    fn only_state_1_with_minus_2_ignores_clicks() {
+        let marked = |open_type: u8, field: i16, state: u8| {
+            let mut door = with_field(open_type, field);
+            door.state_at_spawn = state;
+            ignores_clicks(&door)
+        };
+        assert!(marked(50, -2, 1));
+        assert!(marked(153, -2, 2));
+        assert!(!marked(50, -2, 0));
+        assert!(!marked(50, -1, 1));
+        assert!(!marked(50, -3, 1));
+        // A type the program puts in state 2.
+        assert!(!marked(0, -2, 1));
     }
 
     #[test]
@@ -844,6 +1025,65 @@ mod tests {
     }
 
     #[test]
+    fn a_door_takes_the_hosts_radius_while_it_draws_that_model() {
+        let radius = |door_id, model: &str, radius| crate::doors::DoorRadius {
+            door_id,
+            model: model.into(),
+            radius,
+        };
+        let mut lifts = Lifts::default();
+        let lift = door(59);
+        assert_eq!(lifts.reach(&lift), RIDER_REACH);
+        assert!(near(RIDER_REACH, 310.0));
+        lifts.set_radii(&[radius(3, "LIFT", 40.0), radius(4, "LIFT", 55.0)]);
+        assert!(near(lifts.reach(&lift), 250.0));
+        // Another model under the same ID keeps the program's no-model reach.
+        let other = Door {
+            model: "GATE".into(),
+            ..door(59)
+        };
+        assert_eq!(lifts.reach(&other), RIDER_REACH);
+        // Each list replaces the last, and a radius that is not a positive
+        // number is left out.
+        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            lifts.set_radii(&[radius(3, "LIFT", bad)]);
+            assert_eq!(lifts.reach(&lift), RIDER_REACH, "{bad}");
+        }
+        // A door removal forgets the motion but not the radii, which the
+        // host sends once for a list that doesn't change.
+        lifts.set_radii(&[radius(3, "LIFT", 40.0)]);
+        lifts.clear();
+        assert!(near(lifts.reach(&lift), 250.0));
+    }
+
+    #[test]
+    fn a_lift_carries_a_rider_within_its_own_reach() {
+        let start = Instant::now();
+        let mut lifts = Lifts::default();
+        let mut lift = with_field(59, 45);
+        lifts.spawned(&lift, start);
+        lifts.set_radii(&[crate::doors::DoorRadius {
+            door_id: 3,
+            model: "LIFT".into(),
+            radius: 40.0,
+        }]);
+        lift.action = Some(2);
+        lifts.moved(&lift, start);
+        let from = start + Duration::from_secs(1);
+        let to = from + Duration::from_millis(500);
+        // At 1 s the lift stands 9 up; a rider at that height is judged by
+        // the 10 + 40 + 200 = 250 reach, not the no-model 310.
+        let at = |x: f32| crate::world::Position {
+            x,
+            z: 9.0,
+            ..crate::world::Position::default()
+        };
+        assert!(near(lifts.carry(3, 1, (at(249.99), from), from, to), 4.5));
+        assert_eq!(lifts.carry(3, 1, (at(250.01), from), from, to), 0.0);
+        assert_eq!(lifts.carry(3, 1, (at(300.0), from), from, to), 0.0);
+    }
+
+    #[test]
     fn a_tall_lift_carries_its_rider_all_the_way_up_judged_where_it_stands_now() {
         let start = Instant::now();
         let mut lifts = Lifts::default();
@@ -877,21 +1117,158 @@ mod tests {
         );
     }
 
+    fn spawned(open_type: u8, state: u8, rest: u8) -> Door {
+        Door {
+            state_at_spawn: state,
+            invert_state: rest,
+            ..door(open_type)
+        }
+    }
+
     #[test]
-    fn spawn_states_pose_open_shut_or_rising_from_shut() {
+    fn a_hinged_door_spawned_opening_swings_open_and_closes_its_delay_after_spawn() {
+        // Read R49-28b, "State 2, hinged": states 1 and 2 both open, and the
+        // door closes its delay after spawn when its rest is 0.
+        let at = Instant::now();
+        for state in [1, 2] {
+            for (open_type, delay) in [(0, 10), (5, 10), (1, 20), (8, 20)] {
+                let hinge = spawned(open_type, state, 0);
+                assert_eq!(spawned_state(&hinge), Some(2));
+                assert_eq!(endpoint(&hinge), Some(true));
+                assert_eq!(
+                    returns_at(&hinge, at),
+                    Some(at + Duration::from_secs(delay)),
+                    "{open_type} {state}"
+                );
+                assert_eq!(return_action(&hinge), CLOSE);
+            }
+        }
+        // At rest already: shut (0, or 3 which spawns as 0) with rest 0.
+        for state in [0, 3] {
+            let hinge = spawned(0, state, 0);
+            assert_eq!(endpoint(&hinge), Some(false));
+            assert_eq!(returns_at(&hinge, at), None, "{state}");
+        }
+        // A door whose rest is open goes back opening (state 2 for rest 1).
+        let inverted = spawned(0, 0, 1);
+        assert_eq!(
+            returns_at(&inverted, at),
+            Some(at + Duration::from_secs(10))
+        );
+        assert_eq!(return_action(&inverted), OPEN);
+        // Not built, so no return: a rest above 1, and state 4's 60 s.
+        assert_eq!(returns_at(&spawned(0, 2, 2), at), None);
+        let four = spawned(0, 4, 0);
+        assert_eq!(endpoint(&four), None);
+        assert_eq!(returns_at(&four, at), None);
+    }
+
+    #[test]
+    fn a_lift_spawned_opening_goes_back_its_delay_after_spawn_even_mid_rise() {
+        let start = Instant::now();
+        let mut lifts = Lifts::default();
+        // Type 60 rises 8 in about 0.89 s; its 20 s run from spawn, not from
+        // its arrival.
+        lifts.spawned(&spawned(60, 2, 0), start);
+        assert_eq!(lifts.returns_at(3), Some(start + Duration::from_secs(20)));
+        assert!(near(
+            lifts.offset(3, start + Duration::from_secs(19)).unwrap(),
+            8.0
+        ));
+        let closing = start + Duration::from_secs(21);
+        assert!(near(lifts.offset(3, closing).unwrap(), 8.0 - 0.25 * 20.0));
+        // Type 75 rising 200 at 9 a second is still rising at 20 s: it turns
+        // there, at 180, and goes down at 0.25 x 20.
+        let mut tall = with_field(75, 200);
+        tall.state_at_spawn = 2;
+        lifts.spawned(&tall, start);
+        assert_eq!(lifts.returns_at(3), Some(start + Duration::from_secs(20)));
+        let turned = start + Duration::from_secs(20);
+        assert!(near(lifts.offset(3, turned).unwrap(), 180.0));
+        assert!(near(
+            lifts.offset(3, turned + Duration::from_secs(1)).unwrap(),
+            175.0
+        ));
+        // Never: +0x66 of -2 or -3, and type 59 with +0x66 above 170.
+        for never in [with_field(60, -2), with_field(60, -3), with_field(59, 171)] {
+            let never = Door {
+                state_at_spawn: 2,
+                ..never
+            };
+            lifts.spawned(&never, start);
+            assert_eq!(lifts.returns_at(3), None, "{}", never.open_type);
+        }
+    }
+
+    #[test]
+    fn the_movers_skipped_types_stand_at_their_base_and_never_go_back() {
+        let at = Instant::now();
+        for open_type in [50, 51, 52, 54, 55, 56, 57, 58, 153, 154, 155] {
+            for state in [1, 2] {
+                let skipped = spawned(open_type, state, 0);
+                assert!(mover_skips(&skipped));
+                assert_eq!(spawned_state(&skipped), Some(1));
+                assert_eq!(endpoint(&skipped), Some(false));
+                assert_eq!(returns_at(&skipped, at), None, "{open_type}");
+            }
+            // Nor after an action: the mover never times them.
+            let mut moved = with_field(open_type, 500);
+            moved.action = Some(2);
+            assert_eq!(returns_at(&moved, at), None, "{open_type}");
+        }
+        assert!(!mover_skips(&door(53)));
+        assert_eq!(spawned_state(&spawned(53, 1, 0)), Some(2));
+    }
+
+    #[test]
+    fn a_door_of_types_110_to_152_closes_as_soon_as_it_stands_open() {
+        let start = Instant::now();
+        let mut lifts = Lifts::default();
+        // Type 140 sinks 10 at 1 x 20 a second: open at 0.5 s, and closing
+        // at once, at 0.25 x 20, though its delay is 2 s.
+        lifts.spawned(&spawned(140, 2, 0), start);
+        let open = start + Duration::from_millis(500);
+        assert_eq!(lifts.returns_at(3), Some(open));
+        assert!(near(lifts.offset(3, open).unwrap(), -10.0));
+        assert!(near(
+            lifts.offset(3, open + Duration::from_millis(500)).unwrap(),
+            -7.5
+        ));
+        // After the server's open too.
+        let mut moved = spawned(140, 0, 0);
+        lifts.spawned(&moved, start);
+        moved.action = Some(2);
+        lifts.moved(&moved, start);
+        assert_eq!(lifts.returns_at(3), Some(open));
+        // A door that swings has no stepped arrival here and keeps its timer.
+        let swing = spawned(130, 2, 0);
+        assert_eq!(
+            returns_at(&swing, start),
+            Some(start + Duration::from_millis(800))
+        );
+        assert!(!closes_once_open(&door(115)));
+    }
+
+    #[test]
+    fn every_spawned_lift_starts_at_its_base_and_one_opening_rises() {
         let now = Instant::now();
         let mut lifts = Lifts::default();
         let mut lift = with_field(59, 18);
-        lift.state_at_spawn = 1;
-        lifts.spawned(&lift, now);
-        assert_eq!(lifts.offset(3, now), Some(18.0));
-        lift.state_at_spawn = 2;
-        lifts.spawned(&lift, now);
-        assert_eq!(lifts.offset(3, now), Some(0.0));
-        assert!(near(
-            lifts.offset(3, now + Duration::from_secs(1)).unwrap(),
-            9.0
-        ));
+        // States 1 and 2 are both opening (2) for a type the mover steps:
+        // placed at the base, it rises at 0.45 x 20 a second (read R49-28b).
+        for state in [1, 2] {
+            lift.state_at_spawn = state;
+            lifts.spawned(&lift, now);
+            assert_eq!(lifts.offset(3, now), Some(0.0), "{state}");
+            assert!(near(
+                lifts.offset(3, now + Duration::from_secs(1)).unwrap(),
+                9.0
+            ));
+            assert!(near(
+                lifts.offset(3, now + Duration::from_secs(3)).unwrap(),
+                18.0
+            ));
+        }
         lift.state_at_spawn = 3;
         lifts.spawned(&lift, now);
         assert_eq!(lifts.offset(3, now + Duration::from_secs(1)), Some(0.0));

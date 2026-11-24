@@ -195,8 +195,8 @@ fn scribe() -> ClientCommand {
     }
 }
 
-/// The commands a song lets go at once (read R49-21d; memorize and forget
-/// inferred, R49-48 a).
+/// The commands a song lets go at once (read R49-21d; memorize inferred,
+/// R49-48 a). A forget waits on no cast at all (R49-34 d).
 fn released(singer: &Singer) -> [ClientCommand; 6] {
     [
         strike(),
@@ -261,6 +261,26 @@ fn the_host_is_told_when_a_bard_starts_and_stops_singing() {
 }
 
 #[test]
+fn another_classs_cast_end_says_no_song_stop_line() {
+    // A cleric's gem cast, ended by the server's cast update (spell named
+    // or -1) or stopped by `/stopcast`, is no song: no stop line (6.542).
+    for ended in [SONG, u32::MAX] {
+        let mut cleric = Singer::new(
+            Casting::with_titanium_combat(true, Duration::from_secs(60)),
+            2,
+        );
+        cleric.sing();
+        let output = cleric.hear(&mana_ended(ended));
+        assert_eq!(stops(&output), Vec::<u32>::new(), "{ended}");
+        assert_eq!(cleric.casting.song, None);
+        // A Bard's own song end still says it.
+        let mut bard = Singer::titanium_bard();
+        bard.sing();
+        assert_eq!(stops(&bard.hear(&mana_ended(ended))), [SONG], "{ended}");
+    }
+}
+
+#[test]
 fn a_non_song_cast_a_non_bard_and_the_mac_rules_hold_as_before() {
     // A gem cast of 100 ms or less is no song once its start says so.
     let mut instant = Singer::titanium_bard();
@@ -279,11 +299,15 @@ fn a_non_song_cast_a_non_bard_and_the_mac_rules_hold_as_before() {
     for singer in [&instant, &awaiting, &warrior, &mac] {
         assert!(singer.casting.guard.active());
         for command in released(singer) {
-            assert_eq!(
-                singer.refusal(&command),
-                Some("Wait for the current cast to finish or interrupt it"),
-                "{command:?}"
-            );
+            // A gem's forget waits on no cast, only on a request the
+            // server hasn't acknowledged (read R49-34 d).
+            let held = if matches!(command, ClientCommand::ForgetSpell { .. }) {
+                std::ptr::eq(singer, &raw const awaiting)
+                    .then_some("Wait for the server to acknowledge the cast")
+            } else {
+                Some("Wait for the current cast to finish or interrupt it")
+            };
+            assert_eq!(singer.refusal(&command), held, "{command:?}");
         }
     }
 }

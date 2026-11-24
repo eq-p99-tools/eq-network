@@ -164,6 +164,7 @@ fn the_zone_loop_refuses_queued_work_and_drains_the_final_logout() {
         riding: std::sync::Arc::default(),
         chat: std::sync::Arc::default(),
         chat_pace: std::sync::Arc::default(),
+        world_ruleset: std::cell::Cell::new(None),
     };
     let mut seen = Vec::new();
     let mut handler = |event| {
