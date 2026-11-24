@@ -302,7 +302,10 @@ impl Feature for Doors {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(command, ClientCommand::ClickDoor { .. })
+        matches!(
+            command,
+            ClientCommand::ClickDoor { .. } | ClientCommand::DoorRadii { .. }
+        )
     }
 
     fn handle(
@@ -311,6 +314,12 @@ impl Feature for Doors {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let ClientCommand::DoorRadii { radii, .. } = command {
+            // The host's radius for each door model it draws: the lift
+            // carry's rider reach (recording checklist 6.426).
+            world.lifts.set_radii(radii);
+            return Ok(());
+        }
         let ClientCommand::ClickDoor { door_id, .. } = command else {
             return Ok(());
         };
@@ -474,6 +483,39 @@ mod tests {
         let clicked = testing::run(|out| doors.handle(&click(1), &mut world, out));
         clicked.result.unwrap();
         assert_eq!(clicked.sent.len(), 1);
+    }
+
+    #[test]
+    fn the_hosts_door_radii_set_each_lifts_rider_reach() {
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        let lift = titanium_door(1, 59, 45);
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift.clone()]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let radii = ClientCommand::DoorRadii {
+            session_id: 5,
+            radii: vec![eq_network_game::doors::DoorRadius {
+                door_id: 1,
+                model: "LIFT".into(),
+                radius: 40.0,
+            }],
+        };
+        assert!(doors.owns(&radii));
+        let outcome = testing::run(|out| doors.handle(&radii, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            world.lifts.reach(&lift),
+            eq_network_game::doors::titanium::rider_reach(40.0)
+        );
+        let removed = WorldEvent::Doors(DoorUpdate::RemoveAll);
+        testing::run(|out| doors.observe(&Message::Event(removed), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(
+            world.lifts.reach(&lift),
+            eq_network_game::doors::titanium::RIDER_REACH
+        );
     }
 
     #[test]

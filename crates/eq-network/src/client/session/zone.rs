@@ -975,7 +975,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 150;
+    const KINDS: usize = 151;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1120,6 +1120,7 @@ mod tests {
             ClientCommand::SpeedInputs { .. } => 72,
             ClientCommand::ShowHelm { .. } => 73,
             ClientCommand::ClimbReach { .. } => 74,
+            ClientCommand::DoorRadii { .. } => 150,
             ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::RespondToPopup { .. } => 89,
             ClientCommand::InspectPlayer { .. } => 90,
@@ -1696,6 +1697,10 @@ mod tests {
             ClientCommand::ClimbReach {
                 session_id,
                 per_step: 3.15,
+            },
+            ClientCommand::DoorRadii {
+                session_id,
+                radii: Vec::new(),
             },
             ClientCommand::Random {
                 session_id,
