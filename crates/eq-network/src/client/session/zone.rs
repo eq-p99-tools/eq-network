@@ -2681,7 +2681,13 @@ mod tests {
         };
         let outcome = testing::run(|out| -> Result<()> {
             assert_eq!(features.refusal(&forget, &world, Instant::now()), None);
-            apply_commands(&[cast.clone()], &mut features, &mut world, out, true)?;
+            apply_commands(
+                std::slice::from_ref(&cast),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
             // While the request is pending, the program's right click does
             // nothing (0x4eccc6's [0x9248d0] test, read R49-34 d).
             assert_eq!(

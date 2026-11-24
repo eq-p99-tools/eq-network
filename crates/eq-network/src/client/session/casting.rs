@@ -920,7 +920,7 @@ impl Feature for Casting {
                 "Wait for the server to acknowledge the cast",
             )
         });
-        let held = if self
+        let cast = if self
             .singing(world)
             .is_some_and(|song| self.guard.held_spell() == Some(song.spell))
         {
@@ -928,7 +928,7 @@ impl Feature for Casting {
         } else {
             hold
         };
-        std::iter::once(held).chain(pending).collect()
+        std::iter::once(cast).chain(pending).collect()
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
