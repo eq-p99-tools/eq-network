@@ -10,6 +10,31 @@ use std::time::Instant;
 /// Titanium `OP_CastSpell`, which also casts an item's click effect.
 pub const CAST_OPCODE: u16 = 0x304b;
 
+/// An item use refused where the Titanium program's cast start says its own
+/// line (0x411f3d's item path, read R49-34 e 8): these words, and the line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ItemRefusal {
+    /// This library's words, where the installation lacks the line.
+    pub words: &'static str,
+    /// The program's line (`eqstr_us.txt`).
+    pub string_id: u32,
+}
+
+impl std::fmt::Display for ItemRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.words)
+    }
+}
+
+impl std::error::Error for ItemRefusal {}
+
+/// The program's line for a level below the item's (colour 0xd).
+pub const ITEM_LEVEL_LINE: u32 = 0x88;
+/// Its line for a worn-only effect (type 4) on an item not worn.
+pub const ITEM_NOT_WORN_LINE: u32 = 0xb3;
+/// Its line for an item with no charges left (colour 0x111).
+pub const ITEM_NO_CHARGES_LINE: u32 = 0xb6;
+
 /// One explicit item-use intent, bound to the selected inventory and zone admission.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemUse {
@@ -246,23 +271,37 @@ impl super::Inventory {
             !matches!(effect.kind, ClickKind::Unknown(_)),
             "Unsupported item click category"
         );
-        ensure!(
-            effect.kind != ClickKind::Equipped || slot.0 <= 21,
-            "Equip this item before using it"
-        );
+        // The program's item path in its order: the level, then a worn-only
+        // effect not worn (read R49-34 e 8).
         ensure!(
             level >= effect.required_level,
-            "Level is too low for this item effect"
+            ItemRefusal {
+                words: "Level is too low for this item effect",
+                string_id: ITEM_LEVEL_LINE,
+            }
+        );
+        ensure!(
+            effect.kind != ClickKind::Equipped || slot.0 <= 21,
+            ItemRefusal {
+                words: "Equip this item before using it",
+                string_id: ITEM_NOT_WORN_LINE,
+            }
         );
         ensure!(item.charges >= -1, "Unknown item charge state");
         ensure!(item.stack_count != Some(0), "The item stack is empty");
         ensure!(
             item.activation.maximum_charges <= 0 || item.charges != 0,
-            "The item has no charges remaining"
+            ItemRefusal {
+                words: "The item has no charges remaining",
+                string_id: ITEM_NO_CHARGES_LINE,
+            }
         );
         ensure!(
             effect.kind != ClickKind::Expendable || item.stack_count.is_some() || item.charges != 0,
-            "The expendable item has no charges remaining"
+            ItemRefusal {
+                words: "The expendable item has no charges remaining",
+                string_id: ITEM_NO_CHARGES_LINE,
+            }
         );
         Ok(effect.spell_id)
     }

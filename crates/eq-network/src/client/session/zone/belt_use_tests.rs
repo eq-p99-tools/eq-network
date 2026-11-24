@@ -229,3 +229,82 @@ fn a_belt_cast_answers_only_to_the_belt_slot_refresh() {
         assert_eq!(belt.held(), held, "{slot}");
     }
 }
+
+#[test]
+fn an_item_use_the_programs_item_path_refuses_names_its_line() {
+    // Read R49-34 e 8: the level (0x88), then a worn-only effect not worn
+    // (0xb3), then no charges left (0xb6).
+    let line = |outcome: &testing::Outcome<Result<()>>| {
+        assert!(cast(outcome).is_none());
+        outcome.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::ItemUseAction {
+                request_id: 1,
+                error: Some(_),
+                string_id,
+                ..
+            }) => Some(*string_id),
+            _ => None,
+        })
+    };
+    let mut high = potion(23);
+    high.activation.effect.as_mut().unwrap().required_level = 60;
+    high.activation.effect.as_mut().unwrap().kind = ClickKind::Equipped;
+    let mut belt = Belt::new(vec![high.clone()]);
+    assert_eq!(
+        line(&belt.run(Belt::use_slot(0))),
+        Some(Some(eq_network_game::inventory::ITEM_LEVEL_LINE))
+    );
+    high.activation.effect.as_mut().unwrap().required_level = 0;
+    let mut belt = Belt::new(vec![high]);
+    assert_eq!(
+        line(&belt.run(Belt::use_slot(0))),
+        Some(Some(eq_network_game::inventory::ITEM_NOT_WORN_LINE))
+    );
+    let mut spent = potion(23);
+    spent.activation.maximum_charges = 5;
+    spent.charges = 0;
+    spent.stack_count = None;
+    let mut belt = Belt::new(vec![spent]);
+    assert_eq!(
+        line(&belt.run(Belt::use_slot(0))),
+        Some(Some(eq_network_game::inventory::ITEM_NO_CHARGES_LINE))
+    );
+    // This library's own refusals name no line.
+    let mut belt = Belt::new(Vec::new());
+    assert_eq!(line(&belt.run(Belt::use_slot(0))), Some(None));
+}
+
+#[test]
+fn an_item_used_before_its_recast_names_the_programs_line() {
+    // Read R49-34 k: a use before the item's recast stamp is 0xec.
+    let line = |outcome: &testing::Outcome<Result<()>>| {
+        outcome.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::ItemUseAction {
+                request_id: 1,
+                error: Some(_),
+                string_id,
+                ..
+            }) => Some(*string_id),
+            _ => None,
+        })
+    };
+    // The server's own stamp for the instance holds an item with a recast
+    // (the session's own stamps are `casting`'s tests).
+    let mut stamped = potion(23);
+    let effect = stamped.activation.effect.as_mut().unwrap();
+    effect.recast_delay_seconds = 30;
+    stamped.activation.recast_timestamp = u32::MAX;
+    let mut belt = Belt::new(vec![stamped.clone()]);
+    let early = belt.run(Belt::use_slot(0));
+    assert!(cast(&early).is_none());
+    assert_eq!(line(&early), Some(Some(0xec)));
+    // An item with no recast delay never waits for one.
+    stamped
+        .activation
+        .effect
+        .as_mut()
+        .unwrap()
+        .recast_delay_seconds = 0;
+    let mut belt = Belt::new(vec![stamped]);
+    assert!(cast(&belt.run(Belt::use_slot(0))).is_some());
+}
