@@ -47,13 +47,26 @@ impl PlayerRecord {
 /// admission until it can be told.
 #[derive(Default)]
 pub(super) struct Character {
+    eqmac: bool,
     staged: Staged,
+}
+
+impl Character {
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
 }
 
 /// What the zone said about the player before admitting them.
 #[derive(Default)]
 struct Staged {
     level: Option<u8>,
+    /// Preserve ordering until the profile supplies the character level.
+    eqmac_news: Vec<WorldEvent>,
+    highest_eqmac_update: u8,
     experience: Option<u32>,
     skills: BTreeMap<u32, u32>,
     disciplines: Option<Vec<u32>>,
@@ -62,6 +75,27 @@ struct Staged {
     buffs: Option<Vec<Option<Buff>>>,
     /// The primary bind point's zone, from the profile (6.524).
     bound_in: Option<u16>,
+}
+
+impl Staged {
+    fn eqmac(&mut self, event: &WorldEvent) {
+        match event {
+            WorldEvent::Level { current, .. } if *current > self.highest_eqmac_update => {
+                self.highest_eqmac_update = *current;
+                self.eqmac_news.push(event.clone());
+            }
+            WorldEvent::Experience(value) => {
+                if let Some(WorldEvent::Experience(held)) = self.eqmac_news.last_mut() {
+                    *held = *value;
+                } else {
+                    self.eqmac_news.push(event.clone());
+                }
+            }
+            _ => (),
+        }
+        // Only increasing byte levels survive, with at most one experience
+        // between them: at most 511 entries before the profile arrives.
+    }
 }
 
 impl Feature for Character {
@@ -79,10 +113,20 @@ impl Feature for Character {
                 experience,
                 ..
             } => {
-                staged.level = Some(*current);
-                staged.experience = Some(*experience);
+                if self.eqmac {
+                    staged.eqmac(event);
+                } else {
+                    staged.level = Some(*current);
+                    staged.experience = Some(*experience);
+                }
             }
-            WorldEvent::Experience(value) => staged.experience = Some(*value),
+            WorldEvent::Experience(value) => {
+                if self.eqmac {
+                    staged.eqmac(event);
+                } else {
+                    staged.experience = Some(*value);
+                }
+            }
             WorldEvent::Disciplines(list) => staged.disciplines = Some(list.clone()),
             WorldEvent::WearChange(change) if world.is_player(change.spawn_id) => {
                 staged.wear.push(*change);
@@ -98,6 +142,25 @@ impl Feature for Character {
         let staged = &mut self.staged;
         if let Some(level) = staged.level.take() {
             player.level = level;
+        }
+        for event in staged.eqmac_news.drain(..) {
+            match event {
+                WorldEvent::Level {
+                    current,
+                    previous,
+                    experience,
+                } if current > player.level => {
+                    player.level = current;
+                    player.practice_points = super::training::eqmac_level_points(
+                        player.practice_points,
+                        current,
+                        previous,
+                    );
+                    staged.experience = Some(experience);
+                }
+                WorldEvent::Experience(value) => staged.experience = Some(value),
+                _ => (),
+            }
         }
         for change in std::mem::take(&mut staged.wear) {
             player.appearance.apply(&change);
@@ -143,7 +206,9 @@ impl Feature for Character {
                 // Guild requests read this record, independently of the spawn table.
                 player.listing.apply(*change);
             }
-            WorldEvent::Level { current, .. } => player.level = *current,
+            WorldEvent::Level { current, .. } if !self.eqmac || *current > player.level => {
+                player.level = *current;
+            }
             WorldEvent::Skill { skill_id, value } => player.apply_skill(*skill_id, *value),
             WorldEvent::Disciplines(list) => player.disciplines = Some(list.clone()),
             // A practice at a guildmaster is a skill's new value too.
@@ -161,6 +226,37 @@ impl Feature for Character {
 mod tests {
     use super::super::feature::testing;
     use super::*;
+
+    #[test]
+    fn eqmac_level_staging_coalesces_repeats_and_keeps_unknown_points_unknown() {
+        let mut character = Character::eqmac();
+        let mut world = World::new(5);
+        for experience in 0..1_000 {
+            for event in [
+                WorldEvent::Level {
+                    current: 55,
+                    previous: 1,
+                    experience,
+                },
+                WorldEvent::Experience(experience),
+            ] {
+                character.admit(&Message::Event(event), &mut world).unwrap();
+            }
+        }
+        assert_eq!(character.staged.eqmac_news.len(), 2);
+        let mut player = testing::player(7);
+        player.level = 1;
+        player.practice_points = None;
+        character.shape(&mut player);
+        assert_eq!(player.level, 55);
+        assert_eq!(player.practice_points, None);
+        let outcome = testing::run(|out| character.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [ClientEvent::World(WorldEvent::Experience(999))]
+        ));
+    }
 
     #[test]
     fn eqmac_wear_changes_stage_for_the_player_then_replace_and_clear_held_models() {

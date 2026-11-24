@@ -34,6 +34,18 @@ const ANSWER_WAIT: Duration = Duration::from_secs(5);
 /// Practice points each level brings.
 const POINTS_PER_LEVEL: u32 = 5;
 
+/// Mac 0x4e06ef adds five once on an accepted rise whose received prior
+/// high-water level is lower. Missing balance authority stays missing.
+pub(super) fn eqmac_level_points(points: Option<u32>, current: u8, previous: u8) -> Option<u32> {
+    points.map(|points| {
+        points.saturating_add(if previous < current {
+            POINTS_PER_LEVEL
+        } else {
+            0
+        })
+    })
+}
+
 /// Trains the player's skills at a guildmaster.
 #[derive(Default)]
 pub(super) struct Training {
@@ -896,12 +908,17 @@ impl Feature for Training {
                 self.points = self.points.map(|points| points.saturating_sub(1));
                 self.tell_points(out)
             }
-            WorldEvent::Level { current, .. } if !self.p99 && *current > self.highest_level => {
+            WorldEvent::Level {
+                current, previous, ..
+            } if !self.p99 && *current > self.highest_level => {
                 let gained = u32::from(*current - self.highest_level);
                 self.highest_level = *current;
-                self.points = self
-                    .points
-                    .map(|points| points.saturating_add(gained * POINTS_PER_LEVEL));
+                self.points = if self.eqmac {
+                    eqmac_level_points(self.points, *current, *previous)
+                } else {
+                    self.points
+                        .map(|points| points.saturating_add(gained * POINTS_PER_LEVEL))
+                };
                 self.tell_points(out)
             }
             _ => Ok(()),

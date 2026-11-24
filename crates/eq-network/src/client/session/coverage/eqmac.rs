@@ -185,7 +185,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x9240 => sent("OP_WearChange", EQMAC, Read(&[Zone])),
         0x9241 => sent("OP_GuildsList", EQMAC, planned(EqMacWorld)),
         0x9340 => sent("OP_Bind_Wound", EQMAC, planned(EqMacWorld)),
-        0x9841 => sent("OP_LevelUpdate", EQMAC, planned(EqMacWorld)),
+        0x9841 => sent("OP_LevelUpdate", EQMAC, Read(&[Zone])),
         0x9941 => sent("OP_ExpUpdate", EQMAC, Read(&[Zone])),
         0x9b40 => sent("OP_DespawnDoor", EQMAC, Read(&[Zone])),
         0x9c40 => sent("OP_GMTraining", EQMAC, Read(&[Zone])),
