@@ -27,12 +27,34 @@ use eq_network_game::{
     request::Request,
     world::WorldEvent,
 };
+use std::sync::{Arc, Mutex};
 
 /// The official client's line when `/getguildmotd` finds no guild
 /// (0x4667dc).
 const NO_GUILD: u32 = 0x32a6;
 /// The highest guild number the official client asks about.
 const LAST_GUILD: u32 = 1499;
+
+/// Received canonical names awaiting this character's offered destination.
+/// This belongs to one login attempt, is never persisted, and holds no rank
+/// authority or invitations.
+#[derive(Clone, Default)]
+pub(in crate::client) struct RosterTransfer(Arc<Mutex<Option<Transfer>>>);
+
+struct Transfer {
+    character: String,
+    guild_id: u32,
+    session_id: u64,
+    destination: (u16, u16),
+    members: Vec<String>,
+}
+
+impl RosterTransfer {
+    /// A character-list visit ends the previous character's evidence.
+    pub(super) fn clear(&self) {
+        *self.0.lock().expect("guild transfer poisoned") = None;
+    }
+}
 
 /// The invitation waiting for an answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +69,12 @@ struct Invitation {
 pub(super) struct Guilds {
     /// The members the server last listed, by name.
     members: Option<Vec<String>>,
+    /// The admitted character and their current received guild ID.
+    identity: Option<(String, u32)>,
+    /// Canonical names may follow only a bound transfer of this character.
+    transfer: RosterTransfer,
+    /// Guild news received before the admitted identity can bind it.
+    staged: Vec<GuildUpdate>,
     /// The invitations waiting for an answer, oldest first.
     invitations: Vec<Invitation>,
 }
@@ -59,6 +87,56 @@ const INVITATIONS: usize = 8;
 const MOTD_LIMIT: usize = 512;
 
 impl Guilds {
+    /// A zone's guild worker, sharing only explicitly bound transfer evidence.
+    pub(super) fn new(transfer: RosterTransfer) -> Self {
+        Self {
+            transfer,
+            ..Self::default()
+        }
+    }
+
+    fn identity(world: &World) -> Option<(String, u32)> {
+        let player = world.player.as_ref()?;
+        Some((player.name.clone(), player.listing.guild?))
+    }
+
+    /// Only a received list supplies names; a different membership withdraws
+    /// them even when a later update restores the old guild number.
+    fn membership(&mut self, world: &World) {
+        let identity = Self::identity(world);
+        if self.identity != identity {
+            self.members = None;
+            self.invitations.clear();
+            self.transfer.clear();
+        }
+        self.identity = identity;
+    }
+
+    /// Bind the last received names to the actual lifecycle's destination.
+    /// Approval consumes the pending offer, so keep that binding while the
+    /// old zone departs; a denial or ordinary active state withdraws it.
+    fn transferring(&self, world: &World) {
+        let mut retained = self.transfer.0.lock().expect("guild transfer poisoned");
+        if let Some(offer) = world.lifecycle.pending() {
+            *retained = self.identity.as_ref().zip(self.members.as_ref()).map(
+                |((character, guild_id), members)| Transfer {
+                    character: character.clone(),
+                    guild_id: *guild_id,
+                    session_id: world.session_id,
+                    destination: (offer.zone_id, offer.instance_id),
+                    members: members.clone(),
+                },
+            );
+        } else if !world.lifecycle.departing() || self.members.is_none() {
+            *retained = None;
+        } else if let Some(retained) = retained.as_mut() {
+            // Membership deltas received after approval remain authoritative.
+            if let Some(members) = &self.members {
+                retained.members.clone_from(members);
+            }
+        }
+    }
+
     /// Follows a guild update: a full member list, a member joining or
     /// leaving, or an invitation.
     fn follow(&mut self, message: &Message) {
@@ -204,6 +282,41 @@ impl Feature for Guilds {
 
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         self.follow(message);
+        if let Message::Event(WorldEvent::Guild(update)) = message {
+            self.staged.push(update.clone());
+        }
+        Ok(())
+    }
+
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.identity = Self::identity(world);
+        let retained = self
+            .transfer
+            .0
+            .lock()
+            .expect("guild transfer poisoned")
+            .take();
+        if self.identity.is_none() {
+            self.members = None;
+        } else if self.members.is_none() {
+            self.members = retained
+                .filter(|retained| {
+                    retained.session_id != world.session_id
+                        && retained.destination == world.zone
+                        && self.identity.as_ref().is_some_and(|(name, guild)| {
+                            *name == retained.character && *guild == retained.guild_id
+                        })
+                })
+                .map(|retained| retained.members);
+        }
+        // Apply admission-time changes after inheritance, in received order.
+        // The host must hear them too, once its Entered event bound the roster.
+        for update in std::mem::take(&mut self.staged) {
+            let message = Message::Event(WorldEvent::Guild(update.clone()));
+            self.observe(&message, world, out)?;
+            out.log
+                .send(super::ClientEvent::World(WorldEvent::Guild(update)))?;
+        }
         Ok(())
     }
 
@@ -220,12 +333,20 @@ impl Feature for Guilds {
         )
     }
 
+    fn after_command(&mut self, world: &World) {
+        // A host crossing can be approved by the very next receive. Capture
+        // its destination before that reply consumes the pending offer.
+        self.membership(world);
+        self.transferring(world);
+    }
+
     fn handle(
         &mut self,
         command: &ClientCommand,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.membership(world);
         match self.request(command, world) {
             Ok(request) => match out.encode(&request) {
                 Ok(packet) => out.send(&packet),
@@ -238,16 +359,69 @@ impl Feature for Guilds {
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
+        world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.membership(world);
+        let guild = self.identity.as_ref().map(|(_, guild)| *guild);
+        match message {
+            Message::Event(WorldEvent::Guild(
+                GuildUpdate::MemberAdded { guild_id, .. }
+                | GuildUpdate::MemberRemoved { guild_id, .. }
+                | GuildUpdate::MemberRenamed { guild_id, .. }
+                | GuildUpdate::Disbanded { guild_id },
+            )) if Some(*guild_id) != guild => return Ok(()),
+            _ => (),
+        }
         self.follow(message);
+        match message {
+            Message::Event(WorldEvent::Guild(GuildUpdate::MemberRenamed {
+                old_name,
+                new_name,
+                ..
+            })) => {
+                if let Some(members) = &mut self.members {
+                    for member in members.iter_mut().filter(|member| *member == old_name) {
+                        member.clone_from(new_name);
+                    }
+                }
+            }
+            Message::Event(WorldEvent::Guild(GuildUpdate::Disbanded { .. })) => {
+                self.members = None;
+                self.transfer.clear();
+            }
+            Message::Event(WorldEvent::Guild(GuildUpdate::MemberRemoved { name, .. }))
+                if self.identity.as_ref().is_some_and(|(own, _)| own == name) =>
+            {
+                self.members = None;
+                self.transfer.clear();
+            }
+            _ => (),
+        }
+        self.transferring(world);
         Ok(())
     }
 
-    /// A new zone sends the member list again, and the server forgets an
-    /// invitation its old zone made, so neither outlives the connection.
-    fn connection_ended(&mut self, _world: &mut World) {
+    fn tick(
+        &mut self,
+        _now: std::time::Instant,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if !world.ready() {
+            return Ok(());
+        }
+        self.membership(world);
+        self.transferring(world);
+        Ok(())
+    }
+
+    /// Invitations never outlive their zone. Only the lifecycle's bound
+    /// departure can leave canonical names for the next admission.
+    fn connection_ended(&mut self, world: &mut World) {
+        if !world.lifecycle.departing() {
+            self.transfer.clear();
+        }
         self.members = None;
         self.invitations.clear();
     }
@@ -262,9 +436,12 @@ mod tests {
     fn guild_world(guild_id: Option<u32>) -> World {
         let mut world = World::new(5);
         let mut player = testing::player(7);
+        player.name = "Tester".into();
         player.listing.guild = guild_id;
+        player.listing.guild_rank = guild_id.map(|_| GuildRank::Member);
         world.player.admit(player);
         world.own_spawn = Some(7);
+        world.admitted = Some(std::time::Instant::now());
         world
     }
 
@@ -299,6 +476,264 @@ mod tests {
             }
             _ => None,
         })
+    }
+
+    fn bound_roster() -> (RosterTransfer, Guilds, World) {
+        let transfer = RosterTransfer::default();
+        let mut feature = Guilds::new(transfer.clone());
+        let mut world = guild_world(Some(3));
+        testing::run(|out| feature.admitted(&mut world, out))
+            .result
+            .unwrap();
+        testing::run(|out| feature.observe(&members(&["Tester", "Member"]), &mut world, out))
+            .result
+            .unwrap();
+        world
+            .lifecycle
+            .offer(
+                eq_network_game::zoning::ZoneOffer {
+                    zone_id: 2,
+                    instance_id: 3,
+                    position: eq_network_game::world::Position::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: false,
+                },
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        testing::run(|out| feature.tick(std::time::Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        (transfer, feature, world)
+    }
+
+    fn arrival() -> World {
+        let mut world = guild_world(Some(3));
+        world.session_id = 6;
+        world.zone = (2, 3);
+        world
+    }
+
+    #[test]
+    fn inherited_names_require_the_same_character_guild_and_offered_destination_once() {
+        for (name, guild, session, destination) in [
+            ("Other", Some(3), 6, (2, 3)),
+            ("Tester", Some(4), 6, (2, 3)),
+            ("Tester", None, 6, (2, 3)),
+            ("Tester", Some(3), 5, (2, 3)),
+            ("Tester", Some(3), 6, (9, 3)),
+            ("Tester", Some(3), 6, (2, 9)),
+        ] {
+            let (transfer, _, _) = bound_roster();
+            let mut feature = Guilds::new(transfer.clone());
+            let mut world = arrival();
+            let mut player = testing::player(44);
+            player.name = name.into();
+            player.listing.guild = guild;
+            world.player.admit(player);
+            world.session_id = session;
+            world.zone = destination;
+            testing::run(|out| feature.admitted(&mut world, out))
+                .result
+                .unwrap();
+            assert_eq!(
+                feature.members, None,
+                "{name} {guild:?} {session} {destination:?}"
+            );
+            // A mismatched admission consumes the transfer; a later match
+            // cannot recover evidence from before this boundary.
+            let mut later = Guilds::new(transfer);
+            testing::run(|out| later.admitted(&mut arrival(), out))
+                .result
+                .unwrap();
+            assert_eq!(later.members, None);
+        }
+    }
+
+    #[test]
+    fn unexpected_loss_denial_and_a_fresh_login_withdraw_transfer_names() {
+        for denied in [false, true] {
+            let (transfer, mut old, mut world) = bound_roster();
+            if denied {
+                world
+                    .lifecycle
+                    .finish(false, std::time::Instant::now())
+                    .unwrap();
+                testing::run(|out| old.tick(std::time::Instant::now(), &mut world, out))
+                    .result
+                    .unwrap();
+            } else {
+                old.connection_ended(&mut world);
+            }
+            let mut next = Guilds::new(transfer);
+            testing::run(|out| next.admitted(&mut arrival(), out))
+                .result
+                .unwrap();
+            assert_eq!(next.members, None);
+        }
+        let (_old_login, _, _) = bound_roster();
+        let mut fresh = Guilds::new(RosterTransfer::default());
+        testing::run(|out| fresh.admitted(&mut arrival(), out))
+            .result
+            .unwrap();
+        assert_eq!(fresh.members, None);
+    }
+
+    #[test]
+    fn an_approved_departure_keeps_names_but_never_invitations_or_rank_authority() {
+        let (transfer, mut old, mut world) = bound_roster();
+        old.follow(&Message::Event(WorldEvent::Guild(GuildUpdate::Invite {
+            inviter: "Leader".into(),
+            guild_id: 3,
+            rank: GuildRank::Officer,
+        })));
+        world
+            .lifecycle
+            .finish(true, std::time::Instant::now())
+            .unwrap();
+        old.connection_ended(&mut world);
+        let mut next = Guilds::new(transfer);
+        let mut world = arrival();
+        let rank = world.player.as_ref().unwrap().listing.guild_rank;
+        testing::run(|out| next.admitted(&mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(next.members, Some(vec!["Tester".into(), "Member".into()]));
+        assert_eq!(next.invitations, Vec::<Invitation>::new());
+        assert_eq!(world.player.as_ref().unwrap().listing.guild_rank, rank);
+        // Submission is not evidence of a removal, demotion or new leader.
+        let before = next.members.clone();
+        for command in [
+            ClientCommand::GuildRemove {
+                session_id: 6,
+                name: "member".into(),
+            },
+            ClientCommand::GuildDemote {
+                session_id: 6,
+                name: "member".into(),
+            },
+            ClientCommand::GuildMakeLeader {
+                session_id: 6,
+                name: "member".into(),
+            },
+        ] {
+            let outcome = testing::run(|out| next.handle(&command, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent.len(), 1);
+            assert_eq!(refusal(&outcome.events), None);
+            assert_eq!(next.members, before);
+            assert_eq!(world.player.as_ref().unwrap().listing.guild_rank, rank);
+        }
+    }
+
+    #[test]
+    fn a_fresh_admission_list_replaces_inherited_names_and_is_published_once() {
+        let (transfer, _, _) = bound_roster();
+        let mut next = Guilds::new(transfer);
+        let mut world = arrival();
+        next.admit(&members(&["Replacement"]), &mut world).unwrap();
+        let outcome = testing::run(|out| next.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(next.members, Some(vec!["Replacement".into()]));
+        assert_eq!(
+            outcome
+                .events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    super::super::ClientEvent::World(WorldEvent::Guild(GuildUpdate::Members(_)))
+                ))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn admission_deltas_follow_inheritance_without_inventing_a_full_list() {
+        for inherited in [false, true] {
+            let transfer = if inherited {
+                bound_roster().0
+            } else {
+                RosterTransfer::default()
+            };
+            let mut next = Guilds::new(transfer);
+            let mut world = arrival();
+            next.admit(
+                &Message::Event(WorldEvent::Guild(GuildUpdate::MemberRemoved {
+                    guild_id: 3,
+                    name: "Member".into(),
+                })),
+                &mut world,
+            )
+            .unwrap();
+            testing::run(|out| next.admitted(&mut world, out))
+                .result
+                .unwrap();
+            assert_eq!(next.members, inherited.then(|| vec!["Tester".into()]));
+        }
+    }
+
+    #[test]
+    fn received_membership_boundaries_and_deltas_remain_authoritative() {
+        for update in [
+            GuildUpdate::Disbanded { guild_id: 3 },
+            GuildUpdate::MemberRemoved {
+                guild_id: 3,
+                name: "Tester".into(),
+            },
+        ] {
+            let (transfer, mut feature, mut world) = bound_roster();
+            testing::run(|out| {
+                feature.observe(&Message::Event(WorldEvent::Guild(update)), &mut world, out)
+            })
+            .result
+            .unwrap();
+            assert_eq!(feature.members, None);
+            let mut next = Guilds::new(transfer);
+            testing::run(|out| next.admitted(&mut arrival(), out))
+                .result
+                .unwrap();
+            assert_eq!(next.members, None);
+        }
+        let (_, mut feature, mut world) = bound_roster();
+        let foreign = Message::Event(WorldEvent::Guild(GuildUpdate::MemberRemoved {
+            guild_id: 9,
+            name: "Member".into(),
+        }));
+        testing::run(|out| feature.observe(&foreign, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(
+            feature.members,
+            Some(vec!["Tester".into(), "Member".into()])
+        );
+        let renamed = Message::Event(WorldEvent::Guild(GuildUpdate::MemberRenamed {
+            guild_id: 3,
+            old_name: "Member".into(),
+            new_name: "Renamed".into(),
+        }));
+        testing::run(|out| feature.observe(&renamed, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(feature.member("renamed").unwrap(), "Renamed");
+        assert!(feature.member("Member").is_err());
+        let mut player = testing::player(7);
+        player.listing.guild = Some(4);
+        world.player.admit(player);
+        let outcome = testing::run(|out| {
+            feature.handle(
+                &ClientCommand::GuildRemove {
+                    session_id: 5,
+                    name: "Renamed".into(),
+                },
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(feature.members, None);
     }
 
     #[test]
@@ -399,6 +834,9 @@ mod tests {
         );
         feature
             .admit(&members(&["Member", "Other"]), &mut world)
+            .unwrap();
+        testing::run(|out| feature.admitted(&mut world, out))
+            .result
             .unwrap();
         let outcome = testing::run(|out| feature.handle(&remove("member"), &mut world, out));
         outcome.result.unwrap();

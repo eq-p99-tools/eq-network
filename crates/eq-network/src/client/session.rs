@@ -220,6 +220,8 @@ pub(in crate::client) struct CharacterSession<'a> {
     /// What the riding wire keeps across zones, as the program's globals
     /// do (reads R36 §4, R36c).
     pub(in crate::client) riding: std::sync::Arc<riders::Riding>,
+    /// Last-received guild names bound to this character's zone transfer.
+    pub(in crate::client) guild_roster: guilds::RosterTransfer,
     /// The character's chat server link, opened from the world's offer
     /// where the server type opens one, kept across zones.
     pub(in crate::client) chat: std::sync::Arc<chat_link::ChatLink>,
@@ -251,6 +253,7 @@ impl<'a> CharacterSession<'a> {
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
             server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
+            guild_roster: guilds::RosterTransfer::default(),
             chat: std::sync::Arc::default(),
             chat_pace: chat_pace::SharedPace::default(),
             world_ruleset: std::cell::Cell::new(None),
@@ -265,6 +268,7 @@ impl<'a> CharacterSession<'a> {
             self.server_filters
                 .replace(self.config.server_filters.clone());
             self.riding = std::sync::Arc::default();
+            self.guild_roster.clear();
             // A camp or the character list ends the character's chat link.
             self.chat.close();
         }

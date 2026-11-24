@@ -593,6 +593,10 @@ pub(super) trait Feature {
         Ok(())
     }
 
+    /// Records state changed by the command's owner before the next receive.
+    /// Unlike a timer, this neither sends nor changes the shared world.
+    fn after_command(&mut self, _world: &World) {}
+
     /// Whether this feature carries out a command. One feature owns each kind
     /// of command.
     fn owns(&self, _command: &ClientCommand) -> bool {

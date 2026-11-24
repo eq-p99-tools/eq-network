@@ -162,6 +162,7 @@ fn the_zone_loop_refuses_queued_work_and_drains_the_final_logout() {
         answer_list_polls: Cell::new(false),
         server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
+        guild_roster: crate::client::session::guilds::RosterTransfer::default(),
         chat: std::sync::Arc::default(),
         chat_pace: std::sync::Arc::default(),
         world_ruleset: std::cell::Cell::new(None),

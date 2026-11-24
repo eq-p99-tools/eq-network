@@ -90,6 +90,8 @@ pub(super) struct Setup<'a> {
     /// The character's one pace for all chat, kept across zones
     /// (recording checklist 6.523).
     pub(super) chat_pace: super::chat_pace::SharedPace,
+    /// Received guild names bound to this character's offered destination.
+    pub(super) guild_roster: super::guilds::RosterTransfer,
 }
 
 impl<'a> Setup<'a> {
@@ -101,6 +103,7 @@ impl<'a> Setup<'a> {
             local_only: false,
             chat: None,
             chat_pace: super::chat_pace::SharedPace::default(),
+            guild_roster: super::guilds::RosterTransfer::default(),
         }
     }
 }
@@ -1187,8 +1190,8 @@ impl ServerType for Project1999 {
 
     /// The Titanium guild requests and answers the program sends (program
     /// read R11); the server checks who may do what.
-    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::<Guilds>::default())
+    fn guilds(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Guilds::new(setup.guild_roster.clone())))
     }
 
     /// The Titanium program's track window and following (program reads
@@ -1660,8 +1663,8 @@ impl ServerType for EqEmu {
 
     /// The Titanium guild requests `EQEmu`'s `zone/client_packet.cpp`
     /// handlers take; the server checks who may do what.
-    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::<Guilds>::default())
+    fn guilds(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Guilds::new(setup.guild_roster.clone())))
     }
 
     /// `Client::Handle_OP_Track` answers with the list, `Handle_OP_TrackTarget`
