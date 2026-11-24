@@ -195,8 +195,8 @@ fn scribe() -> ClientCommand {
     }
 }
 
-/// The commands a song lets go at once (read R49-21d; memorize and forget
-/// inferred, R49-48 a).
+/// The commands a song lets go at once (read R49-21d; memorize inferred,
+/// R49-48 a). A forget waits on no cast at all (R49-34 d).
 fn released(singer: &Singer) -> [ClientCommand; 6] {
     [
         strike(),
@@ -299,11 +299,15 @@ fn a_non_song_cast_a_non_bard_and_the_mac_rules_hold_as_before() {
     for singer in [&instant, &awaiting, &warrior, &mac] {
         assert!(singer.casting.guard.active());
         for command in released(singer) {
-            assert_eq!(
-                singer.refusal(&command),
-                Some("Wait for the current cast to finish or interrupt it"),
-                "{command:?}"
-            );
+            // A gem's forget waits on no cast, only on a request the
+            // server hasn't acknowledged (read R49-34 d).
+            let held = if matches!(command, ClientCommand::ForgetSpell { .. }) {
+                std::ptr::eq(singer, &raw const awaiting)
+                    .then_some("Wait for the server to acknowledge the cast")
+            } else {
+                Some("Wait for the current cast to finish or interrupt it")
+            };
+            assert_eq!(singer.refusal(&command), held, "{command:?}");
         }
     }
 }

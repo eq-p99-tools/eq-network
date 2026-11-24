@@ -916,17 +916,27 @@ impl Feature for Casting {
     /// A cast in flight holds casting; a Bard's own song, under the
     /// Titanium program's rules, holds only what a song holds (read
     /// R49-21d). An item cast alongside the song holds as any cast.
+    /// A request the server hasn't acknowledged also holds the program's
+    /// pending action, which a gem's forget waits on (read R49-34 d).
     fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         let Some(hold) = self.guard.hold() else {
             return Vec::new();
         };
-        if self
+        let pending = self.guard.pending().map(|_| {
+            (
+                Resource::PendingCast,
+                "Wait for the server to acknowledge the cast",
+            )
+        });
+        let cast = if self
             .singing(world)
             .is_some_and(|song| self.guard.held_spell() == Some(song.spell))
         {
-            return vec![(Resource::Song, hold.1)];
-        }
-        vec![hold]
+            (Resource::Song, hold.1)
+        } else {
+            hold
+        };
+        std::iter::once(cast).chain(pending).collect()
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -1395,7 +1405,8 @@ mod tests {
                 ..
             })]
         ));
-        assert_eq!(casting.holds(&world, Instant::now()).len(), 1);
+        // The cast, and the request the server hasn't acknowledged yet.
+        assert_eq!(casting.holds(&world, Instant::now()).len(), 2);
         // A gem that does not hold the spell sends nothing and says why.
         let outcome = testing::run(|out| casting.handle(&cast(1), &mut world, out));
         outcome.result.unwrap();
@@ -1748,12 +1759,6 @@ mod tests {
                 spell_id: 73,
                 created,
             },
-            ClientCommand::ForgetSpell {
-                session_id: 1,
-                gem: 0,
-                spell_id: 73,
-                created,
-            },
             ClientCommand::DeleteSpell {
                 session_id: 1,
                 slot: 0,
@@ -1772,6 +1777,13 @@ mod tests {
         assert!(commands.iter().all(|command| !guard.blocks(command)));
         guard.observe(12, &begin(12));
         assert!(commands.iter().all(|command| guard.blocks(command)));
+        // A gem's forget goes mid-cast (read R49-34 d).
+        assert!(!guard.blocks(&ClientCommand::ForgetSpell {
+            session_id: 1,
+            gem: 0,
+            spell_id: 73,
+            created,
+        }));
         assert!(!guard.blocks(&ClientCommand::SetPosture {
             session_id: 1,
             spawn_id: 12,
