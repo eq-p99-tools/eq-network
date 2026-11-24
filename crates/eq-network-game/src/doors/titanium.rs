@@ -353,7 +353,7 @@ fn travel_time(door: &Door, from: f32, to: f32) -> Duration {
 }
 
 /// When a door spawned, or moved by an action, at `at` goes back on its
-/// own, if it does ([`timed_return`]). A door spawned away from its rest
+/// own, if it does (`timed_return`). A door spawned away from its rest
 /// counts its delay from its spawn (read R49-28b). One the server moved
 /// restarts it with each state change, so it runs from the action and
 /// again from arrival, and a delay shorter than the travel fires before the
@@ -505,7 +505,7 @@ impl Lifts {
     /// a door spawned in state 1 or 2 rises (or sinks) to its travel at its
     /// opening rate, and one spawned in state 3 or 0 stands at its base. A
     /// door spawned away from its rest goes back once its delay has passed
-    /// since spawn, even mid-rise ([`timed_return`]; read R49-28b, recording
+    /// since spawn, even mid-rise (`timed_return`; read R49-28b, recording
     /// checklist 6.423).
     pub fn spawned(&mut self, door: &Door, now: Instant) {
         let Some(motion) = Vertical::of(door) else {
