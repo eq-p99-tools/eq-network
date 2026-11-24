@@ -82,6 +82,19 @@ pub enum DoorUpdate {
     },
 }
 
+/// A click the program ignores, saying nothing and sending nothing
+/// ([`titanium::ignores_clicks`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ignored;
+
+impl std::fmt::Display for Ignored {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the door ignores clicks")
+    }
+}
+
+impl std::error::Error for Ignored {}
+
 /// A door clicked from out of reach: the program says string 1462 (both
 /// generations' reads) and sends nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

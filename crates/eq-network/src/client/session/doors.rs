@@ -7,7 +7,9 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    doors::{eqmac, titanium, Clicked, DoorUpdate, HeldItem, OutOfReach, LOCKPICK_ITEM_TYPE},
+    doors::{
+        eqmac, titanium, Clicked, DoorUpdate, HeldItem, Ignored, OutOfReach, LOCKPICK_ITEM_TYPE,
+    },
     inventory::InventorySlot,
     message::Message,
     request::Request,
@@ -146,6 +148,24 @@ impl Doors {
             unreachable!("only door clicks are clicked");
         };
         ensure!(*created >= self.changed_at, "stale door request");
+        // A door in state 1 marked -2 takes no click at all (0x4906c5, read
+        // R49-28).
+        let ignores = match self.dialect {
+            GameDialect::Titanium => true,
+            // Titanium's, inferred for RoF2 as its other click rules (6.489).
+            GameDialect::Rof2 => true,
+            // EQMac's click is its own read, without this rule.
+            GameDialect::EqMac => false,
+        };
+        if ignores
+            && self
+                .table
+                .entries()
+                .get(door_id)
+                .is_some_and(titanium::ignores_clicks)
+        {
+            return Err(Ignored.into());
+        }
         let (spawn_id, position) = world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
@@ -299,6 +319,8 @@ impl Feature for Doors {
                 out.request(&request)?;
                 (None, None)
             }
+            // Said nowhere and sent nowhere, as the program ignores it.
+            Err(error) if error.downcast_ref::<Ignored>().is_some() => return Ok(()),
             Err(error) => (
                 Some(error.to_string()),
                 error
@@ -409,6 +431,49 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(world.lifts.offset(1, later), None);
+    }
+
+    #[test]
+    fn a_door_in_state_1_marked_minus_2_ignores_clicks_silently() {
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        // -2 in the field's low half.
+        let marked = 0x0000_fffe;
+        let mut lift = titanium_door(1, 50, marked);
+        lift.state_at_spawn = 1;
+        let hinged = titanium_door(2, 0, marked);
+        let mut opened = titanium_door(3, 0, marked);
+        opened.state_at_spawn = 1;
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift, hinged, opened]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let click = |door_id| ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id,
+            point: None,
+            created: Instant::now(),
+        };
+        // The lift is in state 1: nothing is sent and nothing is said.
+        let ignored = testing::run(|out| doors.handle(&click(1), &mut world, out));
+        ignored.result.unwrap();
+        assert_eq!(ignored.sent, []);
+        assert!(ignored.events.is_empty(), "{:?}", ignored.events);
+        // Shut (state 0), or a hinged type the program puts in state 2,
+        // takes the click.
+        for door_id in [2, 3] {
+            let clicked = testing::run(|out| doors.handle(&click(door_id), &mut world, out));
+            clicked.result.unwrap();
+            assert_eq!(clicked.sent.len(), 1, "door {door_id}");
+        }
+        // Once the server moves it, its state is the mover's, unread, and
+        // the click goes.
+        let moved = WorldEvent::Doors(DoorUpdate::Move { id: 1, action: 3 });
+        testing::run(|out| doors.observe(&Message::Event(moved), &mut world, out))
+            .result
+            .unwrap();
+        let clicked = testing::run(|out| doors.handle(&click(1), &mut world, out));
+        clicked.result.unwrap();
+        assert_eq!(clicked.sent.len(), 1);
     }
 
     #[test]
