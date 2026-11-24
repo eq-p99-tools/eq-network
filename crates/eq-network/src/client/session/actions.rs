@@ -188,7 +188,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::SwapBandolier { .. } => &[Casting, Inventory, CursorAndStation, Shopping],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         // A right click forgets a filled gem at once, even mid-cast, while
-        // no request is pending (0x4eccc6, read R49-34 d).
+        // no request is pending (0x4eccc6, read R49-34 d: Titanium's; the
+        // Mac-era and RoF2 programs are taken to match, inferred).
         ClientCommand::ForgetSpell { .. } => &[PendingCast, Spellbook],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::DeleteSpell { .. }

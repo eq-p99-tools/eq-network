@@ -583,7 +583,14 @@ impl Casting {
     /// stop of mode 0 (the player's) or 3 (the server's cast update) says
     /// 0x318f. The Mac-era program is unread, so it says nothing there.
     fn report_song_stopped(&self, song: Song, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.song_rules != SongRules::Titanium {
+        // Only a Bard sings: the program's song test (0x40db0b) needs class
+        // 8, so another class's cast end is no song stop and says no line
+        // (6.542), however the server's cast update ends it.
+        let bard = world
+            .player
+            .as_ref()
+            .is_some_and(|player| player.class == Some(BARD_CLASS));
+        if self.song_rules != SongRules::Titanium || !bard {
             return Ok(());
         }
         out.log.send(ClientEvent::World(WorldEvent::SongStopped {
@@ -617,10 +624,11 @@ impl Casting {
         {
             self.song = None;
             // The program's stop (0x40f06d, mode 3) says its line only for
-            // a song, or for another class's player; a Bard's non-song, the
-            // item cast's end among them, clears it with no line (read
-            // R49-21e). A Bard's memorized spell is taken as a song ([I],
-            // 6.442), another spell as not.
+            // a song; a Bard's non-song, the item cast's end among them,
+            // clears it with no line (read R49-21e). A Bard's memorized
+            // spell is taken as a song ([I], 6.442), another spell as not.
+            // Another class's cast end clears it too, and
+            // `report_song_stopped` says no line for it (6.542).
             let ends_a_song = spell == u32::MAX || song.spell == spell || class_spell || !bard;
             return ends_a_song.then_some(song);
         }

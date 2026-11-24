@@ -261,6 +261,26 @@ fn the_host_is_told_when_a_bard_starts_and_stops_singing() {
 }
 
 #[test]
+fn another_classs_cast_end_says_no_song_stop_line() {
+    // A cleric's gem cast, ended by the server's cast update (spell named
+    // or -1) or stopped by `/stopcast`, is no song: no stop line (6.542).
+    for ended in [SONG, u32::MAX] {
+        let mut cleric = Singer::new(
+            Casting::with_titanium_combat(true, Duration::from_secs(60)),
+            2,
+        );
+        cleric.sing();
+        let output = cleric.hear(&mana_ended(ended));
+        assert_eq!(stops(&output), Vec::<u32>::new(), "{ended}");
+        assert_eq!(cleric.casting.song, None);
+        // A Bard's own song end still says it.
+        let mut bard = Singer::titanium_bard();
+        bard.sing();
+        assert_eq!(stops(&bard.hear(&mana_ended(ended))), [SONG], "{ended}");
+    }
+}
+
+#[test]
 fn a_non_song_cast_a_non_bard_and_the_mac_rules_hold_as_before() {
     // A gem cast of 100 ms or less is no song once its start says so.
     let mut instant = Singer::titanium_bard();
