@@ -17,7 +17,7 @@
 //! world name, expansions, chat servers, membership) is left unread.
 use super::{character_list, named, unavailable};
 use crate::{
-    assets::Assets,
+    assets::AssetSource,
     client::{
         selection::{Choice, Selection},
         session::{put_string, record_chat, servers, CharacterSession, ZoneDestination},
@@ -71,7 +71,7 @@ const ZONE_UNAVAILABLE_LENGTH: usize = 24;
 /// checksums aren't asked for.
 pub(in crate::client::session) fn world(
     context: &CharacterSession<'_>,
-    _assets: &Assets,
+    _assets: &dyn AssetSource,
     ip: &str,
     flags: (bool, bool),
     log: &mut Events<'_>,

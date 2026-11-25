@@ -77,7 +77,7 @@ use super::{
     ConnectionState, DecodeError, Events, GapKind, GapStage, RecordEvent, RunOptions,
     ServerProtocol,
 };
-use crate::{assets::Assets, transport::Application};
+use crate::{assets::AssetSource, transport::Application};
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::zoning;
 use servers::Shield;
@@ -112,7 +112,7 @@ pub(super) fn inventory_move_rules(
 pub(super) fn run(
     config: &ClientConfig,
     identity: &ClientIdentity,
-    assets: &Assets,
+    assets: &dyn AssetSource,
     stop: &CancellationToken,
     options: &RunOptions,
     commands: Option<&Receiver<ClientCommand>>,
@@ -165,10 +165,13 @@ pub(super) fn run(
                 })?;
             }
             ZoneExit::Direct(packet) => {
-                let (host, port, checksums) =
-                    server
-                        .wire()
-                        .handoff(next_zone.shield.as_deref(), &packet, assets, log)?;
+                let (host, port, checksums) = server.wire().handoff(
+                    next_zone.shield.as_deref(),
+                    &packet,
+                    assets,
+                    stop,
+                    log,
+                )?;
                 destination = Some(ZoneDestination {
                     host,
                     port,
