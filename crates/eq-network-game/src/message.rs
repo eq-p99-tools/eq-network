@@ -4,6 +4,9 @@
 use crate::{inventory, spells, world::WorldEvent, zoning};
 use std::fmt;
 
+#[cfg(test)]
+mod eqmac_level_tests;
+
 /// `OP_LogoutReply`: the server ends the session after a logout. Sent by
 /// `EQEmu` (`zone/client_process.cpp`, `zone/client_packet.cpp`
 /// `Handle_OP_DeleteSpawn` and `Handle_OP_Logout`, each followed by a
@@ -588,6 +591,9 @@ pub fn quarm(opcode: u16, body: &[u8]) -> Vec<Message> {
 #[must_use]
 pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) -> Vec<Message> {
     match opcode {
+        // TAKP LevelUpdate_Struct; the session applies the Mac rise-only rule.
+        0x9841 => vec![crate::world::eqmac_level_update(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
         crate::books::EQMAC_READ_OPCODE => vec![crate::books::eqmac_text(body).map_or_else(
             |error| unreadable(Part::World, &error),
             |text| Message::Event(WorldEvent::BookText(text)),

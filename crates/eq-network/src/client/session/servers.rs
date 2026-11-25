@@ -2001,7 +2001,7 @@ impl ServerType for Quarm {
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::character())
+        offer(Box::new(Character::eqmac()))
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
@@ -2203,7 +2203,7 @@ impl ServerType for Takp {
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::character())
+        offer(Box::new(Character::eqmac()))
     }
 
     /// What TAKP's item packets say the player holds, item moves under

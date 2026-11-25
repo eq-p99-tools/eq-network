@@ -113,7 +113,8 @@ pub struct PlayerState {
     pub disciplines: Option<Vec<u32>>,
     /// Numeric gender identifier.
     pub gender: u32,
-    /// Current level.
+    /// Character level. On `EQMac`, the profile sets this and level news
+    /// only raises it; an own-spawn level appearance is a separate value.
     pub level: u8,
     /// Saved server position.
     pub position: Position,
@@ -1605,13 +1606,16 @@ pub enum WorldEvent {
     },
     /// Experience progress within this level, on the Titanium 0..330 scale.
     Experience(u32),
-    /// Own-character level change, including experience within the new level.
+    /// Own-character level record, including experience within the new level.
+    /// The `EQMac` session applies only rises, as its program does.
     Level {
         /// New server level.
         current: u8,
-        /// Previous server level; may exceed the new level after experience loss.
+        /// Previous server level; `EQMac` sends the prior high-water level,
+        /// which need not be the immediately preceding character level.
         previous: u8,
-        /// Experience on the Titanium 0..330 scale.
+        /// Experience within the level, normally on the 0..330 scale.
+        /// `EQMac` retains the dword as sent, without clamping it.
         experience: u32,
     },
     /// The server's assessment of a considered entity.
@@ -2660,6 +2664,18 @@ pub(crate) fn level_update(body: &[u8]) -> Result<WorldEvent> {
         previous,
         experience: word(body, 8).min(330),
     })
+}
+
+/// TAKP's same 12-byte level record. The Mac handler (0x4e06ef) keeps the
+/// experience dword as sent; `previous` is the server's prior high-water
+/// level, not necessarily the character's immediately preceding level.
+/// Level bounds remain this library's choice instead of the program's byte cast.
+pub(crate) fn eqmac_level_update(body: &[u8]) -> Result<WorldEvent> {
+    let mut event = level_update(body)?;
+    if let WorldEvent::Level { experience, .. } = &mut event {
+        *experience = word(body, 8);
+    }
+    Ok(event)
 }
 
 /// Decodes `ExpUpdate_Struct`: the experience within the level, on the

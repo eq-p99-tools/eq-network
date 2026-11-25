@@ -182,6 +182,18 @@ pub(super) struct Entities {
 }
 
 impl Entities {
+    /// Mac 0x4e06ef/0x52afd1 copy character level to its own spawn, never back.
+    fn copy_own_level(&self, world: &mut World, level: u8) {
+        let copies = match self.dialect {
+            GameDialect::EqMac => true,
+            GameDialect::Titanium | GameDialect::Rof2 => false,
+        };
+        if copies {
+            if let Some(spawn) = world.own_spawn.and_then(|id| world.spawns.0.get_mut(&id)) {
+                spawn.level = level;
+            }
+        }
+    }
     pub(super) fn new(dialect: GameDialect) -> Self {
         Self {
             dialect,
@@ -337,6 +349,9 @@ impl Feature for Entities {
     /// as the program's is. A posture reported after admission replaces it
     /// in turn.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(level) = world.player.as_ref().map(|player| player.level) {
+            self.copy_own_level(world, level);
+        }
         out.log.send(ClientEvent::World(WorldEvent::Spawns(
             world.spawns.all().cloned().collect(),
         )))?;
@@ -415,6 +430,9 @@ impl Feature for Entities {
             ))?;
         } else {
             world.spawns.apply(event, world.own_spawn);
+        }
+        if let WorldEvent::Level { current, .. } = event {
+            self.copy_own_level(world, *current);
         }
         let carriers = world
             .carriers

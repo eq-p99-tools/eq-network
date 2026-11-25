@@ -766,6 +766,19 @@ fn hear(
     let mut news = 0;
     while let Some(mut message) = queue.pop_front() {
         features.explain(&mut message, world);
+        // Mac 0x4e06ef does nothing for an equal/lower character level.
+        // Drop it before other consumers or the host see a fictitious loss,
+        // experience change or practice-point change. Appearance remains news.
+        let only_rises = match features.dialect {
+            eq_network_game::GameDialect::EqMac => true,
+            eq_network_game::GameDialect::Titanium | eq_network_game::GameDialect::Rof2 => false,
+        };
+        if only_rises
+            && matches!(&message, Message::Event(WorldEvent::Level { current, .. })
+                if world.player.as_ref().is_some_and(|player| *current <= player.level))
+        {
+            continue;
+        }
         let own_open = match &message {
             Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
                 if view.open && world.is_player(view.player_id) =>
@@ -3787,6 +3800,9 @@ mod tests {
 
 #[cfg(test)]
 mod eqmac_tests;
+
+#[cfg(test)]
+mod eqmac_level_tests;
 
 #[cfg(test)]
 mod world_object_tests;
