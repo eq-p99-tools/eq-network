@@ -38,9 +38,20 @@ fn idle(
     start: Instant,
     seconds: u64,
 ) -> (Vec<(u64, usize)>, Vec<u16>) {
+    idle_every(protocol, feature, world, (start, 50), seconds)
+}
+
+/// As [`idle`], ticking every `every` ms.
+fn idle_every(
+    protocol: ServerProtocol,
+    feature: &mut Box<dyn Feature>,
+    world: &mut World,
+    (start, every): (Instant, usize),
+    seconds: u64,
+) -> (Vec<(u64, usize)>, Vec<u16>) {
     let wire = server_type(protocol).wire();
     let (mut reports, mut counters) = (Vec::new(), Vec::new());
-    for step in (0..seconds * 1000).step_by(50) {
+    for step in (0..seconds * 1000).step_by(every) {
         let now = start + Duration::from_millis(step);
         let outcome = testing::run_on(wire, |out| feature.tick(now, world, out));
         outcome.result.unwrap();
@@ -74,6 +85,27 @@ fn eqemu_titanium_reports_its_history_reliably_about_once_a_second_standing() {
         assert!((1000..=1100).contains(&(pair[1].0 - pair[0].0)));
     }
     assert!(counters.len() >= 9);
+}
+
+#[test]
+fn a_report_due_goes_before_the_update_of_the_same_pass() {
+    // Ticks that come only as each update comes due: the report of the
+    // last update still goes out alone, before the next one.
+    let start = Instant::now();
+    let (mut feature, mut world) = admitted(ServerProtocol::EqEmu, false, start);
+    let (reports, counters) = idle_every(
+        ServerProtocol::EqEmu,
+        &mut feature,
+        &mut world,
+        (start, 1050),
+        12,
+    );
+    assert!(reports.len() >= 10, "{reports:?}");
+    assert!(
+        reports[1..].iter().all(|(_, records)| *records == 1),
+        "{reports:?}"
+    );
+    assert!(counters.len() >= 10);
 }
 
 #[test]

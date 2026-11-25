@@ -1214,9 +1214,12 @@ impl Feature for Motion {
                 motion,
             ));
         }
-        world.body.heartbeat(now, out)?;
+        // A report already due goes before this pass's update: the program
+        // checks every frame, so it sends a report as soon as its oldest
+        // record is a second old, before the next update comes due.
         let allowed = !world.validated;
-        world.body.report_history(now, allowed, false, out)
+        world.body.report_history(now, allowed, false, out)?;
+        world.body.heartbeat(now, out)
     }
 
     /// The server's corrections and its reports of the player's stance, and

@@ -129,7 +129,9 @@ pub mod causes {
 
 /// The game's millisecond clock: the program stamps records with ms since
 /// the game started (0x46d655). This client starts it at the first record
-/// of the process (inferred); only its low 16 bits are sent.
+/// of the process (inferred); only its low 16 bits are sent. The epoch is
+/// process-wide, so a record stamped before it (an earlier admission's frame
+/// offered later) saturates to 0.
 fn game_ms(at: Instant) -> u64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     let epoch = *EPOCH.get_or_init(|| at);
