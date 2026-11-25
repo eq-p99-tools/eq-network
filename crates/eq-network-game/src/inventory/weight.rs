@@ -493,6 +493,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn projected_cursor_candidate_mass_survives_a_different_resync_token() {
+        let mut original = item(30, 50);
+        original.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        let mut candidate = item(30, 1_500);
+        candidate.details.id = 2;
+        candidate.rules.ground_drop_serial = std::num::NonZeroU32::new(18);
+        let mut token = item(30, 1);
+        token.details.id = 3;
+        token.rules.ground_drop_serial = std::num::NonZeroU32::new(19);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+        project(&mut inventory);
+        inventory.apply(InventoryUpdate::Cursor(vec![candidate.clone()]));
+        assert_eq!(inventory.items()[&InventorySlot::CURSOR], candidate);
+        assert_eq!(inventory.ground_drop_weight_tenths(0), Some(1_550));
+        inventory.apply(InventoryUpdate::Set(vec![token]));
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert!(inventory.stale());
+        let bound = inventory
+            .ground_drop_weight_tenths(0)
+            .expect("plain known instances retain a finite fall bound");
+        assert!(
+            bound >= 1_500,
+            "the unconfirmed candidate can still be carried; bound={bound}"
+        );
+    }
+
+    #[test]
+    fn projected_cursor_candidate_mass_survives_banking_its_projected_copy() {
+        let mut original = item(30, 50);
+        original.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        let mut candidate = item(30, 1_500);
+        candidate.details.id = 2;
+        candidate.rules.ground_drop_serial = std::num::NonZeroU32::new(18);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+        project(&mut inventory);
+        inventory.apply(InventoryUpdate::Cursor(vec![candidate.clone()]));
+        assert_eq!(inventory.items()[&InventorySlot::CURSOR], candidate);
+        planned_move_with_bank(
+            &mut inventory,
+            super::super::MoveRules::EqEmu,
+            30,
+            2000,
+            true,
+        );
+        inventory.apply(InventoryUpdate::Settled);
+        assert_eq!(
+            inventory.items()[&InventorySlot(2000)].details.id,
+            candidate.details.id
+        );
+        let bound = inventory
+            .ground_drop_weight_tenths(0)
+            .expect("plain known instances retain a finite weight bound");
+        assert!(bound >= 1_500, "banking the projection does not prove the candidate left the server cursor; bound={bound}");
+    }
+
     fn planned_move(inventory: &mut Inventory, rules: super::super::MoveRules, from: i32, to: i32) {
         planned_move_with_bank(inventory, rules, from, to, false);
     }
