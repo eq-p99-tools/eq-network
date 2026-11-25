@@ -8,7 +8,9 @@ use std::{
 };
 
 mod installed;
-pub use installed::{AssetJob, AssetProgress, AssetSource, InstalledAssets};
+#[cfg(test)]
+pub(crate) use installed::tests::cache_rows;
+pub use installed::{AssetJob, AssetProgress, AssetSource, InstalledAssets, CHECKSUM_CACHE_FILE};
 
 /// Measured CRC-32 and size for one client file.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

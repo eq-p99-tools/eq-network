@@ -1,5 +1,6 @@
-//! Request-driven installed-file measurements. Only explicit local `EQEmu` sessions
-//! may trust metadata cache hits; public challenges always read current bytes.
+//! Request-driven installed-file measurements. A cached provider reuses a
+//! size and modification-time cache on every server, P99 included; a refusal
+//! invalidates the refused operands and the next login rereads them.
 use super::{directory_entries, valid_asset_name, Assets, FileChecksum};
 use crate::client::CancellationToken;
 use anyhow::{ensure, Context, Result};
@@ -27,7 +28,7 @@ pub struct AssetProgress {
     pub total: usize,
     /// File-content bytes read for CRC computation on this request.
     pub bytes: u64,
-    /// Metadata cache hits, which are allowed only for local `EQEmu`.
+    /// Operands answered from the size and modification-time cache.
     pub cache_hits: usize,
     /// Monotonic elapsed milliseconds for this request.
     pub elapsed_ms: u64,
@@ -130,14 +131,25 @@ impl AssetSource for Assets {
     }
 }
 
+/// The settings-directory file holding the size and modification-time cache.
+/// Deleting it by hand clears the cache; the next check rereads every operand.
+pub const CHECKSUM_CACHE_FILE: &str = "asset-checksums-v1.json";
+
 /// An installation whose contents are read only when the server requests them.
-/// Construction performs no filesystem access. Public checks never trust a
-/// size/mtime cache hit, including same-size edits with restored timestamps.
+/// Construction performs no filesystem access.
+///
+/// A cached provider answers an operand from its cache when the file's
+/// relative path, size and modification time all match the cached entry. It
+/// cannot see a same-size edit whose modification time was restored; a server
+/// refusal invalidates that challenge's operands, so the next login rereads
+/// them. If that invalidation cannot be saved, the provider deletes the cache
+/// file (best effort) and stops trusting metadata for the rest of its life.
 #[derive(Clone)]
 pub struct InstalledAssets {
     directory: PathBuf,
     cache: Option<PathBuf>,
-    trust_local_metadata: bool,
+    // Shared by clones, so a failed invalidation disables every later reuse.
+    trust_metadata: Arc<AtomicBool>,
     suspect: Arc<Mutex<BTreeSet<String>>>,
 }
 
@@ -148,17 +160,24 @@ impl InstalledAssets {
         Self {
             directory,
             cache: None,
-            trust_local_metadata: false,
+            trust_metadata: Arc::new(AtomicBool::new(false)),
             suspect: Arc::default(),
         }
     }
 
-    pub(crate) fn local(directory: PathBuf, settings: Option<&Path>) -> Self {
+    /// Creates a provider which reuses the size and modification-time cache in
+    /// `settings` ([`CHECKSUM_CACHE_FILE`]) on every server. Without a settings
+    /// directory nothing persists and every operand is read.
+    pub(crate) fn cached(directory: PathBuf, settings: Option<&Path>) -> Self {
         Self {
-            cache: settings.map(|path| path.join("asset-checksums-v1.json")),
-            trust_local_metadata: true,
+            cache: settings.map(|path| path.join(CHECKSUM_CACHE_FILE)),
+            trust_metadata: Arc::new(AtomicBool::new(true)),
             ..Self::new(directory)
         }
+    }
+
+    fn trusts_metadata(&self) -> bool {
+        self.trust_metadata.load(Ordering::Acquire)
     }
 
     #[allow(clippy::too_many_lines)] // Keep one request's measurement and cache settlement ordered.
@@ -205,7 +224,7 @@ impl InstalledAssets {
                     .lock()
                     .map_err(|_| anyhow::anyhow!("Checksum cache unavailable"))?
                     .contains(name);
-                let hit = self.trust_local_metadata
+                let hit = self.trusts_metadata()
                     && !suspect
                     && cache.files.get(name).is_some_and(|entry| {
                         entry.relative == relative
@@ -266,7 +285,8 @@ impl InstalledAssets {
             counters.completed.fetch_add(1, Ordering::Relaxed);
         }
         check()?;
-        if self.trust_local_metadata {
+        // A provider that lost trust never rewrites the store it deleted.
+        if self.trusts_metadata() {
             // A cache write failure must not replace a correctly measured answer.
             let _ = cache.save(self.cache.as_deref());
             let mut suspect = self
@@ -327,20 +347,31 @@ impl AssetSource for InstalledAssets {
     }
 
     fn refused(&self, names: &[String]) -> Result<()> {
-        if !self.trust_local_metadata {
+        if !self.trusts_metadata() {
             return Ok(());
         }
         let names: BTreeSet<_> = names.iter().map(|name| name.to_ascii_lowercase()).collect();
-        self.suspect
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Checksum cache unavailable"))?
-            .extend(names.iter().cloned());
-        let root = fs::canonicalize(&self.directory)?;
-        let mut cache = Cache::load(self.cache.as_deref(), &root);
-        for name in names {
-            cache.files.remove(&name);
+        let saved = (|| {
+            self.suspect
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Checksum cache unavailable"))?
+                .extend(names.iter().cloned());
+            let root = fs::canonicalize(&self.directory)?;
+            let mut cache = Cache::load(self.cache.as_deref(), &root);
+            for name in &names {
+                cache.files.remove(name);
+            }
+            cache.save(self.cache.as_deref())
+        })();
+        if saved.is_err() {
+            // An unsaved invalidation must not leave a stale entry trusted:
+            // stop reusing metadata here and drop the store for later providers.
+            self.trust_metadata.store(false, Ordering::Release);
+            if let Some(path) = &self.cache {
+                let _ = fs::remove_file(path);
+            }
         }
-        cache.save(self.cache.as_deref())
+        saved
     }
 }
 
@@ -396,6 +427,11 @@ impl Cache {
         let parent = path
             .parent()
             .context("Checksum cache directory is unavailable")?;
+        #[cfg(test)]
+        ensure!(
+            !tests::UNWRITABLE.with(std::cell::Cell::get),
+            "Checksum cache store is unwritable"
+        );
         fs::create_dir_all(parent)?;
         let temporary = parent.join(format!(
             ".asset-checksums-{:016x}.tmp",
@@ -419,4 +455,4 @@ impl Cache {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

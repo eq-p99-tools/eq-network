@@ -15,7 +15,7 @@ impl Installation {
         fs::write(path, bytes).unwrap();
     }
     fn local(&self) -> InstalledAssets {
-        InstalledAssets::local(self.0.clone(), Some(&self.0.join("settings")))
+        InstalledAssets::cached(self.0.clone(), Some(&self.0.join("settings")))
     }
 }
 impl Drop for Installation {
@@ -64,14 +64,37 @@ fn construction_defers_every_installation_read_until_a_request() {
     }
 }
 
-#[test]
-fn local_cold_warm_changed_and_refused_checks_are_limited_to_requested_files() {
+std::thread_local! {
+    /// Makes this thread's cache saves fail, as an unwritable store would.
+    /// Measurement saves run on their worker thread and are unaffected.
+    pub(super) static UNWRITABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A provider factory: installation directory, then settings directory.
+pub(crate) type Provider<'a> = &'a dyn Fn(&Path, &Path) -> Box<dyn AssetSource>;
+
+fn set_modified(path: &Path, modified: std::time::SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+}
+
+/// The cold, warm, changed and refused rows, plus the documented limitation
+/// (a same-size edit with a restored date is a cache hit until refused). Each
+/// call of `provider` is a fresh provider, as a new login builds one.
+pub(crate) fn cache_rows(provider: Provider) {
     let install = Installation::new();
+    let settings = install.0.join("settings");
+    let fresh = || provider(&install.0, &settings);
     install.write("first.s3d", b"123456789");
     install.write("second.eqg", b"second");
     install.write("unrequested.s3d", b"never measured");
-    let provider = install.local();
-    let (cold, progress) = measured(&provider, &["FIRST.S3D", "second.eqg"]);
+    let same = fresh();
+    // Cold: only the requested files are read.
+    let (cold, progress) = measured(&*same, &["FIRST.S3D", "second.eqg"]);
     assert_eq!(
         cold.files["first.s3d"],
         Some(FileChecksum {
@@ -81,43 +104,65 @@ fn local_cold_warm_changed_and_refused_checks_are_limited_to_requested_files() {
     );
     assert_eq!((progress.bytes, progress.cache_hits), (15, 0));
     assert!(!cold.files.contains_key("unrequested.s3d"));
-    let (warm, progress) = measured(&install.local(), &["first.s3d", "second.eqg"]);
+    assert!(settings.join(CHECKSUM_CACHE_FILE).exists());
+    // Warm: a new provider answers both from the store.
+    let (warm, progress) = measured(&*fresh(), &["first.s3d", "second.eqg"]);
     assert_eq!(warm.files, cold.files);
     assert_eq!((progress.bytes, progress.cache_hits), (0, 2));
+    // Changed size, then changed date with the same size: both reread.
     install.write("first.s3d", b"changed size");
-    let (_, progress) = measured(&provider, &["first.s3d", "second.eqg"]);
+    let (_, progress) = measured(&*same, &["first.s3d", "second.eqg"]);
     assert_eq!((progress.bytes, progress.cache_hits), (12, 1));
     let path = install.0.join("first.s3d");
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
     install.write("first.s3d", b"new contents");
-    fs::File::options()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(modified + Duration::from_secs(2)))
-        .unwrap();
-    let (_, progress) = measured(&install.local(), &["first.s3d", "second.eqg"]);
+    set_modified(&path, modified + Duration::from_secs(2));
+    let (changed, progress) = measured(&*fresh(), &["first.s3d", "second.eqg"]);
     assert_eq!((progress.bytes, progress.cache_hits), (12, 1));
-    provider.refused(&["first.s3d".into()]).unwrap();
-    let (_, progress) = measured(&install.local(), &["first.s3d", "second.eqg"]);
+    assert_eq!(
+        changed.files["first.s3d"].as_ref().unwrap().crc32,
+        crc32fast::hash(b"new contents")
+    );
+    // Refused: only that challenge's operands are reread by the next login.
+    same.refused(&["FIRST.S3D".into()]).unwrap();
+    let (_, progress) = measured(&*fresh(), &["first.s3d", "second.eqg"]);
     assert_eq!((progress.bytes, progress.cache_hits), (12, 1));
+
+    // Documented limitation: a same-size edit whose date is restored is
+    // answered from the cache; the refusal path is its recovery.
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let (before, _) = measured(&*fresh(), &["first.s3d"]);
+    install.write("first.s3d", b"edited bytes");
+    set_modified(&path, modified);
+    let edited = fresh();
+    let (stale, progress) = measured(&*edited, &["first.s3d"]);
+    assert_eq!(stale.files, before.files);
+    assert_eq!((progress.bytes, progress.cache_hits), (0, 1));
+    edited.refused(&["first.s3d".into()]).unwrap();
+    let (reread, progress) = measured(&*fresh(), &["first.s3d"]);
+    assert_eq!((progress.bytes, progress.cache_hits), (12, 0));
+    assert_eq!(
+        reread.files["first.s3d"].as_ref().unwrap().crc32,
+        crc32fast::hash(b"edited bytes")
+    );
 }
 
 #[test]
-fn verified_current_reads_same_size_edits_even_with_restored_mtime() {
+fn cached_cold_warm_changed_and_refused_checks_are_limited_to_requested_files() {
+    cache_rows(&|directory, settings| {
+        Box::new(InstalledAssets::cached(directory.into(), Some(settings)))
+    });
+}
+
+#[test]
+fn fresh_provider_reads_same_size_edits_even_with_restored_mtime() {
     let install = Installation::new();
     install.write("first.s3d", b"before");
-    let local = install.local();
-    let (original, _) = measured(&local, &["first.s3d"]);
+    let (original, _) = measured(&install.local(), &["first.s3d"]);
     let path = install.0.join("first.s3d");
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
     install.write("first.s3d", b"after!");
-    fs::File::options()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(modified))
-        .unwrap();
+    set_modified(&path, modified);
     let verified = InstalledAssets::new(install.0.clone());
     let (current, progress) = measured(&verified, &["first.s3d"]);
     assert_ne!(current.files, original.files);
@@ -126,12 +171,32 @@ fn verified_current_reads_same_size_edits_even_with_restored_mtime() {
         crc32fast::hash(b"after!")
     );
     assert_eq!((progress.bytes, progress.cache_hits), (6, 0));
-    // The explicitly local cache accepts this metadata-only miss. Refusal
-    // invalidation is its recovery; it is never the public-byte authority.
-    let (cached, _) = measured(&local, &["first.s3d"]);
-    assert_eq!(cached.files, original.files);
-    local.refused(&["first.s3d".into()]).unwrap();
-    assert_eq!(measured(&local, &["first.s3d"]).0.files, current.files);
+}
+
+#[test]
+fn unsaved_invalidation_deletes_the_store_and_ends_metadata_trust() {
+    let install = Installation::new();
+    install.write("first.s3d", b"bytes");
+    let store = install.0.join("settings").join(CHECKSUM_CACHE_FILE);
+    let provider = install.local();
+    assert_eq!(measured(&provider, &["first.s3d"]).1.bytes, 5);
+    assert!(store.exists());
+    UNWRITABLE.with(|unwritable| unwritable.set(true));
+    let refused = provider.refused(&["first.s3d".into()]);
+    UNWRITABLE.with(|unwritable| unwritable.set(false));
+    assert!(refused.is_err(), "the diagnostic is kept");
+    assert!(!store.exists(), "the store is deleted best effort");
+    // The same provider, and its clones, now read the bytes every time and
+    // never write the store again.
+    for source in [provider.clone(), provider] {
+        let (_, progress) = measured(&source, &["first.s3d"]);
+        assert_eq!((progress.bytes, progress.cache_hits), (5, 0));
+        assert!(source.refused(&["first.s3d".into()]).is_ok());
+    }
+    assert!(!store.exists());
+    // A later provider on the same store finds no entry.
+    let (_, progress) = measured(&install.local(), &["first.s3d"]);
+    assert_eq!((progress.bytes, progress.cache_hits), (5, 0));
 }
 
 #[test]

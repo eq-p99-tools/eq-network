@@ -209,14 +209,27 @@ needs the current spell-file CRC and byte size. Hashing runs on a cancellable
 worker while the session continues servicing transport; `FilesChecking`
 events report numeric progress, independently of admission.
 
-Public requests freshly read the requested files. Only explicitly local-only
-EQEmu sessions may reuse the settings-directory cache keyed by installation,
-relative path, size and modification time. This local optimization cannot
-detect same-size edits with restored mtimes. A generic integrity refusal ends
-the attempt and invalidates that challenge's operands; a fresh challenge
-remeasures those it requests again, plus its spell operand. The server does
-not identify bad filenames. Credential and world-play refusals do not touch
-the cache; no automatic reconnect or resubmission is added.
+On every server, P99 included, a requested file is answered from the
+settings-directory cache when its installation, relative path, size and
+modification time all match the cached entry; any other requested file is read
+in full. Without a settings directory nothing is cached and every requested
+file is read.
+
+- **Limitation:** the cache cannot see an edit that keeps the file's size and
+  restores its modification time. Such a file is answered from the cache until
+  the server refuses it.
+- **Refusal:** a generic integrity refusal ends the attempt and invalidates that
+  challenge's operands. The next login rereads them (and its spell operand);
+  the server does not identify bad filenames. No automatic reconnect or
+  resubmission is added. Credential and world-play refusals do not touch the
+  cache.
+- **Unsaved invalidation:** if the invalidation cannot be saved, the provider
+  deletes the cache file (best effort), keeps the diagnostic and reads every
+  requested file for the rest of its life.
+- **Clearing it by hand:** delete `asset-checksums-v1.json`
+  (`eq_network::assets::CHECKSUM_CACHE_FILE`) from the settings directory
+  passed to `with_installed_assets`. The next check rereads every file it
+  requests.
 
 Each layer owns one kind of change. Wire framing belongs in
 `eq-network-transport`; login opcodes belong in `eq-network-login`; game packet
