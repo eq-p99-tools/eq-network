@@ -223,6 +223,34 @@ impl Body {
         Ok(())
     }
 
+    /// Sends the movement history report due at `now`, reliably, where this
+    /// admission keeps one; `forced` is the flush before a zone change.
+    /// Where `allowed` is false (the server's validation exchange was made,
+    /// 6.369) the history is ended for the admission and nothing is sent.
+    pub(super) fn report_history(
+        &mut self,
+        now: Instant,
+        allowed: bool,
+        forced: bool,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Some(motion) = self.motion.as_mut() else {
+            return Ok(());
+        };
+        if !allowed {
+            motion.end_history();
+            return Ok(());
+        }
+        motion.report_history(now, forced, |report| out.send(report))?;
+        let dropped = motion.take_dropped_history();
+        if dropped > 0 {
+            out.log.diagnostic(format!(
+                "Movement history dropped {dropped} records that could not be reported"
+            ))?;
+        }
+        Ok(())
+    }
+
     /// Repeats the player's position as the server expects: the movement
     /// session's own updates, or the stationary heartbeat without one.
     pub(super) fn heartbeat(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
@@ -932,6 +960,8 @@ impl Motion {
             world
                 .body
                 .record_carrier_support(carrier.map(|(sample, _)| sample));
+            let allowed = !world.validated;
+            world.body.report_history(now, allowed, false, out)?;
         }
         // Refused coordinates are never published.
         out.log.send(ClientEvent::World(WorldEvent::MotionSent {
@@ -1084,6 +1114,7 @@ impl Feature for Motion {
                     )
                     .with_gate(out.wire.update_gate())
                     .with_counter(out.wire.update_counter())
+                    .with_history(out.wire.sends_movement_history() && !world.validated)
                     .with_fall_speed(out.wire.fall_speed(world.gravity))
                     .with_jump(out.wire.jump_speed().map(|speed| {
                         (
@@ -1183,6 +1214,11 @@ impl Feature for Motion {
                 motion,
             ));
         }
+        // A report already due goes before this pass's update: the program
+        // checks every frame, so it sends a report as soon as its oldest
+        // record is a second old, before the next update comes due.
+        let allowed = !world.validated;
+        world.body.report_history(now, allowed, false, out)?;
         world.body.heartbeat(now, out)
     }
 
@@ -3054,3 +3090,7 @@ mod tests {
 #[cfg(test)]
 #[path = "motion_boat_tests.rs"]
 mod boat_support_tests;
+
+#[cfg(test)]
+#[path = "motion_history_tests.rs"]
+mod history_tests;

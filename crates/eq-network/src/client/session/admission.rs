@@ -305,6 +305,9 @@ impl Admission for TitaniumAdmission {
         }
         if self.profile.is_some() && self.spawn.is_some() && self.weather && !self.requested {
             if let Some(shield) = handshake.shield.as_ref() {
+                // Latched before the send: a failed send ends the admission,
+                // and the history stays closed either way.
+                world.validated = true;
                 shield.answer(handshake.checksums)?;
                 handshake.session.send(0x1251, handshake.checksums)?;
             }
@@ -411,6 +414,8 @@ mod tests {
         // Once complete, the handshake takes nothing more.
         assert!(read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).is_none());
         drop(read);
+        // Without a protection there is no validation exchange.
+        assert!(!world.validated);
         // Titanium's answers, in the order the client sends them.
         assert_eq!(
             wire.0,
@@ -500,10 +505,15 @@ mod tests {
             (PROFILE_OPCODE, vec![0; PROFILE_LENGTH]),
             (WEATHER_OPCODE, Vec::new()),
         ] {
+            // The admission notes the exchange as it makes it, before the
+            // player is admitted and movement begins.
+            assert!(!world.validated);
             admission
                 .read(&mut packet(opcode, body), &mut world, &mut handshake)
                 .unwrap();
         }
+        assert!(world.validated, "the movement history stays closed (6.369)");
+        assert!(world.admitted.is_none());
         assert_eq!(*calls.borrow(), ["zone entry", "player spawn", "answer"]);
         // The protected client answers the zone's checksum request.
         assert_eq!(

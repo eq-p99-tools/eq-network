@@ -143,6 +143,12 @@ impl Transfers {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        // The program flushes the movement history before its zone-change
+        // request, whatever the records' age (0x4ab056).
+        let allowed = !world.validated;
+        world
+            .body
+            .report_history(Instant::now(), allowed, true, out)?;
         noted(
             out,
             &Request::AnswerZoneOffer {
@@ -996,6 +1002,59 @@ mod tests {
             .unwrap()
             .calibrate_fresh(calibration, heard, Instant::now())
             .unwrap();
+    }
+
+    #[test]
+    fn a_zone_change_flushes_the_movement_history_first_unless_validated() {
+        use eq_network_game::movement::{history, TITANIUM_UPDATE_COUNTER};
+        for validated in [false, true] {
+            let mut transfers = Transfers::new("Tester", Home::Offered);
+            let mut world = World::new(5);
+            world.validated = validated;
+            let here = Position {
+                x: 10.0,
+                y: 20.0,
+                z: 3.0,
+                heading: 0.0,
+            };
+            // Admitted a moment ago: the spawn's first frame is queued, far
+            // younger than a report waits for.
+            let admitted = Instant::now()
+                .checked_sub(Duration::from_millis(200))
+                .unwrap();
+            world.body.admit(
+                MotionSession::new(5, 7, here, admitted)
+                    .unwrap()
+                    .with_counter(TITANIUM_UPDATE_COUNTER)
+                    .with_history(true),
+            );
+            world.zone = (2, 0);
+            world.admitted = Some(admitted);
+            let cross = ClientCommand::CrossZoneLine {
+                session_id: 5,
+                destination: zoning::ZoneLineDestination::Absolute {
+                    zone_id: 4,
+                    position: here,
+                },
+                position: here,
+                created: Instant::now(),
+            };
+            let outcome = testing::run(|out| transfers.handle(&cross, &mut world, out));
+            outcome.result.unwrap();
+            let opcodes: Vec<u16> = outcome.sent.iter().map(|packet| packet.opcode).collect();
+            if validated {
+                assert_eq!(opcodes, [zoning::CHANGE_OPCODE]);
+            } else {
+                assert_eq!(opcodes, [history::OPCODE, zoning::CHANGE_OPCODE]);
+                let report = &outcome.sent[0].body;
+                assert_eq!(report.len(), 17 + 1);
+                let record = history::Record::decode(&report[..17]).unwrap();
+                assert_eq!(
+                    (record.cause, record.sequence),
+                    (history::Cause::Collision, 0)
+                );
+            }
+        }
     }
 
     #[test]

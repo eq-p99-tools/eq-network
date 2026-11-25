@@ -563,7 +563,7 @@ fn grant_grounded_diagonal(session: &mut MotionSession, start: Instant) {
         .unwrap();
 }
 
-fn request(created: Instant, x: f32) -> MovementRequest {
+pub(super) fn request(created: Instant, x: f32) -> MovementRequest {
     MovementRequest::new(
         MovementMode::Forward,
         11,
@@ -2502,7 +2502,7 @@ fn titanium_counter_records_the_pad_region_and_its_warp() {
     assert_eq!(landed, Some(45 + 4 + 2));
 }
 
-fn titanium_flagged(start: Instant) -> MotionSession {
+pub(super) fn titanium_flagged(start: Instant) -> MotionSession {
     setup(start).with_gate(Some(UpdateGate::Flagged {
         pack: |sample| sample.packet(),
         rule: crate::movement::TITANIUM_FLAGS,

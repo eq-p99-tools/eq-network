@@ -546,6 +546,8 @@ fn eqemu_ordinary_moves_settle_with_pending_or_blocked_station_custody() {
             .sent
             .iter()
             .map(|packet| packet.opcode)
+            // The movement history reports go out on their own clock.
+            .filter(|opcode| *opcode != eq_network_game::movement::history::OPCODE)
             .collect::<Vec<_>>(),
         [0x3bc2, 0x420f, 0x420f, 0x420f]
     );
@@ -648,6 +650,8 @@ fn an_eqemu_combine_product_on_the_cursor_settles_ingredients_from_packs() {
             .sent
             .iter()
             .map(|packet| packet.opcode)
+            // The movement history reports go out on their own clock.
+            .filter(|opcode| *opcode != eq_network_game::movement::history::OPCODE)
             .collect::<Vec<_>>(),
         [0x3bc2, 0x420f, 0x420f, 0x420f, 0x420f]
     );
