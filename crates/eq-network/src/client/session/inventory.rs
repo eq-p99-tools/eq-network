@@ -400,7 +400,15 @@ fn told(update: &InventoryUpdate) -> String {
         InventoryUpdate::DestroyCursor => {
             "a submitted cursor destruction (local prediction)".into()
         }
-        InventoryUpdate::GroundDropPending(_) => "a submitted cursor drop awaiting state".into(),
+        InventoryUpdate::GroundDropProjected(_) => {
+            "a submitted cursor drop (local projection)".into()
+        }
+        InventoryUpdate::GroundDropUncertain(_) => {
+            "an uncertain cursor drop (local projection, stale)".into()
+        }
+        InventoryUpdate::LocalReplica(_) => {
+            "an in-process inventory replica (including local state)".into()
+        }
         InventoryUpdate::Prediction(items) => format!("a prediction for slots {}", slots(items)),
         InventoryUpdate::Consume { slot, charge } => format!(
             "a {} used from slot {}",
@@ -421,7 +429,17 @@ fn told(update: &InventoryUpdate) -> String {
         InventoryUpdate::WorldEmptied => "the world container emptied".to_owned(),
         InventoryUpdate::WorldDetached => "the local world container view was detached".to_owned(),
     };
-    format!("Zone sent an inventory update: {what}")
+    let source = if matches!(
+        update,
+        InventoryUpdate::GroundDropProjected(_)
+            | InventoryUpdate::GroundDropUncertain(_)
+            | InventoryUpdate::LocalReplica(_)
+    ) {
+        "Local inventory state"
+    } else {
+        "Zone sent an inventory update"
+    };
+    format!("{source}: {what}")
 }
 
 /// Changes the inventory and tells the host.
@@ -694,7 +712,7 @@ impl Belongings {
             }))
     }
 
-    /// Submits a drop once and fences custody until received cursor state.
+    /// Submits once, then projects local removal without inventing a receipt.
     fn drop_item(
         request: &eq_network_game::inventory::InventoryDrop,
         world: &mut World,
@@ -716,15 +734,30 @@ impl Belongings {
                 world.coins.carried_coin_count().is_some(),
                 "A cursor drop needs current carried coin information"
             );
-            let serial = world.inventory.plan_ground_drop(request)?;
+            world.inventory.plan_ground_drop(request)?;
             Ok((
-                InventoryUpdate::GroundDropPending(serial),
+                InventoryUpdate::GroundDropProjected(request.into()),
                 out.encode(&Request::DropCursor)?,
             ))
         })();
         let (update, error) = match planned {
             Ok((update, packet)) => {
-                out.send(&packet)?;
+                if let Err(error) = out.send(&packet) {
+                    // Transport failure cannot prove non-delivery. Preserve
+                    // the projected absence, withdraw readiness, and end the
+                    // session without replaying or restoring this instance.
+                    let uncertain = InventoryUpdate::GroundDropUncertain(request.into());
+                    world.inventory.0.apply(uncertain.clone());
+                    out.log
+                        .send(ClientEvent::World(WorldEvent::InventoryAction {
+                            session_id: request.session_id,
+                            revision: request.revision,
+                            sequence: None,
+                            update: Some(uncertain),
+                            error: None,
+                        }))?;
+                    return Err(error);
+                }
                 world.inventory.0.apply(update.clone());
                 (Some(update), None)
             }
@@ -1248,16 +1281,11 @@ impl Feature for Belongings {
         Ok(())
     }
 
-    /// Merchant and cursor drop custody hold the inventory. Ordinary moves
-    /// stay pipelined (`EQMac` 0x422b1c, Titanium 0x51a9a8).
-    fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+    /// Merchant work holds the inventory. Ordinary moves stay pipelined
+    /// (`EQMac` 0x422b1c, Titanium 0x51a9a8).
+    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         if self.trades.active() {
             vec![(Resource::Inventory, "Wait for the merchant to answer")]
-        } else if world.inventory.ground_drop_pending() {
-            vec![(
-                Resource::Inventory,
-                "Wait for a fresh inventory snapshot after the drop",
-            )]
         } else {
             Vec::new()
         }

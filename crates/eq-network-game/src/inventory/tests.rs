@@ -23,9 +23,17 @@ fn projected_cursor_eligibility_keeps_correction_drop_and_trade_fences() {
     assert!(inventory.custody_known(cursor));
 
     let mut drop = inventory.clone();
-    drop.apply(InventoryUpdate::GroundDropPending(NonZeroU32::MIN));
+    let mut item = drop.items()[&cursor].clone();
+    item.rules.ground_drop_serial = Some(NonZeroU32::MIN);
+    drop.apply(InventoryUpdate::Set(vec![item.clone()]));
+    drop.apply(InventoryUpdate::GroundDropProjected(
+        InventoryDropProjection {
+            revision: drop.revision(),
+            item: Box::new(item),
+        },
+    ));
     drop.apply(InventoryUpdate::Settled);
-    assert!(!drop.projected_cursor_empty());
+    assert!(drop.projected_cursor_empty());
 
     // A destroy fences the cursor until the refusal window passes; `EQEmu`
     // accepts one in silence.

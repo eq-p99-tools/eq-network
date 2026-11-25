@@ -2,7 +2,8 @@
 use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
-use std::{num::NonZeroU32, time::Instant};
+use serde::{ser::SerializeSeq, Serialize, Serializer};
+use std::{collections::BTreeMap, num::NonZeroU32, time::Instant};
 
 /// A drop bound to the actor, admission, revision and observed cursor instance.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,6 +18,37 @@ pub struct InventoryDrop {
     pub item: InventoryItem,
     /// When this explicit request was made.
     pub created: Instant,
+}
+
+/// Explicit local projection tied to the submitted inventory and instance.
+/// No object broadcast or elapsed refusal window acknowledges this removal.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct InventoryDropProjection {
+    /// Inventory revision at submission.
+    pub revision: u64,
+    /// Exact item submitted, retaining its verified instance and whole mass.
+    pub item: Box<InventoryItem>,
+}
+
+impl From<&InventoryDrop> for InventoryDropProjection {
+    fn from(request: &InventoryDrop) -> Self {
+        Self {
+            revision: request.revision,
+            item: Box::new(request.item.clone()),
+        }
+    }
+}
+
+/// Diagnostic records are a sequence; compound identity keys are not JSON keys.
+pub(super) fn serialize_dropped<S: Serializer>(
+    dropped: &BTreeMap<(u32, NonZeroU32), InventoryItem>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    let mut records = serializer.serialize_seq(Some(dropped.len()))?;
+    for item in dropped.values() {
+        records.serialize_element(item)?;
+    }
+    records.end()
 }
 
 /// Titanium `eqgame.exe` 0x497bc0 and 0x4bd379 send `OP_GroundSpawn` with
@@ -37,7 +69,7 @@ pub(super) enum CursorBasis {
     Item(NonZeroU32),
 }
 
-/// Slot-only mutations cannot identify a cursor instance during a drop hold.
+/// Slot-only mutations cannot identify the instance after a projected drop.
 pub(super) fn unidentified_cursor_mutation(update: &InventoryUpdate) -> bool {
     match update {
         InventoryUpdate::Remove(slot)
@@ -51,37 +83,147 @@ pub(super) fn unidentified_cursor_mutation(update: &InventoryUpdate) -> bool {
 }
 
 impl Inventory {
-    /// Records submission and withdraws the basis for another cursor action.
-    pub(super) fn hold_ground_drop(&mut self, serial: NonZeroU32) {
-        self.drop_weight = super::weight::DropWeight::start(self);
-        self.ground_drop = Some(serial);
-        self.drop_cursor = CursorBasis::Unknown;
+    /// Locally removes only the submitted instance. A newer received cursor
+    /// record wins, including a same-instance refusal, without a retry.
+    pub(super) fn project_ground_drop(&mut self, projection: InventoryDropProjection) {
+        if self.cursor_revision > projection.revision {
+            return;
+        }
+        let item = *projection.item;
+        let Some(serial) = item.rules.ground_drop_serial else {
+            self.stale = true;
+            return;
+        };
+        if item.slot != InventorySlot::CURSOR || item.bag_slots != 0 || item.augmented() {
+            self.stale = true;
+            return;
+        }
+        let matches = self
+            .items
+            .get(&InventorySlot::CURSOR)
+            .is_some_and(|current| {
+                current.rules.ground_drop_serial == Some(serial)
+                    && InventoryItem::same_slot_contents(Some(current), Some(&item))
+            });
+        self.retain_drop_mass(item);
+        if matches {
+            self.remove(InventorySlot::CURSOR);
+            self.projected_custody
+                .entry(InventorySlot::CURSOR)
+                .or_default()
+                .cursor = true;
+            self.drop_cursor = CursorBasis::Empty;
+        }
     }
 
-    /// Whether this update directly identifies the cursor. A local move can
-    /// invalidate the basis, and settling ordinary moves by silence cannot
-    /// recover it for a subsequent drop.
+    /// An uncertain transport result retains removal and withdraws readiness.
+    pub(super) fn project_uncertain_drop(&mut self, projection: InventoryDropProjection) {
+        self.project_ground_drop(projection);
+        self.stale = true;
+    }
+
+    /// Include a whole locally removed instance once, at its heaviest known
+    /// mass. Unknown identities cannot establish a reusable finite bound.
+    pub(super) fn retain_drop_mass(&mut self, item: InventoryItem) {
+        let Some(serial) = item.rules.ground_drop_serial else {
+            self.drop_mass_unknown = true;
+            return;
+        };
+        let key = (item.details.id, serial);
+        if item.bag_slots != 0
+            || item.augmented()
+            || self.dropped.len() >= 1024 && !self.dropped.contains_key(&key)
+        {
+            self.drop_mass_unknown = true;
+            return;
+        }
+        self.dropped
+            .entry(key)
+            .and_modify(|old| {
+                if old.details.weight_tenths < item.details.weight_tenths {
+                    *old = item.clone();
+                }
+            })
+            .or_insert(item);
+    }
+
+    /// A limbo arrival can still be queued on the server after a drop. A later
+    /// destruction must retain its mass beyond ordinary local settlement.
+    pub(super) fn destroy_with_drop_mass(&mut self) {
+        if self.ground_drop_projected() {
+            if let Some(item) = self.items.get(&InventorySlot::CURSOR).cloned() {
+                self.retain_drop_mass(item);
+            }
+        }
+        self.predict_destruction();
+    }
+
+    /// A received definition of the same instance replaces its shadow mass.
+    /// A queued limbo arrival is not yet a counted carried slot.
+    pub(super) fn cover_dropped_instances(&mut self, update: &InventoryUpdate) {
+        if self.ground_drop_projected() {
+            if let InventoryUpdate::Cursor(items) | InventoryUpdate::Set(items) = update {
+                if items
+                    .first()
+                    .is_some_and(|item| item.slot == InventorySlot::CURSOR)
+                {
+                    let slots: std::collections::BTreeSet<_> =
+                        items.iter().map(|item| item.slot).collect();
+                    if slots.len() != items.len()
+                        || items
+                            .iter()
+                            .skip(1)
+                            .any(|item| !item.slot.is_in_cursor_bag())
+                    {
+                        self.drop_mass_unknown = true;
+                        return;
+                    }
+                }
+            }
+        }
+        let items = match update {
+            InventoryUpdate::Set(items) => items,
+            InventoryUpdate::Cursor(items) if !self.items.contains_key(&InventorySlot::CURSOR) => {
+                items
+            }
+            _ => return,
+        };
+        for item in items {
+            if let Some(serial) = item.rules.ground_drop_serial {
+                self.dropped.remove(&(item.details.id, serial));
+            }
+        }
+    }
+
+    /// Whether this update establishes an explicit received or local cursor
+    /// identity. Local movement does not become a received acknowledgment.
     pub(super) fn observe_drop_cursor(&mut self, update: &InventoryUpdate) -> bool {
         let cursor = InventorySlot::CURSOR;
         match update {
             InventoryUpdate::Snapshot(_) => true,
-            InventoryUpdate::Set(items) => items.first().is_some_and(|item| item.slot == cursor),
-            InventoryUpdate::Remove(slot) => *slot == cursor,
-            InventoryUpdate::Cursor(_) => {
-                self.drop_cursor == CursorBasis::Empty && !self.items().contains_key(&cursor)
-            }
             InventoryUpdate::Prediction(items) => {
                 let before = self.items().get(&cursor);
                 let after = items.iter().find(|item| item.slot == cursor);
                 let serial = |item: Option<&InventoryItem>| {
                     item.and_then(|item| item.rules.ground_drop_serial)
                 };
+                if self.cursor_revision != 0 || serial(before).is_some() || serial(after).is_some()
+                {
+                    return true;
+                }
+                // Preserve the previous conservative basis for inventories
+                // without a verified drop instance, including EQMac inputs.
                 if serial(before) != serial(after)
                     || !InventoryItem::same_slot_contents(before, after)
                 {
                     self.drop_cursor = CursorBasis::Unknown;
                 }
                 false
+            }
+            InventoryUpdate::Set(items) => items.first().is_some_and(|item| item.slot == cursor),
+            InventoryUpdate::Remove(slot) => *slot == cursor,
+            InventoryUpdate::Cursor(_) => {
+                self.drop_cursor == CursorBasis::Empty && !self.items().contains_key(&cursor)
             }
             InventoryUpdate::DestroyCursor | InventoryUpdate::Invalidated => {
                 self.drop_cursor = CursorBasis::Unknown;
@@ -99,7 +241,7 @@ impl Inventory {
         }
     }
 
-    /// Records the result of a received cursor update after queue promotion.
+    /// Records the identified local or received cursor after queue promotion.
     pub(super) fn record_drop_cursor(&mut self) {
         self.drop_cursor = match self.items().get(&InventorySlot::CURSOR) {
             None => CursorBasis::Empty,
@@ -110,19 +252,32 @@ impl Inventory {
         };
     }
 
-    /// Validates one eligible ordinary item at the current received cursor.
+    /// Validates one eligible ordinary item at the current identified cursor.
     ///
     /// # Errors
     /// Refuses stale, predicted, queued or ambiguous inventory, and items
     /// lacking positively identified, droppable Titanium instance data.
     pub fn plan_ground_drop(&self, request: &InventoryDrop) -> Result<NonZeroU32> {
+        let serial = self.check_ground_drop_input(request)?;
+        ensure!(
+            self.drop_cursor == CursorBasis::Item(serial),
+            "Wait for the server to identify the current cursor item"
+        );
+        Ok(serial)
+    }
+
+    /// Checks the current item predicates before an excluded-type world click.
+    /// This does not authorize a submission; [`Self::plan_ground_drop`] also
+    /// requires its historical cursor basis. The native raw predicate remains
+    /// unmapped; positive decoded instance eligibility stays conservative.
+    ///
+    /// # Errors
+    /// Refuses stale/predicted state, changed identity/revision, unknown instance
+    /// eligibility, quantities, cursor contents, queue or carried weight.
+    pub fn check_ground_drop_input(&self, request: &InventoryDrop) -> Result<NonZeroU32> {
         ensure!(
             self.received() && !self.stale() && !self.predicted(),
             "Wait for current received inventory before dropping an item"
-        );
-        ensure!(
-            !self.ground_drop_pending(),
-            "Wait for a fresh inventory snapshot after the drop"
         );
         ensure!(
             self.revision() == request.revision,
@@ -154,11 +309,8 @@ impl Inventory {
             .ground_drop_serial
             .context("The cursor item is not a verified droppable instance")?;
         ensure!(
-            self.drop_cursor == CursorBasis::Item(serial),
-            "Wait for the server to identify the current cursor item"
-        );
-        ensure!(
-            super::weight::DropWeight::start(self).is_some(),
+            self.carried_weight_tenths(crate::GameDialect::Titanium, 0)
+                .is_ok(),
             "A cursor drop needs a current carried item weight"
         );
         Ok(serial)
@@ -215,6 +367,9 @@ mod tests {
         ] {
             inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
             assert!(inventory
+                .check_ground_drop_input(&request(&inventory, item.clone()))
+                .is_err());
+            assert!(inventory
                 .plan_ground_drop(&request(&inventory, item))
                 .is_err());
         }
@@ -235,69 +390,132 @@ mod tests {
     }
 
     #[test]
-    fn cursor_drop_requires_a_snapshot_after_unidentified_cursor_changes() {
-        let item = decoded("17", "255", "0");
-        let replacement = decoded("18", "255", "0");
-        let cursor = InventorySlot::CURSOR;
-        let mut pending = Inventory::default();
-        pending.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
-        let serial = pending
-            .plan_ground_drop(&request(&pending, item.clone()))
-            .unwrap();
-        pending.apply(InventoryUpdate::GroundDropPending(serial));
-        for (updates, displayed, queued) in [
-            (vec![InventoryUpdate::Settled], &item, 0),
-            (
-                vec![InventoryUpdate::Cursor(vec![replacement.clone()])],
-                &item,
-                1,
-            ),
-            (
-                vec![InventoryUpdate::Set(vec![replacement.clone()])],
-                &replacement,
-                0,
-            ),
-            (
-                vec![
-                    InventoryUpdate::Set(vec![replacement.clone()]),
-                    InventoryUpdate::Set(vec![item.clone()]),
-                ],
-                &item,
-                0,
-            ),
-            (
-                vec![InventoryUpdate::Deduct {
-                    slot: cursor,
-                    quantity: 1,
-                }],
-                &item,
-                0,
-            ),
-            (vec![InventoryUpdate::Invalidated], &item, 0),
-        ] {
-            let mut inventory = pending.clone();
-            for update in updates {
-                inventory.apply(update);
-            }
-            assert!(inventory.ground_drop_pending());
-            assert!(inventory
-                .plan_ground_drop(&request(&inventory, displayed.clone()))
-                .is_err());
-            inventory.apply(InventoryUpdate::Remove(cursor));
-            assert!(inventory.stale() && inventory.ground_drop_pending());
-            assert_eq!(inventory.items().get(&cursor), Some(displayed));
-            assert_eq!(inventory.queued().count(), queued);
-            inventory.apply(InventoryUpdate::Snapshot(vec![replacement.clone()]));
-            assert!(!inventory.stale() && !inventory.ground_drop_pending());
-            assert_eq!(inventory.queued().count(), 0);
-            assert_eq!(
-                inventory
-                    .plan_ground_drop(&request(&inventory, replacement.clone()))
-                    .unwrap()
-                    .get(),
-                18
-            );
+    fn checked_input_does_not_authorize_submission_after_unresolved_cursor_history() {
+        let first = decoded("17", "255", "0");
+        let next = decoded("18", "255", "0");
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![first]));
+        inventory.apply(InventoryUpdate::DestroyCursor);
+        inventory.apply(InventoryUpdate::Settled);
+        inventory.apply(InventoryUpdate::Cursor(vec![next.clone()]));
+        let request = request(&inventory, next);
+        assert_eq!(
+            inventory.check_ground_drop_input(&request).unwrap().get(),
+            18
+        );
+        assert_eq!(
+            inventory
+                .plan_ground_drop(&request)
+                .unwrap_err()
+                .to_string(),
+            "Wait for the server to identify the current cursor item"
+        );
+    }
+
+    #[test]
+    fn local_drop_projection_releases_the_cursor_without_a_received_receipt() {
+        let first = decoded("17", "255", "0");
+        let second = decoded("18", "255", "0");
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![first.clone()]));
+        let projection = InventoryDropProjection::from(&request(&inventory, first));
+        inventory.apply(InventoryUpdate::GroundDropProjected(projection));
+        assert!(inventory.ground_drop_projected());
+        assert!(inventory.projected_cursor_empty());
+        assert!(!inventory.custody_known(InventorySlot::CURSOR));
+        assert!(!inventory.predicted());
+        assert_eq!(inventory.items().get(&InventorySlot::CURSOR), None);
+        inventory.apply(InventoryUpdate::Settled);
+        assert!(inventory.ground_drop_projected());
+        inventory.apply(InventoryUpdate::Cursor(vec![second.clone()]));
+        let next = request(&inventory, second.clone());
+        assert_eq!(inventory.plan_ground_drop(&next).unwrap().get(), 18);
+        inventory.apply(InventoryUpdate::GroundDropProjected((&next).into()));
+        assert_eq!(inventory.dropped.len(), 2);
+        assert!(inventory.projected_cursor_empty());
+        let diagnostic = serde_json::to_value(&inventory).unwrap();
+        assert_eq!(diagnostic["dropped"].as_array().unwrap().len(), 2);
+        // Replica replay must retain this as local state, never a fabricated
+        // received empty snapshot or a received drop acknowledgment.
+        let updates = inventory.admission_updates();
+        assert!(matches!(&updates[..], [InventoryUpdate::LocalReplica(_)]));
+        let mut replica = Inventory::default();
+        for update in updates {
+            replica.apply(update);
         }
+        assert_eq!(replica, inventory);
+        inventory.apply(InventoryUpdate::Set(vec![second]));
+        assert_eq!(inventory.dropped.len(), 1);
+        inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+        assert!(!inventory.ground_drop_projected());
+    }
+
+    #[test]
+    fn delayed_projection_respects_covering_cursor_records_but_not_unrelated_slots() {
+        for covering in [false, true] {
+            let item = decoded("17", "255", "0");
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+            let projection = InventoryDropProjection::from(&request(&inventory, item.clone()));
+            let mut update = item;
+            if !covering {
+                update.slot = InventorySlot(24);
+            }
+            inventory.apply(InventoryUpdate::Set(vec![update]));
+            inventory.apply(InventoryUpdate::GroundDropProjected(projection));
+            assert_eq!(
+                inventory.items().contains_key(&InventorySlot::CURSOR),
+                covering
+            );
+            assert_eq!(inventory.ground_drop_projected(), !covering);
+        }
+    }
+
+    #[test]
+    fn uncertain_drop_stays_removed_and_stale_across_silence_without_retry() {
+        let item = decoded("17", "255", "0");
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+        let request = request(&inventory, item);
+        inventory.apply(InventoryUpdate::GroundDropUncertain((&request).into()));
+        inventory.apply(InventoryUpdate::Settled);
+        assert!(inventory.stale() && inventory.ground_drop_projected());
+        assert!(!inventory.items().contains_key(&InventorySlot::CURSOR));
+        assert!(inventory.plan_ground_drop(&request).is_err());
+    }
+
+    #[test]
+    fn slot_only_cursor_mutation_after_projection_withdraws_readiness() {
+        let item = decoded("17", "255", "0");
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+        let request = request(&inventory, item);
+        inventory.apply(InventoryUpdate::GroundDropProjected((&request).into()));
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert!(inventory.stale() && inventory.ground_drop_projected());
+        assert!(inventory.ground_drop_weight_tenths(0).is_some());
+        inventory.apply(InventoryUpdate::Invalidated);
+        assert!(inventory.ground_drop_weight_tenths(0).is_none());
+    }
+
+    #[test]
+    fn invalidation_and_partial_instance_coverage_cannot_restore_a_lighter_fall_estimate() {
+        let item = decoded("17", "255", "0");
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+        let request = request(&inventory, item.clone());
+        inventory.apply(InventoryUpdate::GroundDropProjected((&request).into()));
+        inventory.apply(InventoryUpdate::Invalidated);
+        inventory.apply(InventoryUpdate::Set(vec![item.clone()]));
+        assert!(inventory.stale());
+        // The partial record covers this instance, not the unread inventory.
+        // Keep the drop-specific unknown marker so falls cannot use the
+        // generic estimated-weight fallback after the last shadow retires.
+        assert!(inventory.ground_drop_projected());
+        assert_eq!(inventory.ground_drop_weight_tenths(0), None);
+        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+        assert!(!inventory.ground_drop_projected());
+        assert!(inventory.ground_drop_weight_tenths(0).is_some());
     }
 
     #[test]
@@ -318,17 +536,18 @@ mod tests {
     }
 
     #[test]
-    fn silence_does_not_authorize_a_drop_from_a_projected_cursor() {
+    fn a_locally_moved_received_instance_can_drop_after_ordinary_move_settlement() {
+        let mut item = decoded("17", "255", "0");
+        item.slot = InventorySlot(22);
         let mut inventory = Inventory::default();
-        inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
-        let item = decoded("17", "255", "0");
+        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+        item.slot = InventorySlot::CURSOR;
         inventory.apply(InventoryUpdate::Prediction(vec![item.clone()]));
-        inventory.apply(InventoryUpdate::Settled);
-        assert!(!inventory.predicted());
         assert!(inventory
             .plan_ground_drop(&request(&inventory, item.clone()))
             .is_err());
-        inventory.apply(InventoryUpdate::Set(vec![item.clone()]));
+        inventory.apply(InventoryUpdate::Settled);
+        assert!(!inventory.predicted());
         assert!(inventory
             .plan_ground_drop(&request(&inventory, item))
             .is_ok());
