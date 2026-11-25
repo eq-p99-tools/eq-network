@@ -42,7 +42,12 @@ pub(super) fn stale(
     {
         return Some("That was meant for an earlier zone visit");
     }
-    if matches!(command, ClientCommand::Move(_)) {
+    // A pad completion is fresh for exactly its pending revision, even if
+    // the host frame stalled. Corrections and admission changes cancel it.
+    if matches!(
+        command,
+        ClientCommand::Move(_) | ClientCommand::FinishLocalPad { .. }
+    ) {
         return None;
     }
     let created = command.created()?;
@@ -226,6 +231,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
         | ClientCommand::CrossZoneLine { .. }
+        | ClientCommand::FinishLocalPad { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::FeignLanded { .. }
         | ClientCommand::SendChat(_)
@@ -428,6 +434,9 @@ pub(super) fn refuse_naming(
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
+        ClientCommand::FinishLocalPad { session_id, revision, .. } => WorldEvent::LocalPadRefused {
+            session_id: *session_id, revision: *revision, reason: reason.into(),
+        },
         ClientCommand::Move(request) => crate::client::motion_refused(request, reason),
         ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
             request: request.clone(),
@@ -575,7 +584,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SummonCorpse { session_id, .. }
         | ClientCommand::DragCorpse { session_id, .. }
         | ClientCommand::DropCorpse { session_id, .. }
-        | ClientCommand::CrossZoneLine { session_id, .. } => {
+        | ClientCommand::CrossZoneLine { session_id, .. }
+        => {
             return reasoned(command, *session_id, reason.into());
         }
         ClientCommand::PickUp {

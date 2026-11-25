@@ -999,7 +999,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 151;
+    const KINDS: usize = 152;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1021,6 +1021,7 @@ mod tests {
             ClientCommand::ClickDoor { .. } => 4,
             ClientCommand::PickUp { .. } => 5,
             ClientCommand::CrossZoneLine { .. } => 6,
+            ClientCommand::FinishLocalPad { .. } => 151,
             ClientCommand::ScribeSpell { .. } => 7,
             ClientCommand::DeleteSpell { .. } => 8,
             ClientCommand::ForgetSpell { .. } => 9,
@@ -1282,6 +1283,16 @@ mod tests {
                 session_id,
                 destination: eq_network_game::zoning::ZoneLineDestination::Reference(1),
                 position,
+                created,
+            },
+            ClientCommand::FinishLocalPad {
+                session_id,
+                revision: 1,
+                step: eq_network_game::zoning::PadArrivalStep {
+                    floor: None,
+                    stand_height: 3.75,
+                    vertical_speed: 0.0,
+                },
                 created,
             },
             ClientCommand::ScribeSpell {

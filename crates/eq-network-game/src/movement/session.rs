@@ -398,6 +398,10 @@ pub struct MotionSession {
     gate: Option<UpdateGate>,
     /// The latest accepted sample the gate has not let out yet.
     held: Option<PositionPacket>,
+    /// A pad's raw placement is not a completed physics sample. Keep it
+    /// out of the ordinary gate until its one-shot host observation arrives.
+    pad_arrival: Option<PendingPad>,
+    pad_revision: u64,
     /// The last update sent, without its counter: Titanium's gate sends
     /// only after a change.
     last_update: Option<PositionPacket>,
@@ -427,6 +431,15 @@ struct History {
     /// ground or up and down (a jump in place moves only Z): its frames
     /// wait for the next sample to place them.
     stepping: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingPad {
+    revision: u64,
+    created: Instant,
+    entry: PositionPacket,
+    velocity_scale: f32,
+    rise: f32,
 }
 
 /// What the gate does with an accepted sample.
@@ -734,6 +747,8 @@ impl MotionSession {
             flags: Flags::default(),
             hold: Hold::None,
             history: None,
+            pad_arrival: None,
+            pad_revision: 0,
         })
     }
 
@@ -932,7 +947,7 @@ impl MotionSession {
         created: Instant,
         now: Instant,
         send_entry: impl FnOnce(&PositionPacket) -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         ensure!(
             self.pad_approach(created).is_some() && self.position == pad.entry(),
             "pad entry is no longer current"
@@ -963,6 +978,17 @@ impl MotionSession {
             position: pad.landing(),
             ..still
         };
+        let revision = self
+            .pad_revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("pad revision exhausted"))?;
+        let pending = PendingPad {
+            revision,
+            created,
+            entry,
+            velocity_scale: self.calibration.map_or(0.0, |motion| motion.velocity_scale),
+            rise: self.guard.jump.map_or(0.0, |(speed, _)| speed),
+        };
         landing.check()?;
         entry.check()?;
         send_entry(&entry)?;
@@ -991,9 +1017,103 @@ impl MotionSession {
             sequence: 0,
             ..entry
         });
-        self.held = Some(landing);
+        self.held = None;
+        self.pad_revision = revision;
+        self.pad_arrival = Some(pending);
         self.moving = false;
-        Ok(())
+        Ok(revision)
+    }
+
+    /// Completes the one pending pad floor step, without sending or changing
+    /// the ordinary update deadline/counter. Geometry is the host's claim;
+    /// only this verified pad may use its cached floor outside ordinary climb.
+    ///
+    /// # Errors
+    /// Rejects stale/admission-mismatched/duplicate completions, invalid body
+    /// observations, a floor above the probe and a result outside fixed bounds.
+    /// Refusal leaves a current token unconsumed: a corrected observation can
+    /// retry it. If the host cannot supply one, it must offer disconnect and
+    /// re-entry rather than silently leaving its user in a movement wait.
+    pub fn finish_pad(
+        &mut self,
+        session_id: u64,
+        revision: u64,
+        step: crate::zoning::PadArrivalStep,
+        created: Instant,
+        now: Instant,
+    ) -> Result<crate::zoning::LocalPadCompletion> {
+        ensure!(
+            !self.suspended && session_id == self.guard.session_id,
+            "pad completion outside admission"
+        );
+        let pending = self
+            .pad_arrival
+            .ok_or_else(|| anyhow::anyhow!("no pending pad arrival"))?;
+        ensure!(
+            revision == pending.revision && created >= pending.created && created <= now,
+            "stale pad completion"
+        );
+        ensure!(
+            step.stand_height.is_finite()
+                && step.stand_height > 0.0
+                && step.vertical_speed.is_finite(),
+            "invalid pad body observation"
+        );
+        ensure!(
+            step.floor
+                .is_none_or(|floor| floor.is_finite() && floor <= self.position.z + 1.001),
+            "pad floor is above its probe"
+        );
+        let floor = step
+            .floor
+            .filter(|floor| *floor > self.position.z - step.stand_height);
+        let position = Position {
+            z: floor.map_or(self.position.z, |floor| floor + step.stand_height),
+            ..self.position
+        };
+        ensure!(
+            self.guard
+                .bounds
+                .is_none_or(|bounds| bounds.contains(position)),
+            "pad completion outside movement bounds"
+        );
+        let vertical = if floor.is_some() {
+            0.0
+        } else {
+            step.vertical_speed
+        };
+        ensure!(
+            vertical >= -self.guard.fall_speed && vertical <= pending.rise,
+            "pad vertical speed exceeds preceding motion"
+        );
+        let sample = PositionPacket {
+            position,
+            delta: [
+                pending.entry.delta[0],
+                pending.entry.delta[1],
+                vertical * pending.velocity_scale,
+            ],
+            sequence: 0,
+            ..pending.entry
+        };
+        sample.check()?;
+        let crossing = crate::zoning::LocalPadCrossing {
+            session_id,
+            spawn_id: self.spawn_id,
+            revision,
+            entry: pending.entry.position,
+            landing: self.position,
+        };
+        self.position = position;
+        self.guard.position = position;
+        self.guard.sampled = created;
+        self.guard.input_epoch = created;
+        // Reuse the ordinary bound for a body already rising, from its
+        // measured velocity here. Do not restart a jump or change its rules.
+        self.guard.surfacing = (vertical > 0.0).then_some((created, vertical));
+        self.held = Some(sample);
+        self.pad_arrival = None;
+        Ok(crate::zoning::LocalPadCompletion { crossing, position })
     }
 
     /// When the rider's account with lift `door` began
@@ -1132,6 +1252,7 @@ impl MotionSession {
         now: Instant,
     ) -> Result<PreparedMove<'_>> {
         ensure!(!self.suspended, "movement session is suspended");
+        ensure!(self.pad_arrival.is_none(), "pad arrival physics is pending");
         ensure!(
             request.mode != MovementMode::Fall || self.falls,
             "falling is not enabled for this server"
@@ -1433,6 +1554,14 @@ impl MotionSession {
         if self.suspended {
             return Ok(false);
         }
+        if self.pad_arrival.is_some() {
+            // The normal timer still runs while its sample is unavailable.
+            // Retain its due flag, without releasing the raw pad placement.
+            if let Some(UpdateGate::Flagged { rule, .. }) = self.gate {
+                self.flags.observe_tick(now, &rule);
+            }
+            return Ok(false);
+        }
         if let Some(UpdateGate::Flagged { pack, rule }) = self.gate {
             match (self.hold, rule.frozen_spacing) {
                 (Hold::Frozen, Some(spacing)) => {
@@ -1585,6 +1714,7 @@ impl MotionSession {
             delta_heading: 0,
         }
         .check()?;
+        self.pad_arrival = None;
         // The frames up to the correction were at the old place: nothing is
         // carried across the jump.
         self.record_frames(now, self.position);
@@ -1735,6 +1865,7 @@ impl MotionSession {
 
     /// Stops all position packets after death or transfer; admission creates a new instance.
     pub fn suspend(&mut self) {
+        self.pad_arrival = None;
         self.suspended = true;
         self.clear_grant();
         self.held = None;

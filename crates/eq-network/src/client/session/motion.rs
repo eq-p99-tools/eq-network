@@ -119,9 +119,10 @@ impl Body {
         pad: eq_network_game::zoning::LocalPad,
         created: Instant,
         out: &mut Out<'_, '_>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         use anyhow::Context;
-        self.motion
+        let revision = self
+            .motion
             .as_mut()
             .context("pad entry before movement admission")?
             .cross_pad(pad, created, Instant::now(), |sample| {
@@ -130,7 +131,27 @@ impl Body {
             })?;
         player.position = pad.landing();
         self.place(player.position);
-        Ok(())
+        Ok(revision)
+    }
+
+    /// Finish only the movement owner's current pad, then mirror its origin.
+    pub(super) fn finish_pad(
+        &mut self,
+        player: &mut PlayerState,
+        session_id: u64,
+        revision: u64,
+        step: eq_network_game::zoning::PadArrivalStep,
+        created: Instant,
+    ) -> Result<eq_network_game::zoning::LocalPadCompletion> {
+        use anyhow::Context;
+        let completed = self
+            .motion
+            .as_mut()
+            .context("pad completion before movement admission")?
+            .finish_pad(session_id, revision, step, created, Instant::now())?;
+        player.position = completed.position;
+        self.place(player.position);
+        Ok(completed)
     }
 
     /// The existing movement owner's stop state; None means no such owner.
@@ -2623,6 +2644,7 @@ mod tests {
                     position,
                 }),
                 WorldEvent::LocalPadCrossed(eq_network_game::zoning::LocalPadCrossing {
+                    revision: 1,
                     session_id: 5,
                     spawn_id: 7,
                     entry: position,

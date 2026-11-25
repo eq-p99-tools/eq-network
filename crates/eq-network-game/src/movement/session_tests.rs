@@ -2481,7 +2481,7 @@ fn titanium_counter_records_the_pad_region_and_its_warp() {
         ..entry
     };
     let mut reported = None;
-    motion
+    let revision = motion
         .cross_pad(LocalPad::new(entry, landing), at(400), at(400), |sample| {
             reported = Some(sample.sequence);
             Ok(())
@@ -2490,16 +2490,32 @@ fn titanium_counter_records_the_pad_region_and_its_warp() {
     // 26 frames, the first update's entry, the region's two and the warp's
     // entry at the old place.
     assert_eq!(reported, Some(26 + 1 + 2 + 1));
+    assert!(!motion
+        .tick_sample(at(1301), |_| panic!("raw landing escaped"))
+        .unwrap());
+    motion
+        .finish_pad(
+            11,
+            revision,
+            crate::zoning::PadArrivalStep {
+                floor: None,
+                stand_height: 3.75,
+                vertical_speed: 0.0,
+            },
+            at(1301),
+            at(1301),
+        )
+        .unwrap();
     let mut landed = None;
     assert!(motion
-        .tick_sample(at(700), |sample| {
+        .tick_sample(at(1301), |sample| {
             assert_eq!(sample.position, landing);
             landed = Some(sample.sequence);
             Ok(())
         })
         .unwrap());
-    // 45 frames, and the entry report's own entry and the landing's.
-    assert_eq!(landed, Some(45 + 4 + 2));
+    // 84 frames, and the entry report's own entry and the landing's.
+    assert_eq!(landed, Some(84 + 4 + 2));
 }
 
 pub(super) fn titanium_flagged(start: Instant) -> MotionSession {
@@ -3310,4 +3326,271 @@ fn samples_that_cross_the_water_line_stay_within_the_bound() {
             |_| panic!("a dry rise")
         )
         .is_err());
+}
+
+/// Uses the ordinary Titanium gate and counter, including the explicit old
+/// position update. No custom spacing or invented movement passes.
+fn pending_pad(start: Instant) -> (MotionSession, u64, Position, MotionCalibration) {
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut motion = titanium_flagged(start)
+        .with_counter(crate::movement::TITANIUM_UPDATE_COUNTER)
+        .with_falls(true)
+        .with_airborne_speed(true)
+        .with_jump(Some((44.55, 160.0)));
+    let calibration = motion.calibration().unwrap();
+    motion
+        .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
+        .unwrap();
+    let entry = motion.position();
+    let landing = Position {
+        x: -8.0,
+        y: -394.0,
+        z: 38.0,
+        ..entry
+    };
+    let revision = motion
+        .cross_pad(
+            crate::zoning::LocalPad::new(entry, landing),
+            at(400),
+            at(400),
+            |sample| {
+                assert_eq!(sample.position, entry);
+                assert_eq!(sample.sequence, 30);
+                Ok(())
+            },
+        )
+        .unwrap();
+    // The motion feature retains the known grant at a local crossing.
+    motion.calibrate(calibration, at(400)).unwrap();
+    (motion, revision, landing, calibration)
+}
+
+#[test]
+fn pad_completion_and_due_tick_in_either_order_send_only_the_first_step() {
+    use crate::zoning::PadArrivalStep;
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    for tick_first in [false, true] {
+        let (mut motion, revision, landing, _) = pending_pad(start);
+        let due = motion.last_sent;
+        let counter = motion.counter.value(at(1301));
+        assert!(!motion
+            .tick_sample(at(579), |_| panic!("raw placement escaped"))
+            .unwrap());
+        if tick_first {
+            assert!(!motion
+                .tick_sample(at(1301), |_| panic!("raw placement escaped"))
+                .unwrap());
+        }
+        let completed = motion
+            .finish_pad(
+                11,
+                revision,
+                PadArrivalStep {
+                    floor: Some(38.0),
+                    stand_height: 3.75,
+                    vertical_speed: -12.0,
+                },
+                at(1301),
+                at(1301),
+            )
+            .unwrap();
+        assert_eq!(motion.last_sent, due);
+        assert_eq!(motion.counter.value(at(1301)), counter);
+        assert_eq!(completed.crossing.landing, landing);
+        assert_eq!(
+            completed.position,
+            Position {
+                z: 41.75,
+                ..landing
+            }
+        );
+        assert!(motion
+            .tick_sample(at(1301), |sample| {
+                assert_eq!(sample.position, completed.position);
+                assert_eq!(sample.delta[2].to_bits(), 0.0_f32.to_bits());
+                assert_eq!(sample.sequence, 90);
+                Ok(())
+            })
+            .unwrap());
+        assert!(!motion
+            .tick_sample(at(1302), |_| panic!("duplicate update"))
+            .unwrap());
+        assert!(motion
+            .finish_pad(
+                11,
+                revision,
+                PadArrivalStep {
+                    floor: Some(38.0),
+                    stand_height: 3.75,
+                    vertical_speed: 0.0
+                },
+                at(1302),
+                at(1302)
+            )
+            .is_err());
+    }
+}
+
+#[test]
+fn pad_completion_keeps_the_existing_deadline_when_the_host_finishes_early() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let (mut motion, revision, _, _) = pending_pad(start);
+    motion
+        .finish_pad(
+            11,
+            revision,
+            crate::zoning::PadArrivalStep {
+                floor: Some(38.0),
+                stand_height: 3.75,
+                vertical_speed: 0.0,
+            },
+            at(410),
+            at(410),
+        )
+        .unwrap();
+    assert!(!motion
+        .tick_sample(at(1300), |_| panic!("completion accelerated the gate"))
+        .unwrap());
+    assert!(motion.tick_sample(at(1301), |_| Ok(())).unwrap());
+}
+
+#[test]
+fn refused_current_pad_completion_can_be_corrected_without_resetting_the_gate() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let (mut motion, revision, landing, _) = pending_pad(start);
+    let mut step = crate::zoning::PadArrivalStep {
+        floor: Some(100.0),
+        stand_height: 3.75,
+        vertical_speed: -12.0,
+    };
+    assert!(motion
+        .finish_pad(11, revision, step, at(410), at(410))
+        .is_err());
+    assert_eq!(motion.position(), landing);
+    assert!(!motion
+        .tick_sample(at(1301), |_| panic!("refusal released raw placement"))
+        .unwrap());
+    step.floor = Some(38.0);
+    let completed = motion
+        .finish_pad(11, revision, step, at(410), at(1302))
+        .unwrap();
+    assert!((completed.position.z - 41.75).abs() < f32::EPSILON);
+    assert!(motion
+        .tick_sample(at(1302), |sample| {
+            assert_eq!(sample.position, completed.position);
+            assert_eq!(sample.sequence, 90);
+            Ok(())
+        })
+        .unwrap());
+}
+
+#[test]
+fn pad_completion_rejects_stale_admission_revision_and_superseding_placements() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let step = crate::zoning::PadArrivalStep {
+        floor: Some(38.0),
+        stand_height: 3.75,
+        vertical_speed: 0.0,
+    };
+    let (mut motion, revision, landing, _) = pending_pad(start);
+    for (admission, token, created) in [
+        (12, revision, at(500)),
+        (11, revision + 1, at(500)),
+        (11, revision, at(399)),
+        (11, revision, at(501)),
+    ] {
+        assert!(motion
+            .finish_pad(admission, token, step, created, at(500))
+            .is_err());
+        assert_eq!(motion.position(), landing);
+    }
+    assert!(motion
+        .prepare_move_sample(&request(at(500), -8.0), at(500))
+        .is_err());
+    let correction = Position { z: 50.0, ..landing };
+    motion.correct(correction, at(500)).unwrap();
+    assert!(motion
+        .finish_pad(11, revision, step, at(501), at(501))
+        .is_err());
+    assert_eq!(motion.position(), correction);
+    let (mut motion, revision, _, _) = pending_pad(start);
+    motion.suspend(); // The transfer/death path.
+    assert!(motion
+        .finish_pad(11, revision, step, at(500), at(500))
+        .is_err());
+    let mut readmitted = MotionSession::new(12, 7, landing, at(500)).unwrap();
+    assert!(readmitted
+        .finish_pad(11, revision, step, at(501), at(501))
+        .is_err());
+}
+
+#[test]
+fn pad_above_floor_or_probe_miss_preserves_velocity_then_ordinary_fall_runs() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    for floor in [None, Some(20.0), Some(34.25)] {
+        let (mut motion, revision, landing, _) = pending_pad(start);
+        let completed = motion
+            .finish_pad(
+                11,
+                revision,
+                crate::zoning::PadArrivalStep {
+                    floor,
+                    stand_height: 3.75,
+                    vertical_speed: -12.0,
+                },
+                at(410),
+                at(410),
+            )
+            .unwrap();
+        assert_eq!(completed.position, landing);
+        assert!((motion.held.unwrap().delta[2] + 0.6).abs() < 0.00001);
+        let mut falling = MovementRequest::new(
+            MovementMode::Fall,
+            11,
+            Position { z: 36.8, ..landing },
+            at(510),
+        );
+        falling.vertical_speed = Some(-12.0);
+        motion
+            .send_move_sample(&falling, at(510), |_| {
+                panic!("ordinary deadline accelerated")
+            })
+            .unwrap();
+        assert!(motion
+            .tick_sample(at(581), |sample| {
+                assert_eq!(sample.position, falling.position);
+                Ok(())
+            })
+            .unwrap());
+    }
+}
+
+#[test]
+fn pad_completion_keeps_an_actual_upward_velocity_without_restarting_jump_rules() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let (mut motion, revision, landing, _) = pending_pad(start);
+    let jump = motion.guard.jump;
+    motion
+        .finish_pad(
+            11,
+            revision,
+            crate::zoning::PadArrivalStep {
+                floor: None,
+                stand_height: 3.75,
+                vertical_speed: 8.0,
+            },
+            at(410),
+            at(410),
+        )
+        .unwrap();
+    assert_eq!(motion.guard.jump, jump);
+    assert_eq!(motion.position(), landing);
+    assert!((motion.held.unwrap().delta[2] - 0.4).abs() < 0.00001);
+    assert_eq!(motion.guard.surfacing, Some((at(410), 8.0)));
 }
