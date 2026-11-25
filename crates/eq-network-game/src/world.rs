@@ -1089,6 +1089,19 @@ pub enum WorldEvent {
     SameZoneRelocated(crate::zoning::SameZoneRelocation),
     /// A local WLD pad snap, independent of any received move.
     LocalPadCrossed(crate::zoning::LocalPadCrossing),
+    /// The pending local pad's first physics step was accepted by this
+    /// movement owner, independently of any packet or server acknowledgment.
+    LocalPadCompleted(crate::zoning::LocalPadCompletion),
+    /// A local pad first-step completion was refused; it cannot settle
+    /// another crossing or completion in the same admission.
+    LocalPadRefused {
+        /// Current zone admission.
+        session_id: u64,
+        /// The completion revision that was refused.
+        revision: u64,
+        /// Local validation reason, not a server reply.
+        reason: String,
+    },
     /// Complete indexed spellbook for the current admission.
     SpellBook(crate::spells::SpellBook),
     /// Local progress of a spellbook request, separate from server confirmation.

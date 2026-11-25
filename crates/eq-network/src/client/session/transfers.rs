@@ -374,7 +374,10 @@ impl Feature for Transfers {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(command, ClientCommand::CrossZoneLine { .. })
+        matches!(
+            command,
+            ClientCommand::CrossZoneLine { .. } | ClientCommand::FinishLocalPad { .. }
+        )
     }
 
     /// Crosses the zone line the client found the player on.
@@ -384,6 +387,34 @@ impl Feature for Transfers {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let ClientCommand::FinishLocalPad {
+            session_id,
+            revision,
+            step,
+            created,
+        } = command
+        {
+            let completion = (|| {
+                ensure!(
+                    world.ready() && !world.lifecycle.blocks_motion(),
+                    "pad completion outside active admission"
+                );
+                let player = world
+                    .player
+                    .corrected()
+                    .context("pad completion before admission")?;
+                world
+                    .body
+                    .finish_pad(player, *session_id, *revision, *step, *created)
+            })();
+            match completion {
+                Ok(completed) => {
+                    world.happened(Message::Event(WorldEvent::LocalPadCompleted(completed)));
+                }
+                Err(error) => super::actions::refuse(command, &error.to_string(), out.log)?,
+            }
+            return Ok(());
+        }
         let ClientCommand::CrossZoneLine {
             session_id,
             created,
@@ -399,8 +430,9 @@ impl Feature for Transfers {
                     .player
                     .corrected()
                     .context("pad entry before admission")?;
-                world.body.cross_pad(player, pad, *created, out)?;
+                let revision = world.body.cross_pad(player, pad, *created, out)?;
                 let crossing = zoning::LocalPadCrossing {
+                    revision,
                     session_id: world.session_id,
                     spawn_id: player.spawn_id,
                     entry: pad.entry(),
@@ -813,7 +845,70 @@ mod tests {
         let repeated = testing::run(|out| transfers.handle(&crossing, &mut world, out));
         repeated.result.unwrap();
         assert_eq!(repeated.sent, []);
-        let due = testing::run(|out| world.body.heartbeat(Instant::now(), out));
+        let held = testing::run(|out| world.body.heartbeat(Instant::now(), out));
+        held.result.unwrap();
+        assert!(held.sent.is_empty() && held.unreliable.is_empty());
+        let finish = ClientCommand::FinishLocalPad {
+            session_id: 5,
+            revision: 1,
+            step: zoning::PadArrivalStep {
+                floor: Some(6.0),
+                stand_height: 3.75,
+                vertical_speed: -12.0,
+            },
+            created: Instant::now(),
+        };
+        let invalid = ClientCommand::FinishLocalPad {
+            session_id: 5,
+            revision: 1,
+            step: zoning::PadArrivalStep {
+                floor: Some(100.0),
+                stand_height: 3.75,
+                vertical_speed: -12.0,
+            },
+            created: Instant::now(),
+        };
+        let refused = testing::run(|out| transfers.handle(&invalid, &mut world, out));
+        refused.result.unwrap();
+        assert!(refused.sent.is_empty() && refused.unreliable.is_empty());
+        assert!(refused.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::LocalPadRefused {
+                session_id: 5,
+                revision: 1,
+                ..
+            })
+        )));
+        assert_eq!(world.body.position(), Some(landing));
+        let finished = testing::run(|out| transfers.handle(&finish, &mut world, out));
+        finished.result.unwrap();
+        assert!(finished.sent.is_empty() && finished.unreliable.is_empty());
+        let following = Position { z: 9.75, ..landing };
+        assert_eq!(world.body.position(), Some(following));
+        assert_eq!(world.player.as_ref().unwrap().position, following);
+        assert!(
+            matches!(world.take_news().as_slice(), [Message::Event(WorldEvent::LocalPadCompleted(pad))] if pad.position == following)
+        );
+        let duplicate = testing::run(|out| transfers.handle(&finish, &mut world, out));
+        duplicate.result.unwrap();
+        assert!(duplicate.sent.is_empty() && duplicate.unreliable.is_empty());
+        assert!(matches!(
+            duplicate
+                .events
+                .iter()
+                .find(|event| matches!(event, ClientEvent::World(_))),
+            Some(ClientEvent::World(WorldEvent::LocalPadRefused {
+                session_id: 5,
+                revision: 1,
+                ..
+            }))
+        ));
+        assert_eq!(world.body.position(), Some(following));
+        let due = testing::run(|out| {
+            world
+                .body
+                .heartbeat(start + Duration::from_millis(1400), out)
+        });
         due.result.unwrap();
         assert_eq!(due.sent, []);
         let [packet] = due.unreliable.as_slice() else {
@@ -821,7 +916,8 @@ mod tests {
         };
         assert_eq!(packet.opcode, POSITION_OPCODE);
         assert_eq!(&packet.body[..4], &[7, 0, 2, 0]);
-        assert_eq!(&packet.body[24..28], &landing.x.to_le_bytes());
+        assert_eq!(&packet.body[24..28], &following.x.to_le_bytes());
+        assert_eq!(&packet.body[28..32], &following.z.to_le_bytes());
     }
 
     #[test]

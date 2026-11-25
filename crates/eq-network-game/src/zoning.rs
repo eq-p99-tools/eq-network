@@ -46,18 +46,46 @@ pub struct SameZoneRelocation {
     pub position: Position,
 }
 
-/// A local WLD pad snap after submitting its entry position. The ordinary
+/// A local WLD pad origin assignment after submitting its entry. The ordinary
 /// movement stream will carry the landing. This event reports no server reply.
+/// The host must finish its first physics step with
+/// [`crate::command::GameCommand::FinishLocalPad`]. See that command's retry
+/// and disconnect/re-entry contract; no deadline sends the raw landing.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct LocalPadCrossing {
     /// Current zone admission.
     pub session_id: u64,
     /// The admitted player's spawn ID.
     pub spawn_id: u16,
+    /// Local one-shot completion identity, scoped to this admission.
+    pub revision: u64,
     /// Position submitted on entry.
     pub entry: Position,
     /// Local position after crossing.
     pub landing: Position,
+}
+
+/// The host's single arrival-floor observation and physical vertical speed.
+/// This is local collision state, never a server-confirmed placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PadArrivalStep {
+    /// Floor cached by the origin+1, radius0.1*S pad probe, or a real miss.
+    pub floor: Option<f32>,
+    /// Body origin-to-soles offset S used by that probe.
+    pub stand_height: f32,
+    /// Actual upward-positive speed before the first-step floor rule,
+    /// in world units per second.
+    pub vertical_speed: f32,
+}
+
+/// The movement owner accepted this pad's first physics step locally.
+/// It sends no packet itself; the ordinary update gate owns the next send.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LocalPadCompletion {
+    /// The admission/entry/landing identity that was completed.
+    pub crossing: LocalPadCrossing,
+    /// Actual origin after the first-step floor rule.
+    pub position: Position,
 }
 
 /// A pending destination selected by a server offer or local boundary.

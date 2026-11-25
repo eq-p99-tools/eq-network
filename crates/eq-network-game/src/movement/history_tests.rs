@@ -267,7 +267,7 @@ fn a_pad_crossing_records_the_region_the_warp_the_entry_and_the_landing() {
         ..entry
     };
     let mut reported = None;
-    motion
+    let revision = motion
         .cross_pad(LocalPad::new(entry, landing), at(400), at(400), |sample| {
             reported = Some(sample.sequence);
             Ok(())
@@ -306,14 +306,27 @@ fn a_pad_crossing_records_the_region_the_warp_the_entry_and_the_landing() {
         (landed.x - landing.x).abs() < f32::EPSILON && (landed.z - landing.z).abs() < f32::EPSILON
     );
     // The landing's update next carries the counter after all of them.
+    motion
+        .finish_pad(
+            11,
+            revision,
+            crate::zoning::PadArrivalStep {
+                floor: None,
+                stand_height: 3.75,
+                vertical_speed: 0.0,
+            },
+            at(410),
+            at(410),
+        )
+        .unwrap();
     let mut landed_update = None;
     motion
-        .tick_sample(at(700), |sample| {
+        .tick_sample(at(1301), |sample| {
             landed_update = Some(sample.sequence);
             Ok(())
         })
         .unwrap();
-    assert_eq!(landed_update, Some(45 + 4 + 2));
+    assert_eq!(landed_update, Some(84 + 4 + 2));
 }
 
 #[test]

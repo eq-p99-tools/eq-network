@@ -180,6 +180,13 @@ pub enum GameCommand {
         created: std::time::Instant,
     },
     /// Request a transfer after entering a boundary in the local zone assets.
+    ///
+    /// A same-zone pad emits `WorldEvent::LocalPadCrossed`, not a new zone
+    /// admission. Its host must perform the single arrival probe and submit
+    /// `FinishLocalPad`, then observe `LocalPadCompleted` or `LocalPadRefused`.
+    /// Until completion the session holds ordinary movement updates. Hosts
+    /// without collision/body observations must not initiate local pads;
+    /// if observation fails after crossing, offer disconnect/re-entry.
     CrossZoneLine {
         /// Current zone admission.
         session_id: u64,
@@ -188,6 +195,22 @@ pub enum GameCommand {
         /// Most recently accepted position at the detected boundary.
         position: crate::world::Position,
         /// Stale crossings must not survive pauses or reconnects.
+        created: std::time::Instant,
+    },
+    /// Complete only the pending local pad's first physics step. No update
+    /// is forced; the existing movement gate retains its ordinary deadline.
+    /// A refusal does not consume a still-current revision: correct the
+    /// rejected observation and resubmit, or disconnect/re-enter if the host
+    /// cannot supply it. A correction, death or rezone cancels the revision;
+    /// do not retry it after that cancellation.
+    FinishLocalPad {
+        /// Current zone admission.
+        session_id: u64,
+        /// Revision supplied by that admission's `LocalPadCrossed` event.
+        revision: u64,
+        /// The single actual arrival-floor observation and body state.
+        step: crate::zoning::PadArrivalStep,
+        /// Host observation time; stale completions cannot move a new owner.
         created: std::time::Instant,
     },
     /// Scribe the scroll held on the cursor into an empty book slot.
@@ -1484,6 +1507,7 @@ impl GameCommand {
             Self::OpenContainer { .. } => "OpenContainer",
             Self::CloseContainer { .. } => "CloseContainer",
             Self::CrossZoneLine { .. } => "CrossZoneLine",
+            Self::FinishLocalPad { .. } => "FinishLocalPad",
             Self::ScribeSpell { .. } => "ScribeSpell",
             Self::DeleteSpell { .. } => "DeleteSpell",
             Self::ForgetSpell { .. } => "ForgetSpell",
@@ -1654,6 +1678,7 @@ impl GameCommand {
             | Self::OpenContainer { session_id, .. }
             | Self::CloseContainer { session_id, .. }
             | Self::CrossZoneLine { session_id, .. }
+            | Self::FinishLocalPad { session_id, .. }
             | Self::ScribeSpell { session_id, .. }
             | Self::DeleteSpell { session_id, .. }
             | Self::ForgetSpell { session_id, .. }
@@ -1829,7 +1854,7 @@ impl GameCommand {
             Self::ArrivalPlacement { .. } => Capability::BoatRiding,
             Self::ClickDoor { .. } | Self::DoorRadii { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
-            Self::CrossZoneLine { .. } => Capability::Zoning,
+            Self::CrossZoneLine { .. } | Self::FinishLocalPad { .. } => Capability::Zoning,
             Self::SetPosture { .. } | Self::FeignLanded { .. } => Capability::Posture,
             Self::Move(_)
             | Self::ConfigureMotion { .. }
@@ -2063,6 +2088,7 @@ impl GameCommand {
             | Self::OpenContainer { created, .. }
             | Self::CloseContainer { created, .. }
             | Self::CrossZoneLine { created, .. }
+            | Self::FinishLocalPad { created, .. }
             | Self::ScribeSpell { created, .. }
             | Self::DeleteSpell { created, .. }
             | Self::ForgetSpell { created, .. }
@@ -2305,6 +2331,7 @@ pub fn encode(
         | GameCommand::ClimbReach { .. }
         | GameCommand::DoorRadii { .. }
         | GameCommand::CrossZoneLine { .. }
+        | GameCommand::FinishLocalPad { .. }
         | GameCommand::Consume { .. }
         | GameCommand::ApplyPoison { .. }
         | GameCommand::ChatChannel { .. }
