@@ -1292,7 +1292,7 @@ fn a_fast_fall_keeps_its_sign_on_each_generations_wire() {
 }
 /// A session that sends the host's speed in the air, with the read jump
 /// and the fall limit at the default gravity, as a zone session sets them.
-fn airborne(start: Instant) -> MotionSession {
+pub(super) fn airborne(start: Instant) -> MotionSession {
     setup(start)
         .with_falls(true)
         .with_airborne_speed(true)

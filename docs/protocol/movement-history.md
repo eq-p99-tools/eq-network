@@ -46,7 +46,7 @@ counter's value when it was recorded):
 
 | Cause | When | Height | Label |
 |---|---|---|---|
-| 1 | Each frame the counter counts (65 a second). A moving player's frames are placed along the step between the host's samples; standing, they are at the player's place | Z + L | [R] `0x48a7f9`; [C] about 66 a second moving; placement [I] |
+| 1 | Each frame the counter counts (65 a second). A moving player's frames, a jump's rise and fall included, are placed along the step between the host's samples; standing, they are at the player's place | Z + L | [R] `0x48a7f9`; [C] about 66 a second moving; placement [I] |
 | 1, repeated | A frame at the place of the last frame written is consumed, not written; its sequence still goes by | | [R] `0x4b6f1f`; [C] standing reports carry no frames |
 | 2 | Each position update sent, after the update copied the counter: the record's sequence is the update's offset 2 | Z + L | [R] `0x4ac5bc`, `0x4ac76a`; [C] 261 of 261 |
 | 4, 5, 1, 2, 3 | A same-zone pad crossing: the region's two entries and the warp's frame at the old place, the entry update, then the landing | 4, 5 and 3 without L; 1 and 2 with L | [R] `0x48b60e`, `0x48b647`, `0x48aaa6`, `0x48ac4b`; 4 and 5 height [I] |

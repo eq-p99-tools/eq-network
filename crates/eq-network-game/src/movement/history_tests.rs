@@ -1,6 +1,6 @@
 //! The movement session's history (row 6.653): what it records, in which
 //! order, and when it reports.
-use super::tests::{request, titanium_flagged};
+use super::tests::{airborne, request, titanium_flagged};
 use super::*;
 use crate::movement::history::{Cause, Record, LIFT, RECORD_LEN};
 use crate::movement::TITANIUM_UPDATE_COUNTER;
@@ -314,4 +314,44 @@ fn a_pad_crossing_records_the_region_the_warp_the_entry_and_the_landing() {
         })
         .unwrap();
     assert_eq!(landed_update, Some(45 + 4 + 2));
+}
+
+#[test]
+fn a_jump_in_place_records_every_frame_of_its_rise_and_fall() {
+    // Straight up and down: only Z moves, and the frames between the
+    // host's samples still wait for the next one to place them.
+    let start = Instant::now();
+    let mut motion = airborne(start)
+        .with_gate(Some(crate::movement::UpdateGate::Flagged {
+            pack: |sample| sample.packet(),
+            rule: crate::movement::TITANIUM_FLAGS,
+        }))
+        .with_counter(TITANIUM_UPDATE_COUNTER)
+        .with_history(true);
+    let heights = [2.0, 3.6, 4.6, 5.0, 4.6, 3.6, 2.0, 0.0];
+    let take_off = 1000;
+    let (_, mut reports) = run(&mut motion, start, 0..take_off, |_, _| None);
+    motion.jumped();
+    let (_, airborne_reports) = run(&mut motion, start, take_off..4000, |step, now| {
+        let index = usize::try_from((step - take_off) / 100).ok()?;
+        let z = *heights
+            .get(index)
+            .filter(|_| step % 100 == 0 && step > take_off)?;
+        let mut request = request(now, 0.0);
+        request.mode = MovementMode::Fall;
+        request.position.z = z;
+        Some(request)
+    });
+    reports.extend(airborne_reports);
+    let airborne: Vec<Record> = reports
+        .into_iter()
+        .flat_map(|(_, report)| report)
+        .filter(|record| record.cause == Cause::Collision && record.z > LIFT + 0.01)
+        .collect();
+    // About 65 frames a second over the 0.65 s above the take-off's lift.
+    assert!(airborne.len() >= 38, "{} frames in the air", airborne.len());
+    let rising = airborne
+        .windows(2)
+        .filter(|pair| pair[1].sequence == pair[0].sequence + 1);
+    assert!(rising.count() >= airborne.len() - 4);
 }
