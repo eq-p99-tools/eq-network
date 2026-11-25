@@ -2,6 +2,7 @@
 use super::{
     counter::{Counter, UpdateCounter},
     gate::{FlagRule, Flags, Hold, UpdateGate},
+    history::{causes, Recorder},
     DiagonalRates, HeadingUpdate, MovementGuard, MovementMode, MovementRequest, PositionPacket,
     JUMP_OPCODE,
 };
@@ -404,6 +405,24 @@ pub struct MotionSession {
     flags: Flags,
     /// The server's hold on the player ([`Self::set_hold`]).
     hold: Hold,
+    /// The player's movement history, where this admission reports it
+    /// ([`Self::with_history`]).
+    history: Option<History>,
+}
+
+/// How long a moving player's frames wait for the host's next sample before
+/// the history records them where the player is (inferred: the host's
+/// longest movement cycle).
+const FRAMES_WAIT: Duration = Duration::from_millis(250);
+
+/// The movement history one admission keeps: every entry the counter
+/// counts is offered to its recorder, so a record's sequence is the
+/// counter's value as it was recorded.
+#[derive(Debug, Default)]
+struct History {
+    recorder: Recorder,
+    /// The frames already offered.
+    frames: u64,
 }
 
 /// What the gate does with an accepted sample.
@@ -443,15 +462,19 @@ impl PreparedMove<'_> {
         match release {
             Release::Send => {
                 send(&sample)?;
+                owner.record_frames(now, sample.position);
                 owner.held = None;
                 owner.last_sent = now;
-                owner.counter.sent(sample.sequence);
+                owner.record_update(&sample, now);
                 owner.last_update = Some(PositionPacket {
                     sequence: 0,
                     ..sample
                 });
             }
-            Release::Hold => owner.held = Some(sample),
+            Release::Hold => {
+                owner.record_frames(now, sample.position);
+                owner.held = Some(sample);
+            }
         }
         owner.flags = flags;
         owner.guard = guard;
@@ -566,8 +589,11 @@ impl MotionSession {
     /// Numbers the player's own updates as the client generation's program
     /// does ([`UpdateCounter`]), counting from this admission.
     #[must_use]
-    pub const fn with_counter(mut self, rule: UpdateCounter) -> Self {
+    pub fn with_counter(mut self, rule: UpdateCounter) -> Self {
         self.counter = self.counter.with_rule(rule);
+        if !self.counter.counts_frames() {
+            self.history = None;
+        }
         self
     }
 
@@ -698,6 +724,7 @@ impl MotionSession {
             last_update: None,
             flags: Flags::default(),
             hold: Hold::None,
+            history: None,
         })
     }
 
@@ -933,7 +960,21 @@ impl MotionSession {
 
         // The 0x48aaa6 branch submits entry outside the ordinary gate.
         // Keep the existing periodic deadline for the landing or movement from it.
+        let (here, base) = (self.position, self.counter.value(now));
         self.correct(landing.position, now)?;
+        // The history keeps the same entries in the same order: the region's
+        // two at the old place (without the lift, inferred), the warp's frame
+        // there, the entry update, and the landing.
+        self.record_entry(causes::ZONE_LINE, here, base, now);
+        self.record_entry(causes::SAME_ZONE, here, base.wrapping_add(1), now);
+        self.record_entry(causes::FRAME, here, base.wrapping_add(2), now);
+        self.record_entry(causes::UPDATE, entry.position, entry.sequence, now);
+        self.record_entry(
+            causes::LANDING,
+            landing.position,
+            entry.sequence.wrapping_add(1),
+            now,
+        );
         counter.sent(entry.sequence);
         counter.after_warp();
         self.counter = counter;
@@ -1400,7 +1441,7 @@ impl MotionSession {
             };
             send(&sample)?;
             self.held = None;
-            self.counter.sent(sample.sequence);
+            self.record_update(&sample, now);
             self.last_sent = now;
             self.last_update = Some(PositionPacket {
                 sequence: 0,
@@ -1424,7 +1465,7 @@ impl MotionSession {
         };
         sample.check()?;
         send(&sample)?;
-        self.counter.sent(sample.sequence);
+        self.record_update(&sample, now);
         self.last_sent = now;
         self.moving = false;
         self.last_update = Some(PositionPacket {
@@ -1510,7 +1551,7 @@ impl MotionSession {
         if released {
             send(&candidate)?;
             self.held = None;
-            self.counter.sent(candidate.sequence);
+            self.record_update(&candidate, now);
             self.last_sent = now;
             self.last_update = Some(PositionPacket {
                 sequence: 0,
@@ -1535,6 +1576,9 @@ impl MotionSession {
             delta_heading: 0,
         }
         .check()?;
+        // The frames up to the correction were at the old place: nothing is
+        // carried across the jump.
+        self.record_frames(now, self.position);
         self.position = position;
         self.previous_position = None;
         self.guard.correct(position, now);
@@ -1543,6 +1587,137 @@ impl MotionSession {
         // where the server put them.
         self.hold_stop();
         Ok(())
+    }
+
+    /// Keeps the player's movement history for reports (row 6.653) when
+    /// `enabled`, under the history-entry counter only: call it after
+    /// [`Self::with_counter`]. Recording or not, the counter counts the same.
+    #[must_use]
+    pub fn with_history(mut self, enabled: bool) -> Self {
+        self.history = (enabled && self.counter.counts_frames()).then(History::default);
+        self
+    }
+
+    /// Whether this admission keeps a movement history to report.
+    #[must_use]
+    pub const fn keeps_history(&self) -> bool {
+        self.history.is_some()
+    }
+
+    /// Stops keeping the movement history and drops what is queued, for good
+    /// in this admission: where the server's validation exchange was made,
+    /// the history is never reported (6.369).
+    pub fn end_history(&mut self) {
+        self.history = None;
+    }
+
+    /// Records dropped from the history's queue for its bound since the last
+    /// call ([`super::history::QUEUE_BOUND`]).
+    pub fn take_dropped_history(&mut self) -> u64 {
+        self.history
+            .as_mut()
+            .map_or(0, |history| history.recorder.take_dropped())
+    }
+
+    /// Sends the movement history report due at `now`: once the oldest
+    /// queued record is a second old, or at once when `forced` (the flush
+    /// before a zone change, 0x4ab056). Never an empty one. The records
+    /// leave the queue only after `send` succeeds. True when one went out.
+    ///
+    /// # Errors
+    /// Propagates whatever `send` returns, keeping the records queued.
+    pub fn report_history(
+        &mut self,
+        now: Instant,
+        forced: bool,
+        send: impl FnOnce(&EncodedCommand) -> Result<()>,
+    ) -> Result<bool> {
+        // A moving player's frames wait for the host's next sample, which
+        // places them along the step; only a host that has stopped sending
+        // leaves them where the player is.
+        if forced
+            || !self.moving
+            || now.saturating_duration_since(self.guard.sampled) >= FRAMES_WAIT
+        {
+            self.record_frames(now, self.position);
+        }
+        let Some(history) = self.history.as_mut() else {
+            return Ok(false);
+        };
+        let Some((report, count)) = history.recorder.report(now, forced) else {
+            return Ok(false);
+        };
+        send(&report)?;
+        history.recorder.reported(count);
+        Ok(true)
+    }
+
+    /// Offers the frames counted by `now` to the history (cause 1, 0x48a7f9),
+    /// the player moving from the current position to `to` across them.
+    /// The program records its actor's place each frame it draws; this
+    /// client spreads the frames evenly along the step (inferred).
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::float_cmp,
+        reason = "Frame counts between two samples are small; an unmoved step is exact"
+    )]
+    fn record_frames(&mut self, now: Instant, to: Position) {
+        let counter = self.counter;
+        let from = self.position;
+        let Some(history) = self.history.as_mut() else {
+            return;
+        };
+        let Some(frames) = counter
+            .frames(now)
+            .filter(|frames| *frames > history.frames)
+        else {
+            return;
+        };
+        let first = history.frames;
+        history.frames = frames;
+        if (from.x, from.y, from.z) == (to.x, to.y, to.z) {
+            // Every frame is at one place: the first may be written, and the
+            // rest are its duplicates, consumed with their sequences.
+            history.recorder.record(
+                causes::FRAME,
+                to,
+                counter.frame_sequence(first),
+                counter.frame_at(first),
+            );
+            return;
+        }
+        let span = (frames - first) as f32;
+        for frame in first..frames {
+            let along = (frame - first + 1) as f32 / span;
+            let position = Position {
+                x: from.x + (to.x - from.x) * along,
+                y: from.y + (to.y - from.y) * along,
+                z: from.z + (to.z - from.z) * along,
+                heading: to.heading,
+            };
+            history.recorder.record(
+                causes::FRAME,
+                position,
+                counter.frame_sequence(frame),
+                counter.frame_at(frame),
+            );
+        }
+    }
+
+    /// Offers one entry other than a frame to the history.
+    fn record_entry(&mut self, cause: u8, position: Position, sequence: u16, now: Instant) {
+        if let Some(history) = self.history.as_mut() {
+            history.recorder.record(cause, position, sequence, now);
+        }
+    }
+
+    /// An update went out: the history records it (cause 2, 0x4ac5bc and
+    /// 0x4ac76a) after the update copied the counter, and the counter
+    /// counts it.
+    fn record_update(&mut self, sample: &PositionPacket, now: Instant) {
+        self.record_frames(now, self.position);
+        self.record_entry(causes::UPDATE, sample.position, sample.sequence, now);
+        self.counter.sent(sample.sequence);
     }
 
     /// Stops all position packets after death or transfer; admission creates a new instance.
@@ -1558,6 +1733,9 @@ impl MotionSession {
 #[path = "carrier_tests.rs"]
 mod carrier_tests;
 
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;
 #[cfg(test)]
 #[path = "lift_tests.rs"]
 mod lift_tests;

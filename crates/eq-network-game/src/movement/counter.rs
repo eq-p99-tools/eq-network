@@ -7,16 +7,17 @@
 //! (0x4b70db): one for the player's own spawn on every frame (cause 1), one
 //! at every update sent (cause 2) and the warp's entries. It is reset to 0
 //! as collection starts at zone entry, after the zone-change flush and when
-//! the player's own spawn is created (0x4b6ef8). This crate sends no
-//! history packet (the per-frame history sender is gated off on public
-//! servers by our policy), and the counter counts regardless.
+//! the player's own spawn is created (0x4b6ef8). Each entry it counts is
+//! also offered to the movement history ([`super::history::Recorder`]),
+//! which the session reports where the server takes them (row 6.653); the
+//! counter counts regardless.
 //!
 //! The program's spell paths record entries too (causes 3, 7 and 8 at
 //! 0x415445, 0x415d65, 0x415ec3 and 0x48ba54). Their triggers in our
 //! session are unread, so they are left out (recording checklist item 6.420).
 //!
 //! `EQMac`'s update counter is unread, so it keeps one more per update.
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// How a client generation numbers the player's own updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,8 +31,8 @@ pub enum UpdateCounter {
         /// entry on. The program records one each frame it draws, so its
         /// rate is the machine's frame rate; the number here is the rate a
         /// recording of the official client shows (inferred, recording
-        /// checklist item 6.420). When a history sender comes, a frame
-        /// count the client supplies replaces this rate.
+        /// checklist item 6.420). The history's frame records (cause 1)
+        /// follow the same rate, so their sequences and the counter agree.
         frames_per_second: u32,
     },
 }
@@ -87,6 +88,39 @@ impl Counter {
                 frames.wrapping_add(self.entries)
             }
         }
+    }
+
+    /// Whether the counter counts frames ([`UpdateCounter::HistoryEntries`]).
+    pub(super) const fn counts_frames(&self) -> bool {
+        matches!(self.rule, UpdateCounter::HistoryEntries { .. })
+    }
+
+    /// How many frames have been counted by `now`, under
+    /// [`UpdateCounter::HistoryEntries`]; None under the other rule.
+    pub(super) fn frames(&self, now: Instant) -> Option<u64> {
+        let UpdateCounter::HistoryEntries { frames_per_second } = self.rule else {
+            return None;
+        };
+        let elapsed = now.saturating_duration_since(self.since).as_nanos();
+        let frames = elapsed * u128::from(frames_per_second) / 1_000_000_000;
+        Some(u64::try_from(frames).unwrap_or(u64::MAX))
+    }
+
+    /// When frame `frame` was counted, under
+    /// [`UpdateCounter::HistoryEntries`].
+    pub(super) fn frame_at(&self, frame: u64) -> Instant {
+        let UpdateCounter::HistoryEntries { frames_per_second } = self.rule else {
+            return self.since;
+        };
+        let nanos = u128::from(frame) * 1_000_000_000 / u128::from(frames_per_second.max(1));
+        self.since + Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+
+    /// The counter's value at frame `frame`, with the entries recorded so
+    /// far: the sequence that frame's own record carries.
+    pub(super) fn frame_sequence(&self, frame: u64) -> u16 {
+        let frames = u16::try_from(frame & 0xffff).unwrap_or_default();
+        frames.wrapping_add(self.entries)
     }
 
     /// An update carrying `value` went out: the history records its entry

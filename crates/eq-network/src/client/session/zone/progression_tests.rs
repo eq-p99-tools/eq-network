@@ -35,6 +35,9 @@ impl Visit {
         world.own_spawn = Some(7);
         world.zone = (4, 0);
         world.admitted = Some(Instant::now());
+        // A P99 zone admission makes the validation exchange before the player
+        // is admitted, which keeps the movement history closed (6.369).
+        world.validated = matches!(protocol, ServerProtocol::Project1999);
         let admission = testing::run(|out| {
             features.admitted(&mut world, out)?;
             settle(&mut features, &mut world, out, true)

@@ -99,10 +99,15 @@ pub(super) trait Wire: Sync {
         None
     }
 
-    /// How the generation's client numbers the player's own updates. A
-    /// per-generation constant today; a client-supplied frame count
-    /// replaces Titanium's fixed rate when a history sender comes.
+    /// How the generation's client numbers the player's own updates, a
+    /// per-generation constant.
     fn update_counter(&self) -> eq_network_game::movement::UpdateCounter;
+
+    /// Whether the generation's client reports its movement history
+    /// (Titanium's 0x6a1b, row 6.653); none where it is unread.
+    fn sends_movement_history(&self) -> bool {
+        false
+    }
 
     /// How long the generation's client waits after its logout before it
     /// closes the zone connection itself, reply or not; none where unread.
@@ -265,6 +270,10 @@ impl Wire for Titanium {
 
     fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
         eq_network_game::movement::TITANIUM_UPDATE_COUNTER
+    }
+
+    fn sends_movement_history(&self) -> bool {
+        true
     }
 
     fn speeds(&self) -> Option<SpeedRule> {

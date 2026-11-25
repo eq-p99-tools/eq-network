@@ -172,6 +172,10 @@ impl Out<'_, '_> {
 }
 
 /// What the zone's features share.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent facts about one admission, each its own owner's"
+)]
 pub(in crate::client) struct World {
     /// This admission's session, which host commands must name.
     pub(super) session_id: u64,
@@ -200,6 +204,10 @@ pub(in crate::client) struct World {
     pub(super) coins: Ledger,
     /// The player's spawn ID, from the zone's first spawn record for them.
     pub(super) own_spawn: Option<u16>,
+    /// Whether this zone admission made the server's validation exchange
+    /// (0x1251). Where it did, the movement history is never reported
+    /// (6.369); set once, and never undone within the admission.
+    pub(super) validated: bool,
     /// Whether the player is in a group, as the group feature follows it;
     /// only that feature changes it.
     pub(super) grouped: bool,
@@ -292,6 +300,7 @@ impl World {
             inventory: Carried::default(),
             coins: Ledger::default(),
             own_spawn: None,
+            validated: false,
             grouped: false,
             posture: OwnPosture::default(),
             attacking: false,
