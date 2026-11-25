@@ -423,6 +423,10 @@ struct History {
     recorder: Recorder,
     /// The frames already offered.
     frames: u64,
+    /// Whether the latest accepted sample moved the player, along the
+    /// ground or up and down (a jump in place moves only Z): its frames
+    /// wait for the next sample to place them.
+    stepping: bool,
 }
 
 /// What the gate does with an accepted sample.
@@ -449,6 +453,7 @@ impl PreparedMove<'_> {
     /// A checked candidate is accepted only here: held candidates
     /// commit locally, and an immediate send commits after its callback succeeds.
     /// External callback side effects are never rolled back by this owner.
+    #[allow(clippy::float_cmp, reason = "An unmoved sample is exact")]
     fn submit(self, send: impl FnOnce(&PositionPacket) -> Result<()>) -> Result<()> {
         let Self {
             owner,
@@ -481,6 +486,10 @@ impl PreparedMove<'_> {
         let sampled = owner.guard.sampled;
         owner.earlier.retain(|(until, _)| *until > sampled);
         owner.previous_position = Some(owner.position);
+        if let Some(history) = owner.history.as_mut() {
+            let (from, to) = (owner.position, sample.position);
+            history.stepping = (from.x, from.y, from.z) != (to.x, to.y, to.z);
+        }
         owner.position = sample.position;
         owner.moving = moving;
         Ok(())
@@ -1579,6 +1588,9 @@ impl MotionSession {
         // The frames up to the correction were at the old place: nothing is
         // carried across the jump.
         self.record_frames(now, self.position);
+        if let Some(history) = self.history.as_mut() {
+            history.stepping = false;
+        }
         self.position = position;
         self.previous_position = None;
         self.guard.correct(position, now);
@@ -1633,12 +1645,13 @@ impl MotionSession {
         send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<bool> {
         // A moving player's frames wait for the host's next sample, which
-        // places them along the step; only a host that has stopped sending
-        // leaves them where the player is.
-        if forced
-            || !self.moving
-            || now.saturating_duration_since(self.guard.sampled) >= FRAMES_WAIT
-        {
+        // places them along the step, a jump's rise and fall included; only
+        // a host that has stopped sending leaves them where the player is.
+        let stepping = self
+            .history
+            .as_ref()
+            .is_some_and(|history| history.stepping);
+        if forced || !stepping || now.saturating_duration_since(self.guard.sampled) >= FRAMES_WAIT {
             self.record_frames(now, self.position);
         }
         let Some(history) = self.history.as_mut() else {
