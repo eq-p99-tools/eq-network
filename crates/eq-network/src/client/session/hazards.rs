@@ -465,8 +465,13 @@ mod tests {
         let serial = NonZeroU32::new(17).unwrap();
         let mut item = testing::item(InventorySlot::CURSOR.0);
         item.rules.ground_drop_serial = Some(serial);
-        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
-        inventory.apply(InventoryUpdate::GroundDropPending(serial));
+        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+        inventory.apply(InventoryUpdate::GroundDropProjected(
+            eq_network_game::inventory::InventoryDropProjection {
+                revision: inventory.revision(),
+                item: Box::new(item),
+            },
+        ));
         let mut world = World::new(5);
         world.inventory = inventory.into();
         let mut feature = Hazards::new(&[Hazard::Falling], false);
@@ -486,7 +491,7 @@ mod tests {
                 hazards::titanium_damage_record(7, Hazard::Falling, 160).unwrap(),
             ]
         );
-        assert!(world.inventory.ground_drop_pending());
+        assert!(world.inventory.ground_drop_projected());
     }
 
     #[test]

@@ -179,7 +179,9 @@ impl Inventory {
             | InventoryUpdate::BandageStockUncertain(_)
             | InventoryUpdate::Prediction(_)
             | InventoryUpdate::DestroyCursor
-            | InventoryUpdate::GroundDropPending(_)
+            | InventoryUpdate::GroundDropProjected(_)
+            | InventoryUpdate::GroundDropUncertain(_)
+            | InventoryUpdate::LocalReplica(_)
             | InventoryUpdate::Cursor(_)
             | InventoryUpdate::Consume { .. } => true,
             InventoryUpdate::Set(items) => items.first().is_none_or(|root| {

@@ -26,7 +26,7 @@ pub use eqmac::{
     move_item as eqmac_move, takp_item_hit_points, EqMacItemRules, EqMacStackFlag,
     ItemHitPointCount, ItemRules, UnsettledItem, Wearer,
 };
-pub use ground_drop::{titanium_ground_drop, InventoryDrop};
+pub use ground_drop::{titanium_ground_drop, InventoryDrop, InventoryDropProjection};
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
 pub use weight::{WeightUnavailable, MAX_CARRIED_WEIGHT};
@@ -357,9 +357,13 @@ pub enum InventoryUpdate {
     /// Local whole-cursor removal after a successful destroy submission. It
     /// remains uncertain across silence settlement; only received state settles it.
     DestroyCursor,
-    /// A drop was submitted for this cursor instance. A fresh inventory
-    /// snapshot is required to resolve its custody.
-    GroundDropPending(NonZeroU32),
+    /// Local whole-cursor removal after submission, not a received item receipt.
+    GroundDropProjected(InventoryDropProjection),
+    /// Submission may have reached the server. Keep the local removal and
+    /// withdraw inventory readiness; never retry or restore it automatically.
+    GroundDropUncertain(InventoryDropProjection),
+    /// An in-process replica, preserving local predictions as local state.
+    LocalReplica(Box<Inventory>),
     /// One server-reported stack unit or charge consumed.
     Consume {
         /// Slot affected by the server.
@@ -476,9 +480,16 @@ pub struct Inventory {
     /// until a covering record, a snapshot or the refusal window: `EQEmu`
     /// accepts a destroy in silence and refuses one by resending the cursor.
     destroyed: Option<InventoryItem>,
-    ground_drop: Option<NonZeroU32>,
+    /// Whole instance mass retained independently of projected placement.
+    #[serde(serialize_with = "ground_drop::serialize_dropped")]
+    dropped: BTreeMap<(u32, NonZeroU32), InventoryItem>,
     #[serde(skip)]
-    drop_weight: Option<weight::DropWeight>,
+    drop_mass_unknown: bool,
+    /// A slot-only reduction may make placement stale without increasing mass.
+    #[serde(skip)]
+    drop_fall_bound: Option<u64>,
+    #[serde(skip)]
+    cursor_revision: u64,
     #[serde(skip)]
     drop_cursor: ground_drop::CursorBasis,
 }
@@ -535,10 +546,11 @@ impl Inventory {
         Some(light)
     }
 
-    /// Whether a submitted drop still awaits a fresh inventory snapshot.
+    /// Whether the view includes locally removed, unconfirmed drop custody.
+    /// This retains mass evidence; it is not an action lock or a receipt.
     #[must_use]
-    pub const fn ground_drop_pending(&self) -> bool {
-        self.ground_drop.is_some()
+    pub fn ground_drop_projected(&self) -> bool {
+        !self.dropped.is_empty() || self.drop_mass_unknown
     }
 
     /// Whether a slot has escaped projection since its last covering record.
@@ -556,7 +568,6 @@ impl Inventory {
         self.received()
             && !self.stale()
             && self.destroyed.is_none()
-            && !self.ground_drop_pending()
             && !self.cursor_projection_blocked
             && self.trade_cursor == TradeCursor::Clear
             && self.queued.is_empty()
@@ -735,19 +746,54 @@ impl Inventory {
 
     /// Applies a fully decoded update; a new snapshot replaces previous admission data.
     pub fn apply(&mut self, update: InventoryUpdate) {
+        if let InventoryUpdate::LocalReplica(inventory) = update {
+            *self = *inventory;
+            return;
+        }
+        if let InventoryUpdate::GroundDropProjected(projection)
+        | InventoryUpdate::GroundDropUncertain(projection) = &update
+        {
+            let repeated = projection
+                .item
+                .rules
+                .ground_drop_serial
+                .is_some_and(|serial| {
+                    self.dropped
+                        .contains_key(&(projection.item.details.id, serial))
+                });
+            if self.cursor_revision > projection.revision || repeated {
+                if matches!(update, InventoryUpdate::GroundDropUncertain(_)) {
+                    self.stale = true;
+                    self.drop_mass_unknown = true;
+                    self.drop_fall_bound = None;
+                }
+                return;
+            }
+        }
+        let drop_history = self.ground_drop_projected();
         self.revision = self.revision.wrapping_add(1);
-        self.drop_weight = self.drop_weight.and_then(|basis| basis.observe(&update));
-        if self.ground_drop_pending() && ground_drop::unidentified_cursor_mutation(&update) {
+        if self.ground_drop_projected() && ground_drop::unidentified_cursor_mutation(&update) {
             // A slot-only update can refer to an item that followed the
             // submitted one. Keep the last view and require a fresh snapshot.
             self.stale = true;
             return;
         }
+        self.drop_fall_bound = None;
+        self.cover_dropped_instances(&update);
+        let cursor_covered = match &update {
+            InventoryUpdate::Snapshot(_)
+            | InventoryUpdate::Prediction(_)
+            | InventoryUpdate::DestroyCursor => true,
+            InventoryUpdate::Set(items) => items.first().is_some_and(|item| item.slot == CURSOR),
+            InventoryUpdate::Cursor(_) => !self.items.contains_key(&CURSOR),
+            InventoryUpdate::Remove(slot) => *slot == CURSOR,
+            _ => false,
+        };
         let received_cursor = self.observe_drop_cursor(&update);
         self.change(update);
-        // Ordinarily the next queued item moves up as soon as the view empties.
-        // An unresolved drop leaves the queue's position uncertain.
-        while !self.ground_drop_pending() && !self.items.contains_key(&CURSOR) {
+        // Advance the local cursor view normally. Drop shadow mass retains
+        // uncertainty about the server's current cursor independently.
+        while !self.items.contains_key(&CURSOR) {
             let Some(next) = self.queued.pop_front() else {
                 break;
             };
@@ -755,9 +801,18 @@ impl Inventory {
             self.items
                 .extend(next.into_iter().map(|item| (item.slot, item)));
         }
-        if received_cursor && !self.stale() && !self.ground_drop_pending() {
+        if received_cursor && !self.stale() {
             self.record_drop_cursor();
         }
+        // The drop serial exists only for positively eligible instances. Do
+        // not add drop-history metadata to ordinary unoffered inventories.
+        if cursor_covered
+            && (self.cursor_revision != 0
+                || matches!(self.drop_cursor, ground_drop::CursorBasis::Item(_)))
+        {
+            self.cursor_revision = self.revision;
+        }
+        self.finish_drop_weight(drop_history);
     }
 
     fn change(&mut self, update: InventoryUpdate) {
@@ -786,8 +841,10 @@ impl Inventory {
                 self.bandage_stock_uncertain.extend(slots);
             }
             InventoryUpdate::Prediction(items) => self.predict(items),
-            InventoryUpdate::DestroyCursor => self.predict_destruction(),
-            InventoryUpdate::GroundDropPending(serial) => self.hold_ground_drop(serial),
+            InventoryUpdate::DestroyCursor => self.destroy_with_drop_mass(),
+            InventoryUpdate::GroundDropProjected(drop) => self.project_ground_drop(drop),
+            InventoryUpdate::GroundDropUncertain(drop) => self.project_uncertain_drop(drop),
+            InventoryUpdate::LocalReplica(_) => unreachable!("replica handled before reduction"),
             InventoryUpdate::Consume { slot, charge } => {
                 let spent_bandage = !charge
                     && self.bandage_stock_uncertain.contains(&slot)
@@ -952,11 +1009,6 @@ impl Inventory {
             } else {
                 self.cover_returned_cursor_instance(root);
             }
-            if self.ground_drop_pending() && (root.slot == CURSOR || root.slot.is_in_cursor_bag()) {
-                // A cursor correction can be a temporary resync token.
-                // The replacement may hide a heavier candidate.
-                self.stale = true;
-            }
             if arrival {
                 self.cover_arrival(root.slot);
             } else {
@@ -973,8 +1025,9 @@ impl Inventory {
     /// Replaces every inventory baseline with a complete received snapshot.
     fn replace_snapshot(&mut self, items: Vec<InventoryItem>) {
         self.destroyed = None;
-        self.ground_drop = None;
-        self.drop_weight = None;
+        self.dropped.clear();
+        self.drop_mass_unknown = false;
+        self.drop_fall_bound = None;
         self.items = items.into_iter().map(|item| (item.slot, item)).collect();
         self.queued.clear();
         self.received = true;
@@ -1037,6 +1090,9 @@ impl Inventory {
     /// Replays accumulated pre-admission state without mistaking partial data for a snapshot.
     #[must_use]
     pub fn admission_updates(&self) -> Vec<InventoryUpdate> {
+        if self.ground_drop_projected() {
+            return vec![InventoryUpdate::LocalReplica(Box::new(self.clone()))];
+        }
         let mut updates = if self.received {
             vec![InventoryUpdate::Snapshot(
                 self.items.values().cloned().collect(),
@@ -1049,7 +1105,6 @@ impl Inventory {
                 .collect()
         };
         updates.extend(self.queued.iter().cloned().map(InventoryUpdate::Cursor));
-        updates.extend(self.ground_drop.map(InventoryUpdate::GroundDropPending));
         if self.stale() {
             updates.push(InventoryUpdate::Invalidated);
         }

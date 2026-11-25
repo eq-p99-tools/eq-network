@@ -677,7 +677,7 @@ impl Motion {
         let held = self.holds_grant(world);
         let mut state = state;
         if let (SpeedInputState::Ready(inputs) | SpeedInputState::Bounded { inputs, .. }, true) =
-            (state, world.inventory.ground_drop_pending())
+            (state, world.inventory.ground_drop_projected())
         {
             let bound = world.coins.carried_coin_count().and_then(|coins| {
                 world
@@ -694,8 +694,8 @@ impl Motion {
                         "Movement needs a current carried-weight bound after the drop".into(),
                     );
                 }
-                // The drop's bound is a weight the player is proven to carry
-                // at least, so it bounds the report. Without a bound the
+                // The drop's upper weight bound keeps the report on the
+                // conservative, slower side. Without a current bound the
                 // report is still a bound, its weight no lower than in force,
                 // so a root or a lower rate in it still applies.
                 let in_force = self
@@ -2839,6 +2839,15 @@ mod tests {
         (world, motion)
     }
 
+    fn project_cursor_drop(inventory: &mut eq_network_game::inventory::Inventory) {
+        use eq_network_game::inventory::{InventoryDropProjection, InventorySlot, InventoryUpdate};
+        let projection = InventoryDropProjection {
+            revision: inventory.revision(),
+            item: Box::new(inventory.items()[&InventorySlot::CURSOR].clone()),
+        };
+        inventory.apply(InventoryUpdate::GroundDropProjected(projection));
+    }
+
     #[test]
     fn pending_drop_grants_only_with_a_current_carried_weight_bound() {
         use eq_network_game::{
@@ -2879,18 +2888,16 @@ mod tests {
             [SpeedInputAcceptance { granted: true, .. }]
         ));
 
-        inventory.apply(InventoryUpdate::GroundDropPending(
-            original.rules.ground_drop_serial.unwrap(),
-        ));
+        project_cursor_drop(&mut inventory);
         assert_eq!(weight(&inventory), Ok(50));
         inventory.apply(InventoryUpdate::Cursor(vec![heavier.clone()]));
         assert!(!inventory.stale());
         assert_eq!(
             inventory.items().get(&InventorySlot::CURSOR),
-            Some(&original)
+            Some(&heavier)
         );
-        assert_eq!(inventory.queued().count(), 1);
-        assert_eq!(weight(&inventory), Ok(1_500));
+        assert_eq!(inventory.queued().count(), 0);
+        assert_eq!(weight(&inventory), Ok(1_550));
         world.inventory = inventory.clone().into();
         // The grant is kept while the host works the new weight out ...
         let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
@@ -2904,21 +2911,21 @@ mod tests {
         outcome.result.unwrap();
         assert!(!withdrew(&outcome.events));
         assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
-        assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(150));
+        assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(155));
         assert!(motion.unproven.is_some());
         assert!(matches!(
             acceptances(&outcome.events)[..],
             [SpeedInputAcceptance { granted: true, .. }]
         ));
-        assert!(world.inventory.ground_drop_pending());
+        assert!(world.inventory.ground_drop_projected());
         let none: [SpeedInputAcceptance; 0] = [];
 
-        let bounded = report_at(motion.revision, 150);
+        let bounded = report_at(motion.revision, 155);
         let outcome = testing::run(|out| motion.handle(&bounded, &mut world, out));
         outcome.result.unwrap();
         assert!(motion.unproven.is_none());
         assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
-        assert!(world.inventory.ground_drop_pending());
+        assert!(world.inventory.ground_drop_projected());
 
         inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
         assert_eq!(weight(&inventory), Err(WeightUnavailable::Inventory));
@@ -2927,11 +2934,11 @@ mod tests {
         outcome.result.unwrap();
         // No bound to check: the report is taken as a bound, the weight no
         // lower than in force.
-        let stale = report_at(motion.revision, 150);
+        let stale = report_at(motion.revision, 155);
         let outcome = testing::run(|out| motion.handle(&stale, &mut world, out));
         outcome.result.unwrap();
         assert!(!withdrew(&outcome.events));
-        assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(150));
+        assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(155));
         assert!(motion.unproven.is_some());
 
         inventory.apply(InventoryUpdate::Snapshot(vec![heavier]));
@@ -2951,7 +2958,7 @@ mod tests {
                 ..
             }]
         ));
-        assert!(!world.inventory.ground_drop_pending());
+        assert!(!world.inventory.ground_drop_projected());
     }
 
     /// While a ground drop is pending and no weight bound can be worked out,
@@ -2988,16 +2995,14 @@ mod tests {
         let full = world.body.motion.as_ref().unwrap().calibration().is_some();
         assert!(full);
 
-        inventory.apply(InventoryUpdate::GroundDropPending(
-            held.rules.ground_drop_serial.unwrap(),
-        ));
+        project_cursor_drop(&mut inventory);
         inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
         assert_eq!(
             inventory.carried_weight_tenths(eq_network_game::GameDialect::Titanium, 0),
             Err(WeightUnavailable::Inventory)
         );
         world.inventory = inventory.into();
-        assert!(world.inventory.ground_drop_pending());
+        assert!(world.inventory.ground_drop_projected());
         let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
         outcome.result.unwrap();
         assert!(!withdrew(&outcome.events));

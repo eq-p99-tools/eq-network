@@ -41,10 +41,7 @@ fn stock(inventory: &Inventory) -> BTreeMap<InventorySlot, u32> {
 }
 
 fn current(inventory: &Inventory) -> bool {
-    inventory.received()
-        && !inventory.stale()
-        && !inventory.predicted()
-        && !inventory.ground_drop_pending()
+    inventory.received() && !inventory.stale() && !inventory.predicted()
 }
 
 impl SelfBandage {
@@ -151,11 +148,7 @@ impl SelfBandage {
             .as_mut()
             .filter(|attempt| world.is_player(attempt.actor))?;
         let inventory = &world.inventory;
-        if attempt.stock.is_empty()
-            || !inventory.received()
-            || inventory.stale()
-            || inventory.ground_drop_pending()
-        {
+        if attempt.stock.is_empty() || !inventory.received() || inventory.stale() {
             return None;
         }
         let Message::Event(WorldEvent::Inventory(update)) = message else {

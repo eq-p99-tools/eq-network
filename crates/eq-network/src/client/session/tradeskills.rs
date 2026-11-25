@@ -190,9 +190,13 @@ impl OpenContainer {
                 request.from == InventorySlot::CURSOR
                     && request.quantity == MoveQuantity::Whole
                     && !world.inventory.items().contains_key(&request.to)
-                    && world.inventory.items().get(&request.from).is_some_and(|item| {
-                        item.bag_slots == 0 && item.stack_count.is_none_or(|count| count == 1)
-                    }),
+                    && world
+                        .inventory
+                        .items()
+                        .get(&request.from)
+                        .is_some_and(|item| {
+                            item.bag_slots == 0 && item.stack_count.is_none_or(|count| count == 1)
+                        }),
                 "Put one whole item from the cursor into an empty forge slot; stacking and swaps are outside this workflow"
             );
         } else {
@@ -261,9 +265,7 @@ impl Tradeskills {
             "Wait for the current world container and inventory."
         );
         ensure!(
-            world.inventory.received()
-                && !world.inventory.stale()
-                && !world.inventory.ground_drop_pending(),
+            world.inventory.received() && !world.inventory.stale(),
             "The world container inventory is unavailable."
         );
         if self.scope == Scope::Forge {
