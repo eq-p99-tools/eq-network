@@ -823,26 +823,20 @@ impl Client {
     }
 
     /// Resolve installed-file checks only when a server requests them.
-    /// Public challenges freshly hash current bytes; metadata cache reuse is
-    /// confined to explicitly local-only `EQEmu` sessions.
+    ///
+    /// On every server, P99 included, a requested file whose size and
+    /// modification time match the cache in `settings`
+    /// ([`CHECKSUM_CACHE_FILE`](crate::assets::CHECKSUM_CACHE_FILE)) is answered
+    /// from the cache. The cache cannot see a same-size edit with a restored
+    /// modification time; a refusal invalidates that challenge's files, and the
+    /// next login rereads them. Without `settings` every requested file is read.
     #[must_use]
     pub fn with_installed_assets(
         mut self,
         directory: std::path::PathBuf,
         settings: Option<&std::path::Path>,
     ) -> Self {
-        let local_cache = match self.config.protocol {
-            ServerProtocol::EqEmu => self.config.local_only,
-            ServerProtocol::Project1999
-            | ServerProtocol::Quarm
-            | ServerProtocol::Takp
-            | ServerProtocol::EqEmuRof2 => false,
-        };
-        self.assets = Box::new(if local_cache {
-            InstalledAssets::local(directory, settings)
-        } else {
-            InstalledAssets::new(directory)
-        });
+        self.assets = Box::new(InstalledAssets::cached(directory, settings));
         self
     }
 
@@ -1345,6 +1339,30 @@ mod tests {
             serde_json::to_value(record).unwrap()["timestamp"],
             "2024-03-01T08:59:59.987+09:00",
         );
+    }
+
+    #[test]
+    fn installed_files_use_the_checksum_cache_on_every_server() {
+        // Building a client opens no connection; nothing here reaches a server.
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Takp,
+        ] {
+            for local_only in [false, true] {
+                crate::assets::cache_rows(&|directory, settings| {
+                    let mut config =
+                        ClientConfig::for_protocol(protocol, "ACCOUNT", "PASSWORD", "Server", "");
+                    config.host = "127.0.0.1".into();
+                    config.local_only = local_only;
+                    Client::new(config, ClientIdentity::new("host", "user"))
+                        .unwrap()
+                        .with_installed_assets(directory.into(), Some(settings))
+                        .assets
+                });
+            }
+        }
     }
 
     #[test]
