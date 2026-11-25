@@ -202,6 +202,22 @@ client.run(&cancel, RunOptions::default(), |event| {
 
 ## Architecture and extension points
 
+Hosts with an installed client can use
+`Client::with_installed_assets(directory, settings_directory)` to defer file
+checks until a server actually requests them. A nonempty world manifest also
+needs the current spell-file CRC and byte size. Hashing runs on a cancellable
+worker while the session continues servicing transport; `FilesChecking`
+events report numeric progress, independently of admission.
+
+Public requests freshly read the requested files. Only explicitly local-only
+EQEmu sessions may reuse the settings-directory cache keyed by installation,
+relative path, size and modification time. This local optimization cannot
+detect same-size edits with restored mtimes. A generic integrity refusal ends
+the attempt and invalidates that challenge's operands; a fresh challenge
+remeasures those it requests again, plus its spell operand. The server does
+not identify bad filenames. Credential and world-play refusals do not touch
+the cache; no automatic reconnect or resubmission is added.
+
 Each layer owns one kind of change. Wire framing belongs in
 `eq-network-transport`; login opcodes belong in `eq-network-login`; game packet
 layouts and per-client-generation differences belong in `eq-network-game`;

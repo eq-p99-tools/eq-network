@@ -15,7 +15,7 @@ use super::{
 };
 use crate::chat::{self, ChatEvent};
 use crate::{
-    assets::Assets,
+    assets::AssetSource,
     client::{CancellationToken, ClientCommand, ClientConfig, Events},
 };
 use anyhow::{bail, Result};
@@ -156,7 +156,7 @@ pub(super) trait Wire: Sync {
     fn world(
         &self,
         _context: &CharacterSession<'_>,
-        _assets: &Assets,
+        _assets: &dyn AssetSource,
         _ip: &str,
         _flags: (bool, bool),
         _log: &mut Events<'_>,
@@ -174,7 +174,8 @@ pub(super) trait Wire: Sync {
         &self,
         _shield: Option<&dyn Shield>,
         _packet: &[u8],
-        _assets: &Assets,
+        _assets: &dyn AssetSource,
+        _stop: &CancellationToken,
         _log: &mut Events<'_>,
     ) -> Result<(String, u16, Vec<u8>)> {
         bail!("this client generation cannot hand off between zones yet")
@@ -287,7 +288,7 @@ impl Wire for Titanium {
     fn world(
         &self,
         context: &CharacterSession<'_>,
-        assets: &Assets,
+        assets: &dyn AssetSource,
         ip: &str,
         flags: (bool, bool),
         log: &mut Events<'_>,
@@ -299,10 +300,21 @@ impl Wire for Titanium {
         &self,
         shield: Option<&dyn Shield>,
         packet: &[u8],
-        assets: &Assets,
+        assets: &dyn AssetSource,
+        stop: &CancellationToken,
         log: &mut Events<'_>,
     ) -> Result<(String, u16, Vec<u8>)> {
-        world::decode_destination(shield, packet, assets, log)
+        world::decode_destination_serviced(
+            shield,
+            packet,
+            assets,
+            stop,
+            || {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                Ok(())
+            },
+            log,
+        )
     }
 
     /// Titanium zones speak the modern transport, answering session
@@ -405,7 +417,7 @@ impl Wire for EqMac {
     fn world(
         &self,
         context: &CharacterSession<'_>,
-        _assets: &Assets,
+        _assets: &dyn AssetSource,
         ip: &str,
         flags: (bool, bool),
         log: &mut Events<'_>,
@@ -417,7 +429,8 @@ impl Wire for EqMac {
         &self,
         _shield: Option<&dyn Shield>,
         packet: &[u8],
-        _assets: &Assets,
+        _assets: &dyn AssetSource,
+        _stop: &CancellationToken,
         _log: &mut Events<'_>,
     ) -> Result<(String, u16, Vec<u8>)> {
         let (host, port) = world::eqmac::zone_destination(packet)?;
@@ -491,7 +504,7 @@ impl Wire for Rof2 {
     fn world(
         &self,
         context: &CharacterSession<'_>,
-        assets: &Assets,
+        assets: &dyn AssetSource,
         ip: &str,
         flags: (bool, bool),
         log: &mut Events<'_>,
@@ -671,14 +684,20 @@ mod tests {
         // Its world stage and zone entry are built (and tested in
         // `world::rof2` and `admission::rof2`); the handoff between zones
         // still refuses.
-        let assets = Assets {
+        let assets = crate::assets::Assets {
             client: "none".into(),
             files: std::collections::BTreeMap::new(),
         };
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
         let handoff = Rof2
-            .handoff(None, &[0; 130], &assets, &mut log)
+            .handoff(
+                None,
+                &[0; 130],
+                &assets,
+                &CancellationToken::default(),
+                &mut log,
+            )
             .err()
             .unwrap();
         assert_eq!(

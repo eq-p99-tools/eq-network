@@ -475,7 +475,10 @@ fn application_packet(sequence: u16, opcode: u16, body: &[u8]) -> Vec<u8> {
 fn rejected_credentials_close_login_and_never_enter_the_retry_loop() {
     for reconnect in [true, false] {
         let socket = peer();
-        let engine = client(config(socket.local_addr().unwrap().port()));
+        let engine = client(config(socket.local_addr().unwrap().port())).with_installed_assets(
+            std::path::PathBuf::from("missing-unused-installation"),
+            None,
+        );
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
         let (done, result) = mpsc::channel();
@@ -490,6 +493,10 @@ fn rejected_credentials_close_login_and_never_enter_the_retry_loop() {
                     options
                 },
                 |event| {
+                    assert!(
+                        !matches!(&event, ClientEvent::FilesChecking(_)),
+                        "credentials do not request or refuse an integrity check"
+                    );
                     if let ClientEvent::Progress(stage) = &event {
                         stages.push(*stage);
                     }
@@ -662,7 +669,10 @@ fn a_player_chooses_the_world_from_the_login_servers_list() {
     settings.server.clear();
     // A stock `EQEmu` login, which plays on every world listed.
     settings.protocol = ServerProtocol::EqEmu;
-    let engine = client(settings);
+    let engine = client(settings).with_installed_assets(
+        std::path::PathBuf::from("missing-unused-installation"),
+        None,
+    );
     let cancel = CancellationToken::default();
     let worker_cancel = cancel.clone();
     let (done, result) = mpsc::channel();
@@ -672,6 +682,10 @@ fn a_player_chooses_the_world_from_the_login_servers_list() {
         let mut refusals = Vec::new();
         let outcome =
             engine.run_with_commands(&worker_cancel, RunOptions::default(), &commands, |event| {
+                assert!(
+                    !matches!(&event, ClientEvent::FilesChecking(_)),
+                    "listing and play refusal do not measure files"
+                );
                 match event {
                     ClientEvent::World(WorldEvent::ServerSelection {
                         selection_id,

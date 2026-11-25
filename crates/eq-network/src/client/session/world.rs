@@ -7,7 +7,7 @@ use super::{
     CharacterSession, ZoneDestination,
 };
 use crate::{
-    assets::Assets,
+    assets::{AssetSource, Assets},
     chat,
     client::{ClientEvent, ClientIdentity, ConnectionStage, Events, GapKind, RecordEvent},
     transport::Session,
@@ -22,6 +22,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub(super) mod eqmac;
+mod files;
 pub(super) mod rof2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,10 +100,32 @@ fn file_response(assets: &Assets, manifest: &[u8], log: &mut Events<'_>) -> Resu
 
 /// Decode the endpoint and, behind protection, the file manifest before
 /// rekeying for destination admission.
+#[cfg(test)]
 pub(super) fn decode_destination(
     shield: Option<&dyn Shield>,
     packet: &[u8],
-    assets: &Assets,
+    assets: &dyn AssetSource,
+    log: &mut Events<'_>,
+) -> Result<(String, u16, Vec<u8>)> {
+    decode_destination_serviced(
+        shield,
+        packet,
+        assets,
+        &crate::client::CancellationToken::default(),
+        || {
+            std::thread::sleep(Duration::from_millis(10));
+            Ok(())
+        },
+        log,
+    )
+}
+
+pub(super) fn decode_destination_serviced(
+    shield: Option<&dyn Shield>,
+    packet: &[u8],
+    assets: &dyn AssetSource,
+    stop: &crate::client::CancellationToken,
+    service: impl FnMut() -> Result<()>,
     log: &mut Events<'_>,
 ) -> Result<(String, u16, Vec<u8>)> {
     ensure!(packet.len() >= 130, "invalid zone handoff");
@@ -114,7 +137,8 @@ pub(super) fn decode_destination(
         return Ok((host, port, Vec::new()));
     };
     let manifest = shield.zone_manifest(packet)?;
-    Ok((host, port, file_response(assets, &manifest, log)?))
+    let (measured, _) = files::measure(assets, &manifest, false, stop, service, log)?;
+    Ok((host, port, file_response(&measured, &manifest, log)?))
 }
 
 /// [`character_list`], with nowhere to tell of a gap, for tests of what it
@@ -392,7 +416,7 @@ fn named(body: &[u8], character: &str, zoning: bool, log: &mut Events<'_>) -> Re
 #[allow(clippy::too_many_lines)]
 pub(super) fn titanium(
     context: &CharacterSession<'_>,
-    assets: &Assets,
+    assets: &dyn AssetSource,
     ip: &str,
     (world_only, zoning): (bool, bool),
     log: &mut Events<'_>,
@@ -413,7 +437,7 @@ pub(super) fn titanium(
 #[allow(clippy::too_many_lines)]
 fn titanium_owned(
     context: &CharacterSession<'_>,
-    assets: &Assets,
+    assets: &dyn AssetSource,
     ip: &str,
     (world_only, zoning): (bool, bool),
     deletion: &mut super::deletion::Owner,
@@ -435,6 +459,8 @@ fn titanium_owned(
     let mut selection = None;
     // After camping, the world sends the list once, before its empty file notice.
     let mut early_list: Option<Vec<u8>> = None;
+    let mut file_packets = std::collections::VecDeque::new();
+    let mut validation_operands = Vec::new();
     let mut chosen = None;
     // A creation awaiting the world's approval of its name, or its new list.
     let mut creating: Option<Creating> = None;
@@ -511,7 +537,10 @@ fn titanium_owned(
             selection.is_some() && !entered || Instant::now() < deadline,
             "world handshake timed out"
         );
-        let Some(mut packet) = session.receive()? else {
+        let Some(mut packet) = file_packets
+            .pop_front()
+            .map_or_else(|| session.receive(), |packet| Ok(Some(packet)))?
+        else {
             continue;
         };
         if super::spell_tables::receive(
@@ -586,22 +615,39 @@ fn titanium_owned(
                 if let Some(shield) = shield.as_mut() {
                     shield.manifest(&mut packet.body)?;
                 }
-                let mut response = file_response(assets, &packet.body, log)?;
+                let (measured, operands) = files::measure(
+                    assets,
+                    &packet.body,
+                    true,
+                    stop,
+                    || files::service(&mut session, &mut file_packets, deadline),
+                    log,
+                )?;
+                let mut response = file_response(&measured, &packet.body, log)?;
                 if let Some(shield) = shield.as_ref() {
                     shield.answer(&mut response)?;
                 }
                 session.send(
                     0x5072,
                     &crc1(
-                        assets,
+                        &measured,
                         session.local_address()?.ip(),
                         context.identity,
                         &credentials.key,
                     )?,
                 )?;
                 session.send(0x1251, &response)?;
+                validation_operands = operands;
             }
             WorldOpcode::ValidationResult => {
+                if packet.body != [0]
+                    && !validation_operands.is_empty()
+                    && assets.refused(&validation_operands).is_err()
+                {
+                    log.diagnostic(
+                        "Unable to persist refused client-file cache invalidation".into(),
+                    )?;
+                }
                 ensure!(
                     packet.body == [0],
                     "world client validation returned {}",
@@ -679,8 +725,14 @@ fn titanium_owned(
             },
             WorldOpcode::ZoneHandoff => {
                 ensure!(entered, "unsolicited zone handoff");
-                let (host, port, checksums) =
-                    decode_destination(shield.as_deref(), &packet.body, assets, log)?;
+                let (host, port, checksums) = decode_destination_serviced(
+                    shield.as_deref(),
+                    &packet.body,
+                    assets,
+                    stop,
+                    || files::service(&mut session, &mut file_packets, deadline),
+                    log,
+                )?;
                 session.send(0x509d, &[])?;
                 session.close()?;
                 return Ok(Some(ZoneDestination {
@@ -723,6 +775,23 @@ pub(super) mod tests {
     use super::*;
     use crate::client::ClientConfig;
     use crate::p99::{self, WorldCodec};
+
+    #[test]
+    fn unprotected_handoff_never_requests_installation_checksums() {
+        let source = crate::assets::InstalledAssets::new(std::path::PathBuf::from(
+            "missing-unused-installation",
+        ));
+        let config = ClientConfig::new("SYNTHETIC", "SYNTHETIC", "", "");
+        let mut handler = |_| Ok(());
+        let mut log = Events::new(&config, &mut handler);
+        let mut handoff = vec![0; 130];
+        handoff[..9].copy_from_slice(b"127.0.0.1");
+        handoff[128..130].copy_from_slice(&7000_u16.to_le_bytes());
+        assert_eq!(
+            decode_destination(None, &handoff, &source, &mut log).unwrap(),
+            ("127.0.0.1".into(), 7000, Vec::new())
+        );
+    }
 
     #[test]
     fn zoning_handoff_uses_fresh_login_key_without_world_manifest_state() {
@@ -933,6 +1002,50 @@ pub(super) mod tests {
         assert_eq!(cstr(&second[50..66]), b"TEST-DEVICE");
         assert_eq!(cstr(&second[66..82]), b"test-user");
         assert_eq!(&second[82..90], &[127, 0, 0, 1, 192, 0, 2, 10]);
+    }
+
+    #[test]
+    fn requested_measurements_preserve_full_crc1_and_manifest_response_bytes() {
+        let directory = std::env::temp_dir().join(format!(
+            "integrity-reference-{:016x}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(
+            directory.join("spells_us.txt"),
+            b"current synthetic spell bytes",
+        )
+        .unwrap();
+        std::fs::write(directory.join("zone.s3d"), b"current synthetic zone bytes").unwrap();
+        let fresh = Assets::scan_all(&directory).unwrap();
+        let source = crate::assets::InstalledAssets::new(directory.clone());
+        let manifest = b"\x11\x00\x01zone.s3d\0\x12\x00\x02ignored.eqg\0";
+        let config = ClientConfig::new("SYNTHETIC", "SYNTHETIC", "", "");
+        let mut handler = |_| Ok(());
+        let mut log = Events::new(&config, &mut handler);
+        let (measured, _) = files::measure(
+            &source,
+            manifest,
+            true,
+            &crate::client::CancellationToken::default(),
+            || {
+                std::thread::sleep(Duration::from_millis(1));
+                Ok(())
+            },
+            &mut log,
+        )
+        .unwrap();
+        let identity = ClientIdentity::new("SYNTHETIC-HOST", "SYNTHETIC-USER");
+        let ip = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            crc1(&measured, ip, &identity, b"0123456789").unwrap(),
+            crc1(&fresh, ip, &identity, b"0123456789").unwrap()
+        );
+        assert_eq!(
+            measured.file_response(manifest).unwrap(),
+            fresh.file_response(manifest).unwrap()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
     /// A connection that keeps what the client sent.
     #[derive(Default)]

@@ -44,7 +44,7 @@ pub use gaps::{
 };
 
 use crate::{
-    assets::Assets,
+    assets::{AssetSource, Assets, InstalledAssets},
     chat::{ChannelName, ChatEvent},
 };
 use anyhow::{ensure, Context, Result};
@@ -713,6 +713,9 @@ pub enum ClientEvent {
     /// of its kind in a stage at once, repeats counted and told at most
     /// every ten seconds and when the stage ends ([`Gap`]).
     Gap(Box<Gap>),
+    /// Numeric progress while answering a real server file-integrity request.
+    /// None clears the temporary presentation; it never indicates acceptance.
+    FilesChecking(Option<crate::assets::AssetProgress>),
     /// Credential-safe operational diagnostic.
     Diagnostic(String),
     /// Transient failure followed by a scheduled fresh session.
@@ -741,7 +744,7 @@ pub enum ClientEvent {
 pub struct Client {
     config: ClientConfig,
     identity: ClientIdentity,
-    assets: Assets,
+    assets: Box<dyn AssetSource>,
 }
 
 impl Client {
@@ -794,7 +797,7 @@ impl Client {
         Ok(Self {
             config,
             identity,
-            assets: Assets::bundled()?,
+            assets: Box::new(Assets::bundled()?),
         })
     }
 
@@ -815,8 +818,32 @@ impl Client {
     /// Returns an error when the supplied inventory lacks required spell data.
     pub fn with_assets(mut self, assets: Assets) -> Result<Self> {
         assets.spells()?;
-        self.assets = assets;
+        self.assets = Box::new(assets);
         Ok(self)
+    }
+
+    /// Resolve installed-file checks only when a server requests them.
+    /// Public challenges freshly hash current bytes; metadata cache reuse is
+    /// confined to explicitly local-only `EQEmu` sessions.
+    #[must_use]
+    pub fn with_installed_assets(
+        mut self,
+        directory: std::path::PathBuf,
+        settings: Option<&std::path::Path>,
+    ) -> Self {
+        let local_cache = match self.config.protocol {
+            ServerProtocol::EqEmu => self.config.local_only,
+            ServerProtocol::Project1999
+            | ServerProtocol::Quarm
+            | ServerProtocol::Takp
+            | ServerProtocol::EqEmuRof2 => false,
+        };
+        self.assets = Box::new(if local_cache {
+            InstalledAssets::local(directory, settings)
+        } else {
+            InstalledAssets::new(directory)
+        });
+        self
     }
 
     /// Connect and deliver events synchronously until completion or cancellation.
@@ -900,7 +927,7 @@ impl Client {
             let result = session::run(
                 &self.config,
                 &self.identity,
-                &self.assets,
+                self.assets.as_ref(),
                 cancel,
                 &options,
                 commands,

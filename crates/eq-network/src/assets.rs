@@ -7,8 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod installed;
+pub use installed::{AssetJob, AssetProgress, AssetSource, InstalledAssets};
+
 /// Measured CRC-32 and size for one client file.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FileChecksum {
     /// CRC-32 expected by server-side file validation.
     pub crc32: u32,
@@ -17,7 +20,7 @@ pub struct FileChecksum {
 }
 
 /// Checksum inventory for one patched client installation.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Assets {
     /// Human-readable client profile represented by the inventory.
     pub client: String,
@@ -207,7 +210,7 @@ pub struct ManifestEntry {
 }
 
 impl ManifestEntry {
-    const fn is_skipped(&self) -> bool {
+    pub(crate) const fn is_skipped(&self) -> bool {
         self.flags == 2
     }
 }
