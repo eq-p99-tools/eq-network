@@ -481,8 +481,8 @@ pub struct Inventory {
     /// accepts a destroy in silence and refuses one by resending the cursor.
     destroyed: Option<InventoryItem>,
     /// Whole instance mass retained independently of projected placement.
-    #[serde(serialize_with = "ground_drop::serialize_dropped")]
-    dropped: BTreeMap<(u32, NonZeroU32), InventoryItem>,
+    #[serde(serialize_with = "ground_drop::serialize_drop_mass")]
+    drop_mass: BTreeMap<(u32, NonZeroU32), InventoryItem>,
     #[serde(skip)]
     drop_mass_unknown: bool,
     /// A slot-only reduction may make placement stale without increasing mass.
@@ -490,6 +490,9 @@ pub struct Inventory {
     drop_fall_bound: Option<u64>,
     #[serde(skip)]
     cursor_revision: u64,
+    /// Submission result deduplication is distinct from uncertain mass.
+    #[serde(skip)]
+    drop_projection_revision: Option<u64>,
     #[serde(skip)]
     drop_cursor: ground_drop::CursorBasis,
 }
@@ -550,7 +553,7 @@ impl Inventory {
     /// This retains mass evidence; it is not an action lock or a receipt.
     #[must_use]
     pub fn ground_drop_projected(&self) -> bool {
-        !self.dropped.is_empty() || self.drop_mass_unknown
+        !self.drop_mass.is_empty() || self.drop_mass_unknown
     }
 
     /// Whether a slot has escaped projection since its last covering record.
@@ -753,14 +756,9 @@ impl Inventory {
         if let InventoryUpdate::GroundDropProjected(projection)
         | InventoryUpdate::GroundDropUncertain(projection) = &update
         {
-            let repeated = projection
-                .item
-                .rules
-                .ground_drop_serial
-                .is_some_and(|serial| {
-                    self.dropped
-                        .contains_key(&(projection.item.details.id, serial))
-                });
+            let repeated = self
+                .drop_projection_revision
+                .is_some_and(|revision| revision >= projection.revision);
             if self.cursor_revision > projection.revision || repeated {
                 if matches!(update, InventoryUpdate::GroundDropUncertain(_)) {
                     self.stale = true;
@@ -779,7 +777,8 @@ impl Inventory {
             return;
         }
         self.drop_fall_bound = None;
-        self.cover_dropped_instances(&update);
+        self.retain_cursor_mass_before_change(&update);
+        self.cover_drop_mass_instances(&update);
         let cursor_covered = match &update {
             InventoryUpdate::Snapshot(_)
             | InventoryUpdate::Prediction(_)
@@ -1025,7 +1024,8 @@ impl Inventory {
     /// Replaces every inventory baseline with a complete received snapshot.
     fn replace_snapshot(&mut self, items: Vec<InventoryItem>) {
         self.destroyed = None;
-        self.dropped.clear();
+        self.drop_mass.clear();
+        self.drop_projection_revision = None;
         self.drop_mass_unknown = false;
         self.drop_fall_bound = None;
         self.items = items.into_iter().map(|item| (item.slot, item)).collect();

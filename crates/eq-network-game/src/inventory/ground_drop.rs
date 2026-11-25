@@ -40,12 +40,12 @@ impl From<&InventoryDrop> for InventoryDropProjection {
 }
 
 /// Diagnostic records are a sequence; compound identity keys are not JSON keys.
-pub(super) fn serialize_dropped<S: Serializer>(
-    dropped: &BTreeMap<(u32, NonZeroU32), InventoryItem>,
+pub(super) fn serialize_drop_mass<S: Serializer>(
+    drop_mass: &BTreeMap<(u32, NonZeroU32), InventoryItem>,
     serializer: S,
 ) -> std::result::Result<S::Ok, S::Error> {
-    let mut records = serializer.serialize_seq(Some(dropped.len()))?;
-    for item in dropped.values() {
+    let mut records = serializer.serialize_seq(Some(drop_mass.len()))?;
+    for item in drop_mass.values() {
         records.serialize_element(item)?;
     }
     records.end()
@@ -98,6 +98,7 @@ impl Inventory {
             self.stale = true;
             return;
         }
+        self.drop_projection_revision = Some(projection.revision);
         let matches = self
             .items
             .get(&InventorySlot::CURSOR)
@@ -132,12 +133,12 @@ impl Inventory {
         let key = (item.details.id, serial);
         if item.bag_slots != 0
             || item.augmented()
-            || self.dropped.len() >= 1024 && !self.dropped.contains_key(&key)
+            || self.drop_mass.len() >= 1024 && !self.drop_mass.contains_key(&key)
         {
             self.drop_mass_unknown = true;
             return;
         }
-        self.dropped
+        self.drop_mass
             .entry(key)
             .and_modify(|old| {
                 if old.details.weight_tenths < item.details.weight_tenths {
@@ -145,6 +146,33 @@ impl Inventory {
                 }
             })
             .or_insert(item);
+    }
+
+    /// A later received cursor can still be queued on the server. Moving or
+    /// replacing its projected copy does not prove that its mass left carried
+    /// inventory. Exact received identity coverage below retires that mass.
+    pub(super) fn retain_cursor_mass_before_change(&mut self, update: &InventoryUpdate) {
+        if !self.ground_drop_projected() {
+            return;
+        }
+        let Some(current) = self.items.get(&InventorySlot::CURSOR) else {
+            return;
+        };
+        let changing = match update {
+            InventoryUpdate::Set(items) => items
+                .first()
+                .is_some_and(|item| item.slot == InventorySlot::CURSOR),
+            InventoryUpdate::Prediction(items) => {
+                let next = items.iter().find(|item| item.slot == InventorySlot::CURSOR);
+                next.is_none_or(|item| {
+                    item.rules.ground_drop_serial != current.rules.ground_drop_serial
+                }) || !InventoryItem::same_slot_contents(Some(current), next)
+            }
+            _ => false,
+        };
+        if changing {
+            self.retain_drop_mass(current.clone());
+        }
     }
 
     /// A limbo arrival can still be queued on the server after a drop. A later
@@ -160,7 +188,7 @@ impl Inventory {
 
     /// A received definition of the same instance replaces its shadow mass.
     /// A queued limbo arrival is not yet a counted carried slot.
-    pub(super) fn cover_dropped_instances(&mut self, update: &InventoryUpdate) {
+    pub(super) fn cover_drop_mass_instances(&mut self, update: &InventoryUpdate) {
         if self.ground_drop_projected() {
             if let InventoryUpdate::Cursor(items) | InventoryUpdate::Set(items) = update {
                 if items
@@ -190,7 +218,7 @@ impl Inventory {
         };
         for item in items {
             if let Some(serial) = item.rules.ground_drop_serial {
-                self.dropped.remove(&(item.details.id, serial));
+                self.drop_mass.remove(&(item.details.id, serial));
             }
         }
     }
@@ -431,10 +459,10 @@ mod tests {
         let next = request(&inventory, second.clone());
         assert_eq!(inventory.plan_ground_drop(&next).unwrap().get(), 18);
         inventory.apply(InventoryUpdate::GroundDropProjected((&next).into()));
-        assert_eq!(inventory.dropped.len(), 2);
+        assert_eq!(inventory.drop_mass.len(), 2);
         assert!(inventory.projected_cursor_empty());
         let diagnostic = serde_json::to_value(&inventory).unwrap();
-        assert_eq!(diagnostic["dropped"].as_array().unwrap().len(), 2);
+        assert_eq!(diagnostic["drop_mass"].as_array().unwrap().len(), 2);
         // Replica replay must retain this as local state, never a fabricated
         // received empty snapshot or a received drop acknowledgment.
         let updates = inventory.admission_updates();
@@ -445,7 +473,7 @@ mod tests {
         }
         assert_eq!(replica, inventory);
         inventory.apply(InventoryUpdate::Set(vec![second]));
-        assert_eq!(inventory.dropped.len(), 1);
+        assert_eq!(inventory.drop_mass.len(), 1);
         inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
         assert!(!inventory.ground_drop_projected());
     }
