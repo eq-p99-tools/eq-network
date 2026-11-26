@@ -227,7 +227,10 @@ fn ground_frame_correction_rejects_queued_old_samples_before_any_publication() {
         )
     });
     output.result.unwrap();
-    assert!(output.unreliable.is_empty());
+    assert_eq!(
+        output.unreliable,
+        Vec::<eq_network_game::command::EncodedCommand>::new()
+    );
     assert_eq!(received(&output.events), [(old.created, corrected, false)]);
     assert_eq!(world.body.position(), Some(corrected));
 }

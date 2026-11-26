@@ -413,7 +413,7 @@ impl Feature for Spellbook {
         let ground_moves = match command {
             ClientCommand::GroundFrame { request, state } => {
                 state.forward()
-                    || state.velocity() != [0.0; 2]
+                    || state.velocity().iter().any(|value| *value != 0.0)
                     || world.body.position() != Some(request.position)
             }
             _ => false,

@@ -882,6 +882,10 @@ impl Motion {
         Self::step_with_ground(request, None, now, world, out)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "legacy and current-state samples share one control, support and send transaction"
+    )]
     fn step_with_ground(
         request: &MovementRequest,
         ground: Option<GroundState>,
@@ -931,7 +935,9 @@ impl Motion {
         let may_walk_while_stunned =
             !request.mode.is_water_motion() && motion.options().walk_while_stunned;
         let passive = motion.is_passive(request)
-            && ground.is_none_or(|state| !state.forward() && state.velocity() == [0.0; 2]);
+            && ground.is_none_or(|state| {
+                !state.forward() && state.velocity().iter().all(|value| *value == 0.0)
+            });
         if let Some(reason) = world
             .control
             .motion_refusal(request, passive, may_walk_while_stunned)
