@@ -498,6 +498,76 @@ fn observed_jump_path_keeps_the_apex_without_changing_position_packets_or_gates(
 }
 
 #[test]
+fn invalid_observed_paths_keep_the_accepted_move_and_record_the_endpoint_chord() {
+    use crate::movement::{MovementPath, MovementPoint};
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut outcomes = Vec::new();
+    for invalid in [None, Some("anchor"), Some("vertex")] {
+        let mut motion = airborne(start)
+            .with_counter(TITANIUM_UPDATE_COUNTER)
+            .with_history(true);
+        motion.jumped();
+        let mut proposed = request(now, 0.0);
+        proposed.position.z = 3.392_894;
+        proposed.history = invalid.map(|reason| {
+            MovementPath::new(vec![
+                MovementPoint {
+                    elapsed: Duration::ZERO,
+                    position: Position {
+                        z: if reason == "anchor" { 0.25 } else { 0.0 },
+                        ..Position::default()
+                    },
+                },
+                MovementPoint {
+                    elapsed: Duration::from_millis(50),
+                    position: Position {
+                        z: if reason == "vertex" { 100.0 } else { 1.921_002 },
+                        ..Position::default()
+                    },
+                },
+                MovementPoint {
+                    elapsed: Duration::from_millis(100),
+                    position: proposed.position,
+                },
+            ])
+            .unwrap()
+        });
+        let mut packets = Vec::new();
+        motion
+            .send_move(&proposed, now, |packet| {
+                packets.push(packet.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(motion.position(), proposed.position);
+        let (count, reason) = motion.discarded_history_paths();
+        match invalid {
+            None => assert_eq!((count, reason), (0, None)),
+            Some("anchor") => {
+                assert_eq!(count, 1);
+                assert!(reason.unwrap().contains("endpoints do not match"));
+            }
+            Some(_) => {
+                assert_eq!(count, 1);
+                assert!(reason.unwrap().contains("movement history vertex:"));
+            }
+        }
+        let mut history = Vec::new();
+        motion
+            .report_history(now, true, |packet| {
+                history.extend(records(packet));
+                Ok(())
+            })
+            .unwrap();
+        assert!(!history.is_empty());
+        outcomes.push((packets, history));
+    }
+    assert_eq!(outcomes[0], outcomes[1], "mismatched anchor uses the chord");
+    assert_eq!(outcomes[0], outcomes[2], "unbounded vertex uses the chord");
+}
+
+#[test]
 fn observed_path_rejection_and_failed_send_commit_no_frames_or_movement() {
     use crate::movement::{MovementPath, MovementPoint};
     let start = Instant::now();
@@ -529,19 +599,30 @@ fn observed_path_rejection_and_failed_send_commit_no_frames_or_movement() {
         ])
         .unwrap()
     };
-    proposed.history = Some(path(100.0));
-    assert!(motion
-        .send_move(&proposed, now, |_| panic!("unbounded vertex sent"))
-        .is_err());
-    assert_eq!(motion.position(), Position::default());
-    assert_eq!(motion.history.as_ref().unwrap().frames, 0);
     proposed.history = Some(path(1.921_002));
+    proposed.position.z = 100.0;
     assert!(motion
-        .send_move(&proposed, now, |_| anyhow::bail!("transport failed"))
+        .send_move(&proposed, now, |_| panic!("unbounded move sent"))
         .is_err());
     assert_eq!(motion.position(), Position::default());
     assert_eq!(motion.history.as_ref().unwrap().frames, 0);
+    assert_eq!(motion.discarded_history_paths(), (0, None));
+    proposed.position = endpoint;
+    proposed.history = Some(path(100.0));
+    let mut sent = false;
+    assert!(motion
+        .send_move(&proposed, now, |_| {
+            sent = true;
+            anyhow::bail!("transport failed")
+        })
+        .is_err());
+    assert!(sent, "invalid metadata cannot prevent the ordinary send");
+    assert_eq!(motion.position(), Position::default());
+    assert_eq!(motion.history.as_ref().unwrap().frames, 0);
+    assert_eq!(motion.discarded_history_paths(), (0, None));
+    proposed.history = Some(path(1.921_002));
     motion.send_move(&proposed, now, |_| Ok(())).unwrap();
     assert_eq!(motion.position(), proposed.position);
     assert!(motion.history.as_ref().unwrap().frames > 0);
+    assert_eq!(motion.discarded_history_paths(), (0, None));
 }

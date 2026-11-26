@@ -10,10 +10,14 @@ move permission, collision proof, extra time budget or packet schedule.
 
 The final request first passes the existing movement guard. The session also
 checks trace anchors/span, vertices against the same proposal guard, and total
-horizontal travel against that proposal's existing budget. It commits history
-only with the accepted move (and after transport success if a send is due).
-Refusals and failed sends cannot publish the trace. Water, flight and moving
-supports do not use this ordinary-world-frame path.
+horizontal travel against that proposal's existing budget. If any trace check
+fails, only the trace is discarded: the ordinarily admitted move proceeds and
+history uses the existing endpoint interpolation. Water, flight and moving
+supports likewise ignore this ordinary-world-frame trace. The diagnostic-only
+`MotionSession::discarded_history_paths` reports the count and latest reason
+for a committed fallback in this admission. No behavior depends on that count.
+History and diagnostics commit only with the accepted move (and after transport
+success if a send is due). Ordinary move refusals and failed sends commit neither.
 
 The existing history counter samples the accepted piecewise-linear path; an
 omitted path retains endpoint interpolation. The actor's final state, update
