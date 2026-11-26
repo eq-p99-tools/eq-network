@@ -827,7 +827,11 @@ mod movement_packet_count_tests {
         let output = testing::run(|out| {
             let position = Request::Position(PositionPacket {
                 spawn_id: 7,
-                ..PositionPacket::default()
+                sequence: 0,
+                position: eq_network_game::world::Position::default(),
+                delta: [0.; 3],
+                animation: 0,
+                delta_heading: 0,
             });
             out.encode(&position).unwrap();
             assert_eq!(out.log.movement_packets_sent, 0);
@@ -876,7 +880,11 @@ mod movement_packet_count_tests {
             };
             let position = Request::Position(PositionPacket {
                 spawn_id: 7,
-                ..PositionPacket::default()
+                sequence: 0,
+                position: eq_network_game::world::Position::default(),
+                delta: [0.; 3],
+                animation: 0,
+                delta_heading: 0,
             });
             assert!(failing.request(&position).is_err());
             assert!(failing.request_unreliable(&position).is_err());
