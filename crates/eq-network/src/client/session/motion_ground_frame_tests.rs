@@ -51,6 +51,7 @@ fn request(start: Instant, ms: u64, x: f32) -> MovementRequest {
         },
         support: None,
         vertical_speed: None,
+        history: None,
     }
 }
 

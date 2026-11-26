@@ -35,6 +35,52 @@ fn ground_state_separates_travel_velocity_and_forward_input() {
 }
 
 #[test]
+fn ground_state_keeps_merged_history_recording_inside_the_same_transaction() {
+    use crate::movement::{MovementPath, MovementPoint, TITANIUM_UPDATE_COUNTER};
+    let start = Instant::now();
+    let mut owner = setup(start)
+        .with_counter(TITANIUM_UPDATE_COUNTER)
+        .with_history(true);
+    let mut sample = request(start + Duration::from_millis(100), 0.3);
+    sample.history = Some(
+        MovementPath::new(vec![
+            MovementPoint {
+                elapsed: Duration::ZERO,
+                position: Position::default(),
+            },
+            MovementPoint {
+                elapsed: Duration::from_millis(50),
+                position: Position {
+                    x: 0.1,
+                    ..Position::default()
+                },
+            },
+            MovementPoint {
+                elapsed: Duration::from_millis(100),
+                position: sample.position,
+            },
+        ])
+        .unwrap(),
+    );
+    let state = GroundState::new([1., 0.], false).unwrap();
+    assert!(owner
+        .try_send_ground_sample(&sample, state, sample.created, |_| anyhow::bail!(
+            "failed transport"
+        ))
+        .is_err());
+    assert_eq!(owner.position(), Position::default());
+    assert_eq!(owner.history.as_ref().unwrap().frames, 0);
+    assert_eq!(owner.discarded_history_paths(), (0, None));
+    owner
+        .try_send_ground_sample(&sample, state, sample.created, |_| Ok(()))
+        .unwrap();
+    assert_eq!(owner.position(), sample.position);
+    assert_eq!(owner.current_ground, Some(state));
+    assert!(owner.history.as_ref().unwrap().frames > 0);
+    assert_eq!(owner.discarded_history_paths(), (0, None));
+}
+
+#[test]
 fn ground_state_waits_for_a_new_genuine_stamp_without_owner_changes() {
     let start = Instant::now();
     let mut owner = setup(start);
