@@ -517,3 +517,117 @@ fn ground_state_refusals_preserve_waiting_and_correction_root_clear_it() {
     owner.correct(Position::default(), at(500)).unwrap();
     assert_eq!(owner.ground_waiting, None);
 }
+
+#[test]
+fn ground_state_stopped_producer_releases_accepted_report_at_the_next_eligible_tick() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut owner = native_owner(start);
+    // Its usual >280ms gate holds an accepted idle state. A changed frame
+    // arrives inside the unchanged 50ms local interval, then the host stops.
+    let accepted = request(at(260), 0.0);
+    let idle = GroundState::new([0.; 2], false).unwrap();
+    owner
+        .try_send_ground_sample(&accepted, idle, at(260), |_| panic!("wire gate"))
+        .unwrap();
+    let waiting = request(at(276), 0.01);
+    assert_eq!(
+        owner
+            .try_send_ground_sample(
+                &waiting,
+                GroundState::new([1., 0.], true).unwrap(),
+                at(276),
+                |_| panic!("no acceptance")
+            )
+            .unwrap(),
+        GroundSampleResult::WaitingForInterval
+    );
+    owner
+        .observe_ground_input(11, waiting.created, true, at(276))
+        .unwrap();
+    for ms in [281, 309] {
+        assert!(!owner
+            .tick_sample(at(ms), |_| panic!("minimum interval has not passed"))
+            .unwrap());
+    }
+    let mut packets = Vec::new();
+    assert!(
+        owner
+            .tick_sample(at(310), |packet| {
+                packets.push(*packet);
+                Ok(())
+            })
+            .unwrap(),
+        "stopped producer suppressed the accepted report"
+    );
+    assert_eq!(packets.len(), 1);
+    assert_eq!(packets[0].position, accepted.position);
+    assert_eq!(packets[0].delta, [0.; 3]);
+    assert_eq!(packets[0].animation, 0);
+    assert_eq!(owner.position(), accepted.position);
+    assert_eq!(
+        owner.sampled(),
+        accepted.created,
+        "tick did not admit the waiting suffix"
+    );
+    assert!(!owner
+        .tick_sample(at(311), |_| panic!("extra release report"))
+        .unwrap());
+    assert!(
+        owner
+            .tick_sample(at(1310), |packet| {
+                packets.push(*packet);
+                Ok(())
+            })
+            .unwrap(),
+        "stationary heartbeat stayed silent"
+    );
+    assert_eq!(packets[1].position, accepted.position);
+    // Expiring report suppression must not forget the newest observation's
+    // ordering and admit an older queued frame as if it had arrived first.
+    let older = request(at(275), 0.01);
+    assert!(owner
+        .try_send_ground_sample(&older, idle, at(310), |_| Ok(()))
+        .is_err());
+}
+
+#[test]
+fn ground_state_stopped_producer_does_not_silence_the_ungated_stationary_heartbeat() {
+    let start = Instant::now();
+    let mut owner = setup(start);
+    let accepted = request(start + Duration::from_millis(100), 0.0);
+    let idle = GroundState::new([0.; 2], false).unwrap();
+    owner
+        .try_send_ground_sample(&accepted, idle, accepted.created, |_| Ok(()))
+        .unwrap();
+    let waiting = request(start + Duration::from_millis(116), 0.01);
+    assert_eq!(
+        owner
+            .try_send_ground_sample(
+                &waiting,
+                GroundState::new([1., 0.], true).unwrap(),
+                waiting.created,
+                |_| panic!("no acceptance")
+            )
+            .unwrap(),
+        GroundSampleResult::WaitingForInterval
+    );
+    let due = accepted.created + super::super::STATIONARY_HEARTBEAT;
+    let before = (owner.position(), owner.sampled(), owner.last_sent);
+    assert!(owner
+        .tick_sample(due, |_| anyhow::bail!("failed heartbeat transport"))
+        .is_err());
+    assert_eq!((owner.position(), owner.sampled(), owner.last_sent), before);
+    assert!(
+        owner
+            .tick_sample(due, |packet| {
+                assert_eq!(packet.position, accepted.position);
+                assert_eq!(packet.delta, [0.; 3]);
+                assert_eq!(packet.animation, 0);
+                Ok(())
+            })
+            .unwrap(),
+        "stopped producer suppressed the stationary heartbeat"
+    );
+    assert_eq!(owner.sampled(), accepted.created);
+}
