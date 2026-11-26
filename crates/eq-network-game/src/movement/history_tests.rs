@@ -560,7 +560,7 @@ fn invalid_observed_paths_keep_the_accepted_move_and_record_the_endpoint_chord()
                 Ok(())
             })
             .unwrap();
-        assert!(!history.is_empty());
+        assert_ne!(history, Vec::<Record>::new());
         outcomes.push((packets, history));
     }
     assert_eq!(outcomes[0], outcomes[1], "mismatched anchor uses the chord");
