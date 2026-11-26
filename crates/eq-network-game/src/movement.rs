@@ -19,6 +19,7 @@ pub use path::{MovementPath, MovementPoint};
 mod session;
 mod shoreline;
 mod speeds;
+mod state;
 pub mod water;
 pub use carry::{between_reports, carry, Carried, ZBetween};
 pub use counter::{UpdateCounter, TITANIUM_HISTORY_FRAMES_PER_SECOND, TITANIUM_UPDATE_COUNTER};
@@ -37,6 +38,7 @@ pub use shoreline::{
     SHORELINE_FRAMES, SHORELINE_FRAME_MILLIS,
 };
 pub use speeds::{eqmac as eqmac_speeds, titanium as titanium_speeds, SpeedState, Speeds};
+pub use state::{GroundSampleResult, GroundState};
 
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
@@ -1092,20 +1094,7 @@ impl MovementGuard {
         lateral_rate: Option<f32>,
         (swimming, swim_backward, swim_caps): (bool, Option<f32>, Option<water::WetCaps>),
     ) -> Result<[f32; 3]> {
-        ensure!(
-            request.session_id == self.session_id,
-            "movement belongs to an old zone session"
-        );
-        ensure!(
-            request.created >= self.input_epoch
-                && request.created <= now
-                && now.duration_since(request.created) <= Duration::from_millis(250),
-            "stale movement request"
-        );
-        ensure!(
-            valid_position(request.position),
-            "non-finite movement position"
-        );
+        self.check_current(request, now)?;
         if let Some(bounds) = self.bounds {
             ensure!(
                 bounds.contains(self.position) && bounds.contains(request.position),
@@ -1117,7 +1106,10 @@ impl MovementGuard {
             .ok_or_else(|| anyhow::anyhow!("effective movement speed is not established"))?;
         let horizontal_speed = speed * run_speed_multiplier.factor();
         let elapsed = self.interval(request.created);
-        ensure!(elapsed >= 0.05, "movement samples arrive too frequently");
+        ensure!(
+            self.sample_interval_ready(request.created),
+            "movement samples arrive too frequently"
+        );
         self.check_carrier(request)?;
         let (from, to) = self.comparison(request);
         let mut delta = [to.x - from.x, to.y - from.y, to.z - from.z];
@@ -1315,6 +1307,30 @@ impl MovementGuard {
             .saturating_duration_since(self.sampled)
             .as_secs_f32()
             .min(0.25)
+    }
+
+    /// Shared unchanged admission/freshness prefix; waiting is never acceptance.
+    fn check_current(&self, request: &MovementRequest, now: Instant) -> Result<()> {
+        ensure!(
+            request.session_id == self.session_id,
+            "movement belongs to an old zone session"
+        );
+        ensure!(
+            request.created >= self.input_epoch
+                && request.created <= now
+                && now.duration_since(request.created) <= Duration::from_millis(250),
+            "stale movement request"
+        );
+        ensure!(
+            valid_position(request.position),
+            "non-finite movement position"
+        );
+        Ok(())
+    }
+
+    /// The same float conversion and threshold used by ordinary requests.
+    fn sample_interval_ready(&self, created: Instant) -> bool {
+        self.interval(created) >= 0.05
     }
 }
 

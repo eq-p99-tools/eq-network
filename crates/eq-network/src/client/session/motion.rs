@@ -13,9 +13,9 @@ use eq_network_game::{
     inventory::MAX_CARRIED_WEIGHT,
     message::Message,
     movement::{
-        DiagonalRates, MotionCalibration, MotionSession, MovementRequest, PositionPacket,
-        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, Support,
-        STATIONARY_HEARTBEAT,
+        DiagonalRates, GroundSampleResult, GroundState, MotionCalibration, MotionSession,
+        MovementRequest, PositionPacket, SpeedInputAcceptance, SpeedInputState, SpeedInputs,
+        SpeedState, Support, STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, PostureState, WorldEvent},
@@ -879,6 +879,20 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        Self::step_with_ground(request, None, now, world, out)
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "legacy and current-state samples share one control, support and send transaction"
+    )]
+    fn step_with_ground(
+        request: &MovementRequest,
+        ground: Option<GroundState>,
+        now: Instant,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let lying = lies_still(world, out);
         let Some(motion) = world.body.motion.as_mut() else {
             return actions::refuse(
@@ -920,11 +934,14 @@ impl Motion {
         motion.allow_carrier(carrier);
         let may_walk_while_stunned =
             !request.mode.is_water_motion() && motion.options().walk_while_stunned;
-        if let Some(reason) = world.control.motion_refusal(
-            request,
-            motion.is_passive(request),
-            may_walk_while_stunned,
-        ) {
+        let passive = motion.is_passive(request)
+            && ground.is_none_or(|state| {
+                !state.forward() && state.velocity().iter().all(|value| *value == 0.0)
+            });
+        if let Some(reason) = world
+            .control
+            .motion_refusal(request, passive, may_walk_while_stunned)
+        {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
                 created: request.created,
@@ -937,7 +954,7 @@ impl Motion {
         // no stand is sent. A fall, a lift's carry and a turn alone go on:
         // mouse look turns a lying player in the chase views.
         let moves = (to.x, to.y, to.z) != (from.x, from.y, from.z);
-        if lying && !motion.is_passive(request) && moves {
+        if lying && !passive && (moves || ground.is_some()) {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
                 created: request.created,
@@ -959,17 +976,40 @@ impl Motion {
         }
         let mut transport_failed = false;
         let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
-        let result = motion.send_move_sample(request, now, |sample| {
+        if ground.is_some() {
+            motion.set_hold(hold(
+                world.posture.current(),
+                world.control.stunned(),
+                motion,
+            ));
+        }
+        let send = |sample: &PositionPacket| {
             // A sample the generation cannot carry is refused like any other;
             // only a failed send ends the admission.
             let packet = wire.encode(&Request::Position(*sample), sender)?;
             let sent = sink.send_unreliable(&packet);
             transport_failed = sent.is_err();
             sent
-        });
+        };
+        let result = match ground {
+            None => motion.send_move_sample(request, now, send).map(|()| true),
+            Some(state) => match motion.try_send_ground_sample(request, state, now, send) {
+                Ok(GroundSampleResult::Accepted) => Ok(true),
+                Ok(GroundSampleResult::WaitingForInterval) => motion
+                    .observe_ground_input(request.session_id, request.created, state.forward(), now)
+                    .map(|()| false),
+                Ok(_) => Err(anyhow::anyhow!("Unknown ground sample result")),
+                Err(error) => Err(error),
+            },
+        };
         // A failed send ends the admission.
         if transport_failed {
-            return result;
+            return result.map(|_| ());
+        }
+        if matches!(result, Ok(false)) {
+            // The producer continues with fresh observations. This frame did
+            // not advance the owner and must never get an acceptance receipt.
+            return Ok(());
         }
         let refused = result.err().map(|error| error.to_string());
         if let Some(error) = &refused {
@@ -1157,6 +1197,7 @@ impl Feature for Motion {
         matches!(
             command,
             ClientCommand::Move(_)
+                | ClientCommand::GroundFrame { .. }
                 | ClientCommand::Jump { .. }
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
@@ -1174,6 +1215,16 @@ impl Feature for Motion {
         self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
+            ClientCommand::GroundFrame { request, state } => {
+                if world.arrival.is_some() {
+                    return actions::refuse(
+                        command,
+                        "The player is arriving aboard a boat",
+                        out.log,
+                    );
+                }
+                Self::step_with_ground(request, Some(*state), Instant::now(), world, out)
+            }
             ClientCommand::Jump {
                 created, posture, ..
             } => self.jump(*created, *posture, world, out),
@@ -1350,6 +1401,10 @@ mod lying_tests;
 #[cfg(test)]
 #[path = "motion_ducking_tests.rs"]
 mod ducking_tests;
+
+#[cfg(test)]
+#[path = "motion_ground_frame_tests.rs"]
+mod ground_frame_tests;
 
 #[cfg(test)]
 mod tests {

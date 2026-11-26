@@ -203,10 +203,7 @@ impl Flags {
             self.heading = heading;
             self.pending = true;
         }
-        if (sample.animation - self.speed).abs() >= rule.speed_step {
-            self.speed = sample.animation;
-            self.pending = true;
-        }
+        self.observe_speed(sample.animation, rule);
         // A turn rate stands for the `EQMac` program's held turn key
         // (inferred, checklist 6.310): the host sends one only while the
         // player turns.
@@ -214,6 +211,20 @@ impl Flags {
             self.pending = true;
         }
         if rule.strafing && strafing {
+            self.pending = true;
+        }
+    }
+
+    /// An observed input can request a report before its position is eligible.
+    /// This changes no movement position and never releases a packet.
+    pub(super) fn observe_forward_input(&mut self, animation: i16, now: Instant, rule: &FlagRule) {
+        self.observe_tick(now, rule);
+        self.observe_speed(animation, rule);
+    }
+
+    fn observe_speed(&mut self, animation: i16, rule: &FlagRule) {
+        if (animation - self.speed).abs() >= rule.speed_step {
+            self.speed = animation;
             self.pending = true;
         }
     }
