@@ -893,7 +893,12 @@ fn apply_commands(
         })?;
         // An unowned move cannot publish a position. Complete it before
         // settling notices, which can independently end the zone.
-        if !handled && matches!(command, ClientCommand::Move(_)) {
+        if !handled
+            && matches!(
+                command,
+                ClientCommand::Move(_) | ClientCommand::GroundFrame { .. }
+            )
+        {
             unoffered(command, out.log)?;
             handled = true;
         }
@@ -999,7 +1004,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 152;
+    const KINDS: usize = 153;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1063,6 +1068,7 @@ mod tests {
             ClientCommand::BoatControl { .. } => 106,
             ClientCommand::ArrivalPlacement { .. } => 107,
             ClientCommand::Move(_) => 28,
+            ClientCommand::GroundFrame { .. } => 152,
             ClientCommand::OfferTrade { .. } => 29,
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
@@ -1510,6 +1516,18 @@ mod tests {
                 vertical_speed: None,
                 history: None,
             }),
+            ClientCommand::GroundFrame {
+                request: MovementRequest {
+                    mode: MovementMode::Forward,
+                    heading: eq_network_game::movement::HeadingUpdate::Rate,
+                    session_id,
+                    position,
+                    created,
+                    support: None,
+                    vertical_speed: None,
+                },
+                state: eq_network_game::movement::GroundState::new([0.0; 2], false).unwrap(),
+            },
             ClientCommand::OfferTrade {
                 session_id,
                 with_id: 9,

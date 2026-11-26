@@ -407,19 +407,29 @@ impl Feature for Spellbook {
     fn notice(
         &mut self,
         command: &ClientCommand,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if matches!(
-            command,
-            ClientCommand::Move(_)
-                | ClientCommand::CastSpell { .. }
-                | ClientCommand::UseKnightAbility { .. }
-                | ClientCommand::UseDiscipline { .. }
-                | ClientCommand::UseItem(_)
-                | ClientCommand::UseBeltItem(_)
-                | ClientCommand::SetPosture { .. }
-        ) {
+        let ground_moves = match command {
+            ClientCommand::GroundFrame { request, state } => {
+                state.forward()
+                    || state.velocity() != [0.0; 2]
+                    || world.body.position() != Some(request.position)
+            }
+            _ => false,
+        };
+        if ground_moves
+            || matches!(
+                command,
+                ClientCommand::Move(_)
+                    | ClientCommand::CastSpell { .. }
+                    | ClientCommand::UseKnightAbility { .. }
+                    | ClientCommand::UseDiscipline { .. }
+                    | ClientCommand::UseItem(_)
+                    | ClientCommand::UseBeltItem(_)
+                    | ClientCommand::SetPosture { .. }
+            )
+        {
             self.cancel("Movement, casting or posture changed", out)?;
         }
         Ok(())

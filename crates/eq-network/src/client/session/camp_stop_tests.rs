@@ -228,6 +228,73 @@ fn the_33ms_camp_waits_for_the_100ms_trailing_stop_and_paced_submission() {
 }
 
 #[test]
+fn current_ground_glide_finishes_camping_without_a_special_endpoint_report() {
+    use eq_network_game::movement::{GroundSampleResult, GroundState};
+    let start = Instant::now();
+    let mut world = walking_on(start, &Titanium, 300);
+    let mut camp = Camp::default();
+    let mut sink = Recording::default();
+    with_out(&Titanium, &mut sink, |out| {
+        camp.request(at(start, 333), &world, out)
+    })
+    .0
+    .unwrap();
+    assert!(matches!(camp.phase, Phase::WaitingForStop { .. }));
+    for (ms, x, speed) in [(350, 0.52, 2.), (400, 0.53, 0.), (416, 0.53, 0.)] {
+        let request = eq_network_game::movement::MovementRequest::new(
+            MovementMode::Forward,
+            5,
+            Position {
+                x,
+                ..Position::default()
+            },
+            at(start, ms),
+        );
+        let state = GroundState::new([speed, 0.], false).unwrap();
+        let command = ClientCommand::GroundFrame {
+            request: request.clone(),
+            state,
+        };
+        with_out(&Titanium, &mut sink, |out| -> Result<()> {
+            camp.notice(&command, &mut world, out)?;
+            let owner = world.body.motion_mut().unwrap();
+            let admitted = owner.try_send_ground_sample(&request, state, request.created, |p| {
+                out.request_unreliable(&Request::Position(*p))
+            })?;
+            if admitted == GroundSampleResult::WaitingForInterval {
+                owner.observe_ground_input(5, request.created, false, request.created)?;
+            }
+            Ok(())
+        })
+        .0
+        .unwrap();
+        assert!(matches!(camp.phase, Phase::WaitingForStop { .. }));
+    }
+    assert!(
+        sink.order.is_empty(),
+        "the ordinary native spacing still holds"
+    );
+    with_out(&Titanium, &mut sink, |out| {
+        pass(&mut camp, &mut world, at(start, 581), out)
+    })
+    .0
+    .unwrap();
+    assert_eq!(
+        sink.order.len(),
+        2,
+        "one ordinary current-state report, then camp"
+    );
+    assert!(!sink.order[0].0 && sink.order[1].0);
+    assert!(matches!(camp.phase, Phase::Preparing(_)));
+    with_out(&Titanium, &mut sink, |out| {
+        world.body.heartbeat(at(start, 582), out)
+    })
+    .0
+    .unwrap();
+    assert_eq!(sink.order.len(), 2, "no extra stopped report");
+}
+
+#[test]
 fn without_the_hosts_stop_the_camp_waits_and_a_stall_sends_nothing() {
     let start = Instant::now();
     let (mut world, mut camp) = queued(start);

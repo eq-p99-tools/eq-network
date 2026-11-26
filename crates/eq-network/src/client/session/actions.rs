@@ -46,7 +46,9 @@ pub(super) fn stale(
     // the host frame stalled. Corrections and admission changes cancel it.
     if matches!(
         command,
-        ClientCommand::Move(_) | ClientCommand::FinishLocalPad { .. }
+        ClientCommand::Move(_)
+            | ClientCommand::GroundFrame { .. }
+            | ClientCommand::FinishLocalPad { .. }
     ) {
         return None;
     }
@@ -368,7 +370,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SetBookOptions { .. }
         | ClientCommand::BoatControl { .. }
         | ClientCommand::ArrivalPlacement { .. }
-        | ClientCommand::Move(_) => &[],
+        | ClientCommand::Move(_) | ClientCommand::GroundFrame { .. } => &[],
     }
 }
 
@@ -437,7 +439,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::FinishLocalPad { session_id, revision, .. } => WorldEvent::LocalPadRefused {
             session_id: *session_id, revision: *revision, reason: reason.into(),
         },
-        ClientCommand::Move(request) => crate::client::motion_refused(request, reason),
+        ClientCommand::Move(request) | ClientCommand::GroundFrame { request, .. } => crate::client::motion_refused(request, reason),
         ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
             request: request.clone(),
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),

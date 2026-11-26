@@ -1,4 +1,8 @@
 //! State sampling retains the ordinary transaction, budgets and native gate.
+#![allow(
+    clippy::float_cmp,
+    reason = "Exact assigned samples and unchanged ownership are the assertion"
+)]
 use super::{
     tests::{request, setup},
     *,
@@ -325,4 +329,145 @@ fn ground_state_input_request_survives_a_tap_inside_the_minimum_interval() {
     assert!(!owner
         .tick_sample(at(582), |_| panic!("extra final report"))
         .unwrap());
+}
+
+#[test]
+fn ground_state_waits_instead_of_sending_a_stale_current_state() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut owner = native_owner(start);
+    let mut sent = Vec::new();
+    let first = request(at(300), 0.4);
+    owner
+        .try_send_ground_sample(
+            &first,
+            GroundState::new([6., 0.], true).unwrap(),
+            at(300),
+            |p| {
+                sent.push(*p);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let early = request(at(316), 0.45);
+    let released = GroundState::new([2., 0.], false).unwrap();
+    assert_eq!(
+        owner
+            .try_send_ground_sample(&early, released, at(316), |_| panic!("unadmitted"))
+            .unwrap(),
+        GroundSampleResult::WaitingForInterval
+    );
+    owner
+        .observe_ground_input(11, early.created, false, at(316))
+        .unwrap();
+    assert!(!owner
+        .tick_sample(at(581), |_| panic!("stale running snapshot"))
+        .unwrap());
+    assert_eq!(owner.sampled(), first.created);
+    let rest = request(at(600), 0.5);
+    owner
+        .try_send_ground_sample(
+            &rest,
+            GroundState::new([0.; 2], false).unwrap(),
+            at(600),
+            |p| {
+                sent.push(*p);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].position, rest.position);
+    assert_eq!(sent[1].delta, [0.; 3]);
+}
+
+#[test]
+fn ground_state_redundant_idle_observations_do_not_strand_the_pending_report() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut owner = native_owner(start);
+    for (ms, x, state) in [
+        (300, 0.4, GroundState::new([6., 0.], true).unwrap()),
+        (400, 0.5, GroundState::new([0.; 2], false).unwrap()),
+    ] {
+        let sample = request(at(ms), x);
+        owner
+            .try_send_ground_sample(&sample, state, at(ms), |_| Ok(()))
+            .unwrap();
+    }
+    let duplicate = request(at(416), 0.5);
+    assert_eq!(
+        owner
+            .try_send_ground_sample(
+                &duplicate,
+                GroundState::new([0.; 2], false).unwrap(),
+                at(416),
+                |_| panic!("inside minimum interval")
+            )
+            .unwrap(),
+        GroundSampleResult::WaitingForInterval
+    );
+    assert_eq!(owner.sampled(), at(400), "no acceptance of redundant time");
+    assert!(owner
+        .tick_sample(at(581), |p| {
+            assert_eq!(p.position, duplicate.position);
+            assert_eq!(p.delta, [0.; 3]);
+            Ok(())
+        })
+        .unwrap());
+    assert!(!owner.stop_pending());
+}
+
+#[test]
+fn ground_state_refusals_preserve_waiting_and_correction_root_clear_it() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut owner = native_owner(start);
+    let first = request(at(300), 0.4);
+    owner
+        .try_send_ground_sample(
+            &first,
+            GroundState::new([6., 0.], true).unwrap(),
+            at(300),
+            |_| Ok(()),
+        )
+        .unwrap();
+    let waiting = request(at(316), 0.45);
+    owner
+        .try_send_ground_sample(
+            &waiting,
+            GroundState::new([2., 0.], false).unwrap(),
+            at(316),
+            |_| Ok(()),
+        )
+        .unwrap();
+    let before = (
+        owner.position(),
+        owner.sampled(),
+        owner.ground_waiting,
+        owner.current_ground,
+    );
+    let invalid = request(at(400), 2.0);
+    assert!(owner
+        .try_send_ground_sample(
+            &invalid,
+            GroundState::new([2., 0.], false).unwrap(),
+            at(400),
+            |_| Ok(())
+        )
+        .is_err());
+    assert_eq!(
+        (
+            owner.position(),
+            owner.sampled(),
+            owner.ground_waiting,
+            owner.current_ground
+        ),
+        before
+    );
+    owner.root(at(420)).unwrap();
+    assert_eq!(owner.ground_waiting, None);
+    assert_eq!(owner.current_ground, None);
+    owner.correct(Position::default(), at(500)).unwrap();
+    assert_eq!(owner.ground_waiting, None);
 }

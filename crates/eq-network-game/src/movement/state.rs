@@ -61,8 +61,9 @@ impl GroundState {
 #[non_exhaustive]
 pub enum GroundSampleResult {
     /// Its genuine creation stamp is inside the existing minimum interval.
-    /// No position, flags or transport state changed. The host keeps publishing
-    /// current states; it must not restamp this observation to invent time.
+    /// No position, accepted time or transport state changed. A changed state
+    /// holds stale reports until a fresh observation is admitted. The host keeps
+    /// publishing current states, never restamping an old observation for time.
     WaitingForInterval,
     /// Locally admitted under the usual transaction. The native update gate
     /// may still hold the packet; this is not a wire or server acknowledgement.

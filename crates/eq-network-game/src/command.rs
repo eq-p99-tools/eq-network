@@ -1478,6 +1478,17 @@ pub enum GameCommand {
     },
     /// Propose fresh motion for the current zone session.
     Move(crate::movement::MovementRequest),
+    /// A host's completed ordinary Forward ground frame, before its next input.
+    /// Position, current velocity and observed Forward input are separate facts.
+    /// The ordinary guard, transaction, packing and report gate remain in force.
+    /// A frame inside the minimum interval waits for a fresh observation;
+    /// only admitted/refused frames publish MotionSent, never a false acceptance.
+    GroundFrame {
+        /// Genuine creation stamp, admission and collision-resolved position.
+        request: crate::movement::MovementRequest,
+        /// Current owned velocity and actually observed input, not interval travel.
+        state: crate::movement::GroundState,
+    },
 }
 
 impl GameCommand {
@@ -1643,6 +1654,7 @@ impl GameCommand {
             Self::ClimbReach { .. } => "ClimbReach",
             Self::DoorRadii { .. } => "DoorRadii",
             Self::Move(..) => "Move",
+            Self::GroundFrame { .. } => "GroundFrame",
         }
     }
 
@@ -1668,7 +1680,7 @@ impl GameCommand {
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
             Self::DropItem(request) => Some(request.session_id),
-            Self::Move(request) => Some(request.session_id),
+            Self::Move(request) | Self::GroundFrame { request, .. } => Some(request.session_id),
             Self::SwapSpell { session_id, .. }
             | Self::SendChatInAdmission { session_id, .. }
             | Self::BoatControl { session_id, .. }
@@ -1857,6 +1869,7 @@ impl GameCommand {
             Self::CrossZoneLine { .. } | Self::FinishLocalPad { .. } => Capability::Zoning,
             Self::SetPosture { .. } | Self::FeignLanded { .. } => Capability::Posture,
             Self::Move(_)
+            | Self::GroundFrame { .. }
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. } => Capability::Moving,
@@ -2076,7 +2089,7 @@ impl GameCommand {
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
             Self::DropItem(request) => Some(request.created),
-            Self::Move(request) => Some(request.created),
+            Self::Move(request) | Self::GroundFrame { request, .. } => Some(request.created),
             Self::SwapSpell { created, .. }
             | Self::RespondToPopup { created, .. }
             | Self::InspectPlayer { created, .. }
@@ -2322,6 +2335,7 @@ pub fn encode(
         | GameCommand::MoveCoins { .. }
         | GameCommand::DestroyCoins { .. }
         | GameCommand::Move(_)
+        | GameCommand::GroundFrame { .. }
         | GameCommand::Jump { .. }
         | GameCommand::EnvironmentalDamage { .. }
         | GameCommand::LiquidDamage { .. }

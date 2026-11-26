@@ -243,6 +243,24 @@ impl Feature for Camp {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let waiting = matches!(self.phase, Phase::WaitingForStop { .. });
+        if let ClientCommand::GroundFrame { request, state } = command {
+            let same_heading = world
+                .body
+                .position()
+                .is_some_and(|at| at.heading == request.position.heading);
+            // Releasing Forward leaves genuine deceleration, not a new move
+            // command. Wait for its ordinary current-state report, without
+            // manufacturing a final zero or treating redundant idle frames
+            // as fresh voluntary movement.
+            if !state.forward()
+                && same_heading
+                && (waiting
+                    || state.velocity() == [0.0; 2]
+                        && world.body.position() == Some(request.position))
+            {
+                return Ok(());
+            }
+        }
         if let (
             Phase::WaitingForStop {
                 session_id,
@@ -270,7 +288,9 @@ impl Feature for Camp {
                 posture: Posture::Standing,
                 ..
             } => CampEnd::Standing,
-            ClientCommand::Move(_) | ClientCommand::CrossZoneLine { .. } => CampEnd::Moving,
+            ClientCommand::Move(_)
+            | ClientCommand::GroundFrame { .. }
+            | ClientCommand::CrossZoneLine { .. } => CampEnd::Moving,
             ClientCommand::Jump { .. } if waiting => CampEnd::Moving,
             ClientCommand::SetPosture {
                 posture: Posture::Ducking,
