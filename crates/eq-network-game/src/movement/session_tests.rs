@@ -414,7 +414,7 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
         assert!(invalid.validate().is_err());
     }
 }
-fn setup(now: Instant) -> MotionSession {
+pub(super) fn setup(now: Instant) -> MotionSession {
     let mut session = MotionSession::new(11, 7, Position::default(), now).unwrap();
     session
         .calibrate(

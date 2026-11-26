@@ -3,8 +3,8 @@ use super::{
     counter::{Counter, UpdateCounter},
     gate::{FlagRule, Flags, Hold, UpdateGate},
     history::{causes, Recorder},
-    DiagonalRates, HeadingUpdate, MovementGuard, MovementMode, MovementRequest, PositionPacket,
-    JUMP_OPCODE,
+    DiagonalRates, GroundSampleResult, GroundState, HeadingUpdate, MovementGuard, MovementMode,
+    MovementRequest, PositionPacket, JUMP_OPCODE,
 };
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
@@ -1265,6 +1265,117 @@ impl MotionSession {
         self.prepare_move_sample(request, now)?.submit(send)
     }
 
+    /// Retains a genuinely observed Forward input transition as a request for
+    /// the next ordinary report, independently of position admission.
+    ///
+    /// A short press/release inside the minimum movement interval must not lose
+    /// its real request when the latest state is already stopped. This observes
+    /// the existing native input/timer rule only: no position is accepted, no
+    /// sample is encoded, and nothing is sent here. The host must subsequently
+    /// supply its current collision-resolved state through
+    /// [`Self::try_send_ground_sample`], waiting when its real stamp is too early.
+    ///
+    /// # Errors
+    /// Rejects withdrawn, suspended, foreign, stale or changing-calibration input.
+    pub fn observe_ground_input(
+        &mut self,
+        session_id: u64,
+        created: Instant,
+        forward: bool,
+        now: Instant,
+    ) -> Result<()> {
+        ensure!(
+            !self.suspended && self.pad_arrival.is_none() && self.granted(),
+            "ground input is unavailable"
+        );
+        ensure!(
+            session_id == self.guard.session_id,
+            "movement belongs to an old zone session"
+        );
+        ensure!(
+            created >= self.guard.input_epoch
+                && created >= self.guard.sampled
+                && created <= now
+                && now.duration_since(created) <= Duration::from_millis(250),
+            "stale ground input"
+        );
+        ensure!(
+            self.earlier
+                .iter()
+                .all(|(until, _)| *until <= self.guard.sampled),
+            "current ground state crosses a calibration change"
+        );
+        let animation = if self.rooted || !forward {
+            0
+        } else {
+            self.calibration
+                .ok_or_else(|| anyhow::anyhow!("ground input is not calibrated"))?
+                .animation
+        };
+        if let Some(UpdateGate::Flagged { rule, .. }) = self.gate {
+            self.flags.observe_forward_input(animation, now, &rule);
+        }
+        Ok(())
+    }
+
+    /// Samples a geometry-owning host's current ordinary Forward ground state.
+    ///
+    /// Position passes the existing movement guard and transaction. Velocity
+    /// is independently capped by the stable current calibration, then packed
+    /// with its existing generation-specific conversion. Forward input chooses
+    /// the calibrated forward field even when interval travel differs.
+    ///
+    /// A too-early genuine observation waits without changing owner state; the
+    /// host must supply a fresh current observation, not relabel this one's time.
+    /// The ordinary native report gate remains in force. A successful local
+    /// admission neither forces a packet nor acknowledges server delivery.
+    ///
+    /// # Errors
+    /// Rejects stale, unsupported, uncalibrated or excessive state, and failed
+    /// transport. Known carrier, jump, water and changing-calibration intervals
+    /// retain the existing request path. This method certifies no geometry.
+    pub fn try_send_ground_sample(
+        &mut self,
+        request: &MovementRequest,
+        state: GroundState,
+        now: Instant,
+        send: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<GroundSampleResult> {
+        ensure!(!self.suspended, "movement session is suspended");
+        ensure!(self.pad_arrival.is_none(), "pad arrival physics is pending");
+        ensure!(self.granted(), "player input is withdrawn");
+        ensure!(
+            request.mode == MovementMode::Forward
+                && request.support.is_none()
+                && request.vertical_speed.is_none()
+                && !self.options.fly
+                && self.guard.jumped_at.is_none()
+                && !self.guard.previous_swim,
+            "current ground state requires ordinary Forward without moving support"
+        );
+        ensure!(
+            self.earlier
+                .iter()
+                .all(|(until, _)| *until <= self.guard.sampled),
+            "current ground state crosses a calibration change"
+        );
+        self.guard.check_current(request, now)?;
+        if !self.guard.sample_interval_ready(request.created) {
+            return Ok(GroundSampleResult::WaitingForInterval);
+        }
+        self.prepare_move_sample_with_state(request, now, Some(state))?
+            .submit(send)?;
+        Ok(GroundSampleResult::Accepted)
+    }
+
+    fn prepare_move_sample(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+    ) -> Result<PreparedMove<'_>> {
+        self.prepare_move_sample_with_state(request, now, None)
+    }
+
     /// Materialize and check exactly one immutable sample and release decision.
     /// No owner state changes before submission. The exclusive owner borrow
     /// prevents re-entrant motion changes during the existing send callback.
@@ -1274,10 +1385,11 @@ impl MotionSession {
         clippy::too_many_lines,
         reason = "One prepare/validate/encode transaction, with exact withdrawn coordinates"
     )]
-    fn prepare_move_sample(
+    fn prepare_move_sample_with_state(
         &mut self,
         request: &MovementRequest,
         now: Instant,
+        state: Option<GroundState>,
     ) -> Result<PreparedMove<'_>> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(self.pad_arrival.is_none(), "pad arrival physics is pending");
@@ -1355,8 +1467,9 @@ impl MotionSession {
             ensure!(diagonal.is_none(), "diagonal movement is not calibrated");
             Rates::ROOTED
         };
-        // The wire's velocity and turn rate cover the same interval the guard
-        // budgets: from the last accepted request's stamp to this one's.
+        // The ordinary request's derived velocity and turn rate cover this
+        // interval. A current ground-state sample supplies its owned velocity
+        // below, while retaining the same position/heading budget.
         let elapsed = guard.interval(request.created);
         let rates = self.over_interval(current, request.created, elapsed, along, diagonal);
         let Rates {
@@ -1422,6 +1535,17 @@ impl MotionSession {
         let moving = displacement[..if swimming { 3 } else { 2 }]
             .iter()
             .any(|d| d.abs() > f32::EPSILON);
+        let (delta, animation, moving) = if let Some(state) = state {
+            state.check(current.speed * run_speed_multiplier.factor())?;
+            let animation = if state.forward() { animation } else { 0 };
+            (
+                state.wire(velocity_scale),
+                animation,
+                animation != 0 || state.velocity().iter().any(|v| *v != 0.0),
+            )
+        } else {
+            (delta, if moving { animation } else { 0 }, moving)
+        };
         // Absolute heading and continuing yaw are independent fields.
         let turn = if snapshot {
             0
@@ -1433,7 +1557,7 @@ impl MotionSession {
             sequence: self.counter.value(now),
             position: request.position,
             delta,
-            animation: if moving { animation } else { 0 },
+            animation,
             delta_heading: turn,
         };
         sample.check()?;
@@ -1977,6 +2101,9 @@ impl MotionSession {
 #[path = "carrier_tests.rs"]
 mod carrier_tests;
 
+#[cfg(test)]
+#[path = "ground_state_tests.rs"]
+mod ground_state_tests;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod history_tests;
