@@ -368,3 +368,176 @@ fn a_jump_in_place_records_every_frame_of_its_rise_and_fall() {
         .filter(|pair| pair[1].sequence == pair[0].sequence + 1);
     assert!(rising.count() >= airborne.len() - 4);
 }
+
+#[test]
+fn observed_jump_path_keeps_the_apex_without_changing_position_packets_or_gates() {
+    use crate::movement::{MovementPath, MovementPoint};
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut outcomes = Vec::new();
+    for observed in [false, true] {
+        let mut motion = airborne(start)
+            .with_gate(Some(UpdateGate::Flagged {
+                pack: |sample| sample.packet(),
+                rule: crate::movement::TITANIUM_FLAGS,
+            }))
+            .with_counter(TITANIUM_UPDATE_COUNTER)
+            .with_history(true);
+        motion.jumped();
+        let mut packets = Vec::new();
+        for (ms, span, heights) in [
+            (
+                100_u64,
+                100_u64,
+                vec![(0, 0.0), (50, 1.921002), (100, 3.392894)],
+            ),
+            (
+                238,
+                138,
+                vec![
+                    (0, 3.392894),
+                    (46, 3.392894),
+                    (92, 4.429017),
+                    (138, 5.042313),
+                ],
+            ),
+            (
+                376,
+                138,
+                vec![
+                    (0, 5.042313),
+                    (46, 5.245340),
+                    (92, 5.050284),
+                    (138, 4.468968),
+                ],
+            ),
+            (
+                514,
+                138,
+                vec![
+                    (0, 4.468968),
+                    (46, 3.512865),
+                    (92, 2.193106),
+                    (138, 0.520491),
+                ],
+            ),
+            (
+                652,
+                138,
+                vec![(0, 0.520491), (46, 0.0), (92, 0.0), (138, 0.0)],
+            ),
+        ] {
+            let mut proposed = request(at(ms), 0.0);
+            proposed.mode = MovementMode::Fall;
+            proposed.position.z = heights.last().unwrap().1;
+            if observed {
+                let points = heights
+                    .into_iter()
+                    .map(|(time, z)| MovementPoint {
+                        elapsed: Duration::from_millis(time),
+                        position: Position {
+                            z,
+                            ..Position::default()
+                        },
+                    })
+                    .collect();
+                let path = MovementPath::new(points).unwrap();
+                assert_eq!(path.duration(), Duration::from_millis(span));
+                proposed.history = Some(path);
+            }
+            motion
+                .send_move(&proposed, at(ms), |packet| {
+                    packets.push((ms, packet.opcode, packet.body.clone()));
+                    Ok(())
+                })
+                .unwrap();
+        }
+        for ms in (700..1500).step_by(50) {
+            motion
+                .tick_sample(at(ms), |packet| {
+                    let command = packet.packet()?;
+                    packets.push((ms, command.opcode, command.body));
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let mut recorded = Vec::new();
+        motion
+            .report_history(at(1500), true, |packet| {
+                recorded.extend(records(packet));
+                Ok(())
+            })
+            .unwrap();
+        let peak = recorded
+            .iter()
+            .filter(|r| r.cause == Cause::Collision)
+            .map(|r| r.z - LIFT)
+            .fold(0.0_f32, f32::max);
+        assert!(recorded
+            .windows(2)
+            .all(|pair| pair[1].sequence.wrapping_sub(pair[0].sequence) < 0x8000));
+        outcomes.push((packets, peak, motion.position()));
+    }
+    assert_eq!(
+        outcomes[0].0, outcomes[1].0,
+        "position fields, counters and gate times"
+    );
+    assert_eq!(
+        outcomes[0].2, outcomes[1].2,
+        "history never changes the actor"
+    );
+    assert!(
+        outcomes[1].1 > outcomes[0].1 + 0.1,
+        "retained intermediate apex"
+    );
+    assert!(outcomes[1].1 <= 5.245_341, "no higher fitted arc");
+}
+
+#[test]
+fn observed_path_rejection_and_failed_send_commit_no_frames_or_movement() {
+    use crate::movement::{MovementPath, MovementPoint};
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut motion = airborne(start)
+        .with_counter(TITANIUM_UPDATE_COUNTER)
+        .with_history(true);
+    motion.jumped();
+    let mut proposed = request(now, 0.0);
+    proposed.position.z = 3.392894;
+    let endpoint = proposed.position;
+    let path = |middle| {
+        MovementPath::new(vec![
+            MovementPoint {
+                elapsed: Duration::ZERO,
+                position: Position::default(),
+            },
+            MovementPoint {
+                elapsed: Duration::from_millis(50),
+                position: Position {
+                    z: middle,
+                    ..Position::default()
+                },
+            },
+            MovementPoint {
+                elapsed: Duration::from_millis(100),
+                position: endpoint,
+            },
+        ])
+        .unwrap()
+    };
+    proposed.history = Some(path(100.0));
+    assert!(motion
+        .send_move(&proposed, now, |_| panic!("unbounded vertex sent"))
+        .is_err());
+    assert_eq!(motion.position(), Position::default());
+    assert_eq!(motion.history.as_ref().unwrap().frames, 0);
+    proposed.history = Some(path(1.921002));
+    assert!(motion
+        .send_move(&proposed, now, |_| anyhow::bail!("transport failed"))
+        .is_err());
+    assert_eq!(motion.position(), Position::default());
+    assert_eq!(motion.history.as_ref().unwrap().frames, 0);
+    motion.send_move(&proposed, now, |_| Ok(())).unwrap();
+    assert_eq!(motion.position(), proposed.position);
+    assert!(motion.history.as_ref().unwrap().frames > 0);
+}

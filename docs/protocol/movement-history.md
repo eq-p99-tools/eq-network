@@ -58,6 +58,15 @@ triggers in this session are unread (6.420). Nothing is recorded for a server
 relocation or correction; the frames before a correction stay at the old
 place.
 
+For ordinary dry motion, a host may attach a bounded observed `MovementPath`
+to the request (6.659). After the endpoint and trace checks pass, cause-1 frames
+sample that accepted path at their existing counter timestamps. This retains
+intermediate jump/fall positions that a single endpoint chord could omit.
+Without a path, the existing placement remains. This changes neither the
+counter rate nor position-update eligibility, and a refused/failed move cannot
+commit its trace. The path is host collision-resolved data, not independent
+collision authority or a fitted ballistic arc.
+
 L is 1.9 [C]: both recordings show record Z minus update Z of exactly 1.9 for
 a human. The read takes the larger of 1.9 and the model's own height (actor
 virtual `+0x28`), which is unread, so a larger model may differ [I]. The

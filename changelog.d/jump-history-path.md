@@ -1,0 +1,1 @@
+- Preserve observed intermediate jump and fall positions in Titanium movement history without changing position-update fields, guards or cadence.

@@ -566,6 +566,7 @@ mod tests {
             created: Instant::now(),
             support: None,
             vertical_speed: None,
+            history: None,
         });
         let sit = ClientCommand::SetPosture {
             session_id: 5,

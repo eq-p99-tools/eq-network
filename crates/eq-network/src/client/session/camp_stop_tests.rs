@@ -99,6 +99,7 @@ fn request(created: Instant, position: Position) -> ClientCommand {
         created,
         support: None,
         vertical_speed: None,
+        history: None,
     })
 }
 

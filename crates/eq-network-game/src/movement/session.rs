@@ -460,6 +460,7 @@ struct PreparedMove<'a> {
     release: Release,
     now: Instant,
     moving: bool,
+    history: Option<(super::MovementPath, Instant)>,
 }
 
 impl PreparedMove<'_> {
@@ -476,11 +477,12 @@ impl PreparedMove<'_> {
             release,
             now,
             moving,
+            history,
         } = self;
         match release {
             Release::Send => {
                 send(&sample)?;
-                owner.record_frames(now, sample.position);
+                owner.record_frames_path(now, sample.position, history.as_ref());
                 owner.held = None;
                 owner.last_sent = now;
                 owner.record_update(&sample, now);
@@ -490,7 +492,7 @@ impl PreparedMove<'_> {
                 });
             }
             Release::Hold => {
-                owner.record_frames(now, sample.position);
+                owner.record_frames_path(now, sample.position, history.as_ref());
                 owner.held = Some(sample);
             }
         }
@@ -1416,6 +1418,58 @@ impl MotionSession {
         flags.carried_turn(world_turn - own_turn);
         let strafing = diagonal.is_some() || matches!(along, MovementMode::Strafe(_));
         let release = self.release(&sample, &mut flags, now, strafing)?;
+        let history = if let Some(path) = request.history.as_ref() {
+            ensure!(
+                !swimming && !self.options.fly && request.support.is_none(),
+                "movement history path requires ordinary unsupported motion"
+            );
+            let points = path.points();
+            let same_place = |a: Position, b: Position| (a.x, a.y, a.z) == (b.x, b.y, b.z);
+            ensure!(
+                same_place(points[0].position, self.position)
+                    && same_place(points[points.len() - 1].position, request.position),
+                "movement history path endpoints do not match"
+            );
+            ensure!(
+                path.duration().as_secs_f32() <= elapsed + f32::EPSILON,
+                "movement history path exceeds accepted time"
+            );
+            // Every vertex must fit the proposal's existing guard/budget.
+            // These clones certify no collision geometry and commit no
+            // intermediate movement, time, jump state or update flag.
+            for point in points.iter().skip(1).take(points.len() - 2) {
+                let mut vertex = request.clone();
+                vertex.position = point.position;
+                vertex.history = None;
+                let mut checked = self.guard.clone();
+                checked.speed = Some(speed);
+                checked.accept_with_modes(
+                    &vertex,
+                    now,
+                    run_speed_multiplier,
+                    lateral_rate,
+                    (self.swimming, swim_backward, swim_caps),
+                )?;
+            }
+            let across: f32 = points
+                .windows(2)
+                .map(|pair| {
+                    (pair[1].position.x - pair[0].position.x)
+                        .hypot(pair[1].position.y - pair[0].position.y)
+                })
+                .sum();
+            ensure!(
+                across <= speed * run_speed_multiplier.factor() * elapsed + 0.01,
+                "movement history path exceeds horizontal time budget"
+            );
+            let start = request
+                .created
+                .checked_sub(path.duration())
+                .ok_or_else(|| anyhow::anyhow!("movement history path has no start time"))?;
+            Some((path.clone(), start))
+        } else {
+            None
+        };
         Ok(PreparedMove {
             owner: self,
             guard,
@@ -1424,6 +1478,7 @@ impl MotionSession {
             release,
             now,
             moving: moving || turn != 0,
+            history,
         })
     }
 
@@ -1805,6 +1860,18 @@ impl MotionSession {
         reason = "Frame counts between two samples are small; an unmoved step is exact"
     )]
     fn record_frames(&mut self, now: Instant, to: Position) {
+        self.record_frames_path(now, to, None);
+    }
+
+    /// Samples an accepted host path on the existing counter's frame clock.
+    /// The path changes records only, never the actor or position-update gate.
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+    fn record_frames_path(
+        &mut self,
+        now: Instant,
+        to: Position,
+        path: Option<&(super::MovementPath, Instant)>,
+    ) {
         let counter = self.counter;
         let from = self.position;
         let Some(history) = self.history.as_mut() else {
@@ -1818,7 +1885,7 @@ impl MotionSession {
         };
         let first = history.frames;
         history.frames = frames;
-        if (from.x, from.y, from.z) == (to.x, to.y, to.z) {
+        if path.is_none() && (from.x, from.y, from.z) == (to.x, to.y, to.z) {
             // Every frame is at one place: the first may be written, and the
             // rest are its duplicates, consumed with their sequences.
             history.recorder.record(
@@ -1832,12 +1899,15 @@ impl MotionSession {
         let span = (frames - first) as f32;
         for frame in first..frames {
             let along = (frame - first + 1) as f32 / span;
-            let position = Position {
-                x: from.x + (to.x - from.x) * along,
-                y: from.y + (to.y - from.y) * along,
-                z: from.z + (to.z - from.z) * along,
-                heading: to.heading,
-            };
+            let position = path.map_or_else(
+                || Position {
+                    x: from.x + (to.x - from.x) * along,
+                    y: from.y + (to.y - from.y) * along,
+                    z: from.z + (to.z - from.z) * along,
+                    heading: to.heading,
+                },
+                |(path, start)| path.at(counter.frame_at(frame).saturating_duration_since(*start)),
+            );
             history.recorder.record(
                 causes::FRAME,
                 position,
