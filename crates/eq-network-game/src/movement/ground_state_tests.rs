@@ -550,6 +550,12 @@ fn ground_state_stopped_producer_releases_accepted_report_at_the_next_eligible_t
             .tick_sample(at(ms), |_| panic!("minimum interval has not passed"))
             .unwrap());
     }
+    // A refused handback must not leave the waiting producer's report hold
+    // in force. This ordinary request is still inside the same minimum.
+    let refused = request(at(309), 100.0);
+    assert!(owner
+        .send_move_sample(&refused, at(309), |_| Ok(()))
+        .is_err());
     let mut packets = Vec::new();
     assert!(
         owner
@@ -570,6 +576,12 @@ fn ground_state_stopped_producer_releases_accepted_report_at_the_next_eligible_t
         accepted.created,
         "tick did not admit the waiting suffix"
     );
+    // Expiring report suppression must not forget the newest observation's
+    // ordering and admit an older queued frame as if it had arrived first.
+    let older = request(at(275), 0.01);
+    assert!(owner
+        .try_send_ground_sample(&older, idle, at(310), |_| Ok(()))
+        .is_err());
     assert!(!owner
         .tick_sample(at(311), |_| panic!("extra release report"))
         .unwrap());
@@ -583,12 +595,6 @@ fn ground_state_stopped_producer_releases_accepted_report_at_the_next_eligible_t
         "stationary heartbeat stayed silent"
     );
     assert_eq!(packets[1].position, accepted.position);
-    // Expiring report suppression must not forget the newest observation's
-    // ordering and admit an older queued frame as if it had arrived first.
-    let older = request(at(275), 0.01);
-    assert!(owner
-        .try_send_ground_sample(&older, idle, at(310), |_| Ok(()))
-        .is_err());
 }
 
 #[test]

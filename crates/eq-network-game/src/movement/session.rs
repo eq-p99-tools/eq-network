@@ -407,7 +407,9 @@ pub struct MotionSession {
     last_update: Option<PositionPacket>,
     /// A flagged gate's pending flag and what it compares against.
     flags: Flags,
-    /// A newer unadmitted ground observation holds back stale reports.
+    /// Latest unadmitted ground observation. Report suppression lasts only
+    /// until the accepted state's existing minimum sample interval passes;
+    /// this stamp still preserves observation ordering afterwards.
     ground_waiting: Option<Instant>,
     current_ground: Option<GroundState>,
     /// The server's hold on the player ([`Self::set_hold`]).
@@ -1813,6 +1815,8 @@ impl MotionSession {
             }
             return Ok(false);
         }
+        let ground_interval =
+            self.ground_waiting.is_some() && !self.guard.sample_interval_ready(now);
         if let Some(UpdateGate::Flagged { pack, rule }) = self.gate {
             match (self.hold, rule.frozen_spacing) {
                 (Hold::Frozen, Some(spacing)) => {
@@ -1821,13 +1825,13 @@ impl MotionSession {
                 (Hold::Stunned, _) if rule.stun_silent => return Ok(false),
                 _ => {}
             }
-            if self.ground_waiting.is_some() {
+            if ground_interval {
                 self.flags.observe_tick(now, &rule);
                 return Ok(false);
             }
             return self.tick_flagged(now, since, (pack, &rule), send);
         }
-        if self.ground_waiting.is_some() {
+        if ground_interval {
             return Ok(false);
         }
         if let Some(held) = self.held {
