@@ -236,6 +236,10 @@ impl Feature for Camp {
     }
 
     /// Standing up, ducking or moving abandons a camp still being prepared.
+    #[allow(
+        clippy::float_cmp,
+        reason = "An unchanged sampled heading compares exactly"
+    )]
     fn notice(
         &mut self,
         command: &ClientCommand,

@@ -1314,6 +1314,7 @@ impl MotionSession {
         ensure!(
             created >= self.guard.input_epoch
                 && created >= self.guard.sampled
+                && self.ground_waiting.is_none_or(|waiting| created >= waiting)
                 && created <= now
                 && now.duration_since(created) <= Duration::from_millis(250),
             "stale ground input"
@@ -1383,6 +1384,11 @@ impl MotionSession {
         ensure!(
             request.created >= self.guard.sampled,
             "ground frame predates accepted motion"
+        );
+        ensure!(
+            self.ground_waiting
+                .is_none_or(|waiting| request.created >= waiting),
+            "ground frame predates a newer observation"
         );
         let maximum = self
             .calibration
