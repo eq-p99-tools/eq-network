@@ -11,9 +11,11 @@ mod diagonal;
 mod gate;
 pub mod history;
 mod inputs;
+mod path;
 pub use inputs::{
     EqMacFatigueInputs, SpeedInputAcceptance, SpeedInputState, SpeedInputUnavailable, SpeedInputs,
 };
+pub use path::{MovementPath, MovementPoint};
 mod session;
 mod shoreline;
 mod speeds;
@@ -269,6 +271,11 @@ pub struct MovementRequest {
     /// the generation's program sends its actor's vertical speed
     /// ([`super::GameDialect::sends_airborne_speed`], checklist 6.617).
     pub vertical_speed: Option<f32>,
+    /// Optional observed ordinary-motion vertices for movement history.
+    /// The accepted endpoint, movement guard and position-update gate remain
+    /// independent; omitted or invalid paths use the existing endpoint
+    /// interpolation without refusing an otherwise admitted move.
+    pub history: Option<MovementPath>,
 }
 
 /// A moving thing the player stands on, which may carry them.
@@ -298,6 +305,7 @@ impl MovementRequest {
             created,
             support: None,
             vertical_speed: None,
+            history: None,
         }
     }
 
@@ -1358,6 +1366,7 @@ mod tests {
             created: now,
             support: None,
             vertical_speed: None,
+            history: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.z = 2.0;
@@ -1382,6 +1391,7 @@ mod tests {
             created: now,
             support: None,
             vertical_speed: None,
+            history: None,
         };
         // Without the player's climb, one riser a sample however long.
         assert!(guard.accept(&request, now).is_err());
@@ -1436,6 +1446,7 @@ mod tests {
             created: now,
             support: None,
             vertical_speed: None,
+            history: None,
         };
         // Grounded modes still refuse the drop.
         assert!(guard.accept(&request, now).is_err());
@@ -1462,6 +1473,7 @@ mod tests {
             created,
             support: None,
             vertical_speed: None,
+            history: None,
         }
     }
 
@@ -1554,6 +1566,7 @@ mod tests {
             created,
             support: None,
             vertical_speed: None,
+            history: None,
         }
     }
 
@@ -1643,6 +1656,7 @@ mod tests {
             created: now,
             support: None,
             vertical_speed: None,
+            history: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.x = 0.5;
@@ -1665,6 +1679,7 @@ mod tests {
             created: start,
             support: None,
             vertical_speed: None,
+            history: None,
         };
         assert!(guard.accept(&request, start).is_err());
         guard
@@ -1705,6 +1720,7 @@ mod tests {
             created: now,
             support: None,
             vertical_speed: None,
+            history: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.x = 0.5;
@@ -1746,6 +1762,7 @@ mod tests {
                     created: now,
                     support: None,
                     vertical_speed: None,
+                    history: None,
                 },
                 now
             )

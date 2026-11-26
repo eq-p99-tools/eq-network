@@ -1,5 +1,32 @@
 # API and integration contracts
 
+## Observed ordinary movement paths (6.659)
+
+`MovementRequest::history` is optional recording data. `MovementRequest::new`
+defaults it to `None`; complete struct literals must supply the new field.
+`MovementPath::new` retains two to eight finite, ordered actor-origin vertices
+over the original sample span (at most 250 ms). It does not create a jump,
+move permission, collision proof, extra time budget or packet schedule.
+
+The final request first passes the existing movement guard. The session also
+checks trace anchors/span, vertices against the same proposal guard, and total
+horizontal travel against that proposal's existing budget. If any trace check
+fails, only the trace is discarded: the ordinarily admitted move proceeds and
+history uses the existing endpoint interpolation. Water, flight and moving
+supports likewise ignore this ordinary-world-frame trace. The diagnostic-only
+`MotionSession::discarded_history_paths` reports the count and latest reason
+for a committed fallback in this admission. No behavior depends on that count.
+History and diagnostics commit only with the accepted move (and after transport
+success if a send is due). Ordinary move refusals and failed sends commit neither.
+
+The existing history counter samples the accepted piecewise-linear path; an
+omitted path retains endpoint interpolation. The actor's final state, update
+flags, `0x14cb` fields, sequence counter and eligibility gate are unchanged.
+The trace intentionally changes `0x6a1b` frame positions/duplicate suppression;
+the recorder's cause, lift, order, report eligibility and delivery rules stay
+the same. Actual drawing/physics timestamps and the counter's inferred fixed
+frame rate remain distinct; no native runtime frame-rate claim is added.
+
 ## Titanium liquid reports and their damage record (read R49-3)
 
 Every Titanium session, `EQEmu` local or not and P99, offers `Drowning` and

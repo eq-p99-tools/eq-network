@@ -274,6 +274,7 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
                 created: Instant::now(),
                 support: None,
                 vertical_speed: None,
+                history: None,
             }),
             &mut world,
             out,

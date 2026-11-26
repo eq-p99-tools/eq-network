@@ -1508,6 +1508,7 @@ mod tests {
                 created,
                 support: None,
                 vertical_speed: None,
+                history: None,
             }),
             ClientCommand::OfferTrade {
                 session_id,

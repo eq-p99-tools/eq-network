@@ -1776,7 +1776,7 @@ fn withdrawn_input_allows_only_fresh_vertical_descent_and_no_jump() {
     ] {
         let bad = MovementRequest {
             position,
-            ..falling
+            ..falling.clone()
         };
         assert!(session
             .send_move(&bad, now, |_| panic!("input while withdrawn"))
