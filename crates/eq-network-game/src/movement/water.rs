@@ -246,7 +246,125 @@ pub struct WetVelocity {
     due: f32,
 }
 
+/// The factors for a due water-clock frame (Titanium `0x4bfe0f`).
+///
+/// Air is the unsupported dry part of a surface swim: gravity and 0.99
+/// damping, without new input. It does not model ordinary jumps or falls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WetFrameMedium {
+    /// A resolved liquid's existing wet factors.
+    Water(WetCoefficients),
+    /// Unsupported air, with no new input or jump push.
+    Air,
+}
+
+/// A read-only view of a velocity's existing carried frame phase.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct WetFramePhase {
+    /// Seconds left in the current frame, zero when a frame is due.
+    /// The existing wet clock treats values within its rounding window as
+    /// a boundary; inspect [`Self::at_boundary`] for that decision.
+    pub remaining_seconds: f32,
+    /// Whether the next sufficiently long piece starts a new frame.
+    pub at_boundary: bool,
+}
+
+/// One predicted physical piece, ending no later than a frame boundary.
+///
+/// This grants no movement. The caller must give the travel to its collision
+/// owner, refresh the medium only after a completed frame moves legally, and
+/// discard the entire trial on an unqualified move. Clone the velocity before
+/// planning; only commit the trial under the application's acceptance rules.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct WetFramePiece {
+    /// Time actually consumed by this piece, at most the requested time.
+    pub seconds: f32,
+    /// Horizontal travel in the input's axes, in world units.
+    pub horizontal: [f32; 2],
+    /// Vertical travel, up positive, in world units.
+    pub vertical: f32,
+    /// Whether this piece applied a new full frame's velocity update.
+    pub starts_frame: bool,
+    /// Whether its move completes a frame, using the existing clock's
+    /// boundary rounding window. Only then may the caller refresh medium.
+    pub completes_frame: bool,
+}
+
 impl WetVelocity {
+    /// Views the carried phase without reconstructing it from position or
+    /// elapsed request time. A copied [`WetVelocity`] retains this phase.
+    ///
+    /// Returns `None` if the stored phase cannot describe one frame. In
+    /// particular, repeated sub-rounding-window calls to the legacy
+    /// [`Self::advance`] can leave an overdue phase. A continuation must
+    /// decline that state rather than fabricate a replacement phase.
+    #[must_use]
+    pub fn frame_phase(self) -> Option<WetFramePhase> {
+        (self.due.is_finite() && self.due >= -BOUNDARY && self.due <= WET_FRAME_SECONDS + BOUNDARY)
+            .then_some(WetFramePhase {
+                remaining_seconds: self.due.max(0.0),
+                at_boundary: self.due <= BOUNDARY,
+            })
+    }
+
+    /// Plans at most one physical piece on this velocity's existing 60 Hz
+    /// frame clock, across resolved water and unsupported air.
+    ///
+    /// A due frame updates velocity once, with full-frame gravity, damping
+    /// and input. A piece ending inside it only integrates the current
+    /// velocity; it does not apply a fractional update or refresh medium.
+    /// Water uses the same private step as [`Self::advance`]; air uses the
+    /// `0x4bfe0f` dry factors, without its unread animation clear. The fixed
+    /// 60 Hz choice remains inferred, as for [`WET_FRAME_SECONDS`].
+    ///
+    /// The caller supplies the stored medium until `completes_frame`, then
+    /// observes the collision owner's endpoint for the next frame. Changing
+    /// input or medium between pieces cannot update an already-started
+    /// frame. This method does not clamp, reset, collide, send, or retry.
+    ///
+    /// A remainder within the existing clock's rounding window integrates
+    /// the current velocity without another update, exactly as
+    /// [`Self::advance`] does. It does not complete a new physical frame.
+    /// Returns `None`, without mutation, for invalid time or unknown phase.
+    /// The caller must decline such a continuation.
+    pub fn advance_piece(
+        &mut self,
+        medium: WetFrameMedium,
+        input: WetInput,
+        seconds: f32,
+    ) -> Option<WetFramePiece> {
+        let phase = self.frame_phase()?;
+        if !(seconds.is_finite() && seconds > 0.0) {
+            return None;
+        }
+        let starts_frame = phase.at_boundary && seconds > BOUNDARY;
+        if starts_frame {
+            match medium {
+                WetFrameMedium::Water(set) => self.step(set, input),
+                WetFrameMedium::Air => self.air_frame(),
+            }
+            self.due += WET_FRAME_SECONDS;
+        }
+        let active_frame = self.due > BOUNDARY;
+        let run = if active_frame {
+            self.due.min(seconds)
+        } else {
+            seconds
+        };
+        let ticks = run * TICKS_PER_SECOND;
+        self.due -= run;
+        Some(WetFramePiece {
+            seconds: run,
+            horizontal: self.horizontal.map(|value| value * ticks),
+            vertical: self.vertical * ticks,
+            starts_frame,
+            completes_frame: active_frame && self.due <= BOUNDARY,
+        })
+    }
+
     /// A velocity given in world units a second.
     #[must_use]
     pub fn from_units_per_second(horizontal: [f32; 2], vertical: f32) -> Self {
@@ -339,6 +457,22 @@ impl WetVelocity {
         travel
     }
 
+    /// Unsupported dry surface-swim frame (`0x4bfe0f`): no new input.
+    fn air_frame(&mut self) {
+        self.vertical -= WET_GRAVITY * WET_FRAME_TICKS;
+        self.horizontal = self.horizontal.map(|value| value * 0.99);
+        self.vertical *= 0.99;
+        for value in self
+            .horizontal
+            .iter_mut()
+            .chain(std::iter::once(&mut self.vertical))
+        {
+            if value.abs() < NEGLIGIBLE {
+                *value = 0.0;
+            }
+        }
+    }
+
     /// One whole frame of 0x4bfe0f's wet branch.
     fn step(&mut self, set: WetCoefficients, input: WetInput) {
         if input.jump {
@@ -361,6 +495,10 @@ impl WetVelocity {
         self.vertical += set.vertical_input * input.vertical;
     }
 }
+
+#[cfg(test)]
+#[path = "water/frame_pieces.rs"]
+mod frame_piece_tests;
 
 #[cfg(test)]
 mod tests {
