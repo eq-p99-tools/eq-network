@@ -12,36 +12,6 @@ pub struct MovementPoint {
     pub position: Position,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn observed_path_rejects_ambiguous_or_unbounded_vertices() {
-        let point = |ms, z| MovementPoint {
-            elapsed: Duration::from_millis(ms),
-            position: Position {
-                z,
-                ..Position::default()
-            },
-        };
-        for points in [
-            vec![],
-            vec![point(0, 0.0)],
-            vec![point(1, 0.0), point(100, 1.0)],
-            vec![point(0, 0.0), point(0, 1.0)],
-            vec![point(0, 0.0), point(251, 1.0)],
-            vec![point(0, 0.0), point(100, f32::NAN)],
-        ] {
-            assert!(MovementPath::new(points).is_err());
-        }
-        let path = MovementPath::new(vec![point(0, 0.0), point(50, 2.0), point(100, 0.0)]).unwrap();
-        assert_eq!(path.at(Duration::from_millis(50)).z, 2.0);
-        assert_eq!(path.at(Duration::from_millis(25)).z, 1.0);
-        assert_eq!(path.at(Duration::from_secs(1)).z, 0.0);
-    }
-}
-
 /// Collision-resolved vertices supplied by the host for one ordinary sample.
 ///
 /// This is recording data, not permission to move or a replacement integrator.
@@ -83,22 +53,28 @@ impl MovementPath {
     }
 
     /// The measured vertices, including both endpoints.
+    #[must_use]
     pub fn points(&self) -> &[MovementPoint] {
         &self.0
     }
 
     /// The original sample's duration, never an extra movement allowance.
+    #[must_use]
     pub fn duration(&self) -> Duration {
-        self.0.last().expect("validated endpoints").elapsed
+        self.0.last().map_or(Duration::ZERO, |point| point.elapsed)
     }
 
     /// Interpolates only between retained vertices, holding the endpoints
     /// outside their interval. No new arc or minimum airborne hold is fitted.
+    #[must_use]
     pub fn at(&self, elapsed: Duration) -> Position {
         for pair in self.0.windows(2) {
             if elapsed <= pair[1].elapsed {
                 let share = elapsed.saturating_sub(pair[0].elapsed).as_secs_f32()
-                    / (pair[1].elapsed - pair[0].elapsed).as_secs_f32();
+                    / pair[1]
+                        .elapsed
+                        .saturating_sub(pair[0].elapsed)
+                        .as_secs_f32();
                 let (a, b) = (pair[0].position, pair[1].position);
                 return Position {
                     x: a.x + (b.x - a.x) * share,
@@ -108,6 +84,38 @@ impl MovementPath {
                 };
             }
         }
-        self.0.last().expect("validated endpoints").position
+        self.0
+            .last()
+            .map_or_else(Position::default, |point| point.position)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observed_path_rejects_ambiguous_or_unbounded_vertices() {
+        let point = |ms, z| MovementPoint {
+            elapsed: Duration::from_millis(ms),
+            position: Position {
+                z,
+                ..Position::default()
+            },
+        };
+        for points in [
+            vec![],
+            vec![point(0, 0.0)],
+            vec![point(1, 0.0), point(100, 1.0)],
+            vec![point(0, 0.0), point(0, 1.0)],
+            vec![point(0, 0.0), point(251, 1.0)],
+            vec![point(0, 0.0), point(100, f32::NAN)],
+        ] {
+            assert!(MovementPath::new(points).is_err());
+        }
+        let path = MovementPath::new(vec![point(0, 0.0), point(50, 2.0), point(100, 0.0)]).unwrap();
+        assert_eq!(path.at(Duration::from_millis(50)).z, 2.0);
+        assert_eq!(path.at(Duration::from_millis(25)).z, 1.0);
+        assert_eq!(path.at(Duration::from_secs(1)).z, 0.0);
     }
 }
