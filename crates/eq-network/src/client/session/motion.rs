@@ -975,7 +975,12 @@ impl Motion {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
         let mut transport_failed = false;
-        let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
+        let (wire, sender, sink, sent_packets) = (
+            out.wire,
+            out.sender,
+            &mut *out.sink,
+            &mut out.log.movement_packets_sent,
+        );
         if ground.is_some() {
             motion.set_hold(hold(
                 world.posture.current(),
@@ -989,6 +994,9 @@ impl Motion {
             let packet = wire.encode(&Request::Position(*sample), sender)?;
             let sent = sink.send_unreliable(&packet);
             transport_failed = sent.is_err();
+            if sent.is_ok() {
+                *sent_packets = sent_packets.saturating_add(1);
+            }
             sent
         };
         let result = match ground {

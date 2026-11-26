@@ -100,7 +100,11 @@ impl Out<'_, '_> {
     /// connection fails.
     pub(super) fn request(&mut self, request: &Request) -> Result<()> {
         let packet = self.encode(request)?;
-        self.send(&packet)
+        self.send(&packet)?;
+        if matches!(request, Request::Position(_)) {
+            self.log.movement_packets_sent = self.log.movement_packets_sent.saturating_add(1);
+        }
+        Ok(())
     }
 
     /// Asks the server for something that may be lost, such as a position
@@ -111,7 +115,11 @@ impl Out<'_, '_> {
     /// connection fails.
     pub(super) fn request_unreliable(&mut self, request: &Request) -> Result<()> {
         let packet = self.encode(request)?;
-        self.send_unreliable(&packet)
+        self.send_unreliable(&packet)?;
+        if matches!(request, Request::Position(_)) {
+            self.log.movement_packets_sent = self.log.movement_packets_sent.saturating_add(1);
+        }
+        Ok(())
     }
 
     /// Sends a packet that must arrive.
@@ -806,5 +814,73 @@ pub(super) mod testing {
             events,
             heard,
         }
+    }
+}
+#[cfg(test)]
+mod movement_packet_count_tests {
+    use super::*;
+    use crate::client::ConnectionState;
+    use eq_network_game::movement::PositionPacket;
+
+    #[test]
+    fn only_successful_position_submissions_increment_the_status_counter() {
+        let output = testing::run(|out| {
+            let position = Request::Position(PositionPacket {
+                spawn_id: 7,
+                ..PositionPacket::default()
+            });
+            out.encode(&position).unwrap();
+            assert_eq!(out.log.movement_packets_sent, 0);
+            out.request_unreliable(&position).unwrap();
+            out.request(&position).unwrap();
+            out.request(&Request::Logout).unwrap();
+            assert_eq!(out.log.movement_packets_sent, 2);
+            out.log.status(ConnectionState::Connected, 0, None).unwrap();
+            out.log.reset();
+            assert_eq!(out.log.movement_packets_sent, 0);
+        });
+        assert_eq!(output.sent.len(), 2);
+        assert_eq!(output.unreliable.len(), 1);
+        assert!(output.events.iter().any(|event| matches!(event,
+            crate::client::ClientEvent::Status(status) if status.movement_packets_sent == Some(2)
+        )));
+        assert_eq!(
+            crate::client::SessionStatus::new(ConnectionState::Connected, "display")
+                .movement_packets_sent,
+            None
+        );
+    }
+
+    struct Broken;
+    impl Sink for Broken {
+        fn send(&mut self, _: &EncodedCommand) -> Result<()> {
+            anyhow::bail!("synthetic send failure")
+        }
+        fn send_unreliable(&mut self, _: &EncodedCommand) -> Result<()> {
+            anyhow::bail!("synthetic send failure")
+        }
+        fn last_received_seconds(&self) -> u64 {
+            0
+        }
+    }
+
+    #[test]
+    fn failed_position_submissions_are_not_counted() {
+        testing::run(|out| {
+            let mut broken = Broken;
+            let mut failing = Out {
+                sink: &mut broken,
+                log: &mut *out.log,
+                wire: out.wire,
+                sender: out.sender,
+            };
+            let position = Request::Position(PositionPacket {
+                spawn_id: 7,
+                ..PositionPacket::default()
+            });
+            assert!(failing.request(&position).is_err());
+            assert!(failing.request_unreliable(&position).is_err());
+            assert_eq!(failing.log.movement_packets_sent, 0);
+        });
     }
 }

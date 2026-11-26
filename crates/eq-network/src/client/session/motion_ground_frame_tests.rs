@@ -263,3 +263,38 @@ fn ground_frame_is_owned_by_the_normal_feature_entry_without_a_new_packet_type()
     );
     assert_eq!(received(&output.events).len(), 1);
 }
+
+#[test]
+fn ground_frame_packet_counter_matches_transport_submissions_not_local_acceptances() {
+    let start = Instant::now();
+    let mut world = world(start, &Titanium);
+    let output = testing::run(|out| {
+        for frame in 1_u32..=600 {
+            let created = start + Duration::from_nanos(u64::from(frame) * 16_666_667);
+            let request = MovementRequest {
+                created,
+                ..request(start, 0, f32::from(u16::try_from(frame).unwrap()) * 0.1)
+            };
+            Motion::step_with_ground(
+                &request,
+                Some(GroundState::new([6., 0.], true).unwrap()),
+                created,
+                &mut world,
+                out,
+            )
+            .unwrap();
+            world.body.heartbeat(created, out).unwrap();
+        }
+        out.log.movement_packets_sent
+    });
+    assert!((1..40).contains(&output.result));
+    assert_eq!(
+        output.result,
+        u64::try_from(output.unreliable.len()).unwrap()
+    );
+    assert_eq!(
+        output.sent,
+        Vec::<eq_network_game::command::EncodedCommand>::new()
+    );
+    assert!(received(&output.events).len() > output.unreliable.len());
+}
