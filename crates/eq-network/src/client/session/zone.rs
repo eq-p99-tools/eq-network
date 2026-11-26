@@ -1517,15 +1517,7 @@ mod tests {
                 history: None,
             }),
             ClientCommand::GroundFrame {
-                request: MovementRequest {
-                    mode: MovementMode::Forward,
-                    heading: eq_network_game::movement::HeadingUpdate::Rate,
-                    session_id,
-                    position,
-                    created,
-                    support: None,
-                    vertical_speed: None,
-                },
+                request: MovementRequest::new(MovementMode::Forward, session_id, position, created),
                 state: eq_network_game::movement::GroundState::new([0.0; 2], false).unwrap(),
             },
             ClientCommand::OfferTrade {
