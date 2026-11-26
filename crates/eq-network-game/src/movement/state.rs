@@ -9,6 +9,10 @@ use anyhow::{ensure, Result};
 /// time and heading remain in the accompanying [`super::MovementRequest`].
 /// Only the new state-sampling path reads this type. Existing movement requests
 /// retain their interval-derived velocity and animation.
+///
+/// This horizontal-only seam supplies zero vertical report velocity. Applying
+/// that choice to a slope is inferred: this API establishes no native slope-zero
+/// rule. A host needing owned vertical velocity keeps the existing request path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundState {
     velocity: [f32; 2],
@@ -62,7 +66,10 @@ impl GroundState {
 pub enum GroundSampleResult {
     /// Its genuine creation stamp is inside the existing minimum interval.
     /// No position, accepted time or transport state changed. A changed state
-    /// holds stale reports until a fresh observation is admitted. The host keeps
+    /// holds stale reports only until the accepted state's existing minimum
+    /// interval passes. The next ordinary tick can report that accepted state,
+    /// under the unchanged wire gate, even if the host publishes nothing more.
+    /// The waiting observation is never accepted by a tick. The host keeps
     /// publishing current states, never restamping an old observation for time.
     WaitingForInterval,
     /// Locally admitted under the usual transaction. The native update gate
