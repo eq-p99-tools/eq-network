@@ -273,7 +273,8 @@ pub struct MovementRequest {
     pub vertical_speed: Option<f32>,
     /// Optional observed ordinary-motion vertices for movement history.
     /// The accepted endpoint, movement guard and position-update gate remain
-    /// independent; omitted paths retain the existing endpoint interpolation.
+    /// independent; omitted or invalid paths use the existing endpoint
+    /// interpolation without refusing an otherwise admitted move.
     pub history: Option<MovementPath>,
 }
 

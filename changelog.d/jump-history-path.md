@@ -1,1 +1,1 @@
-- Preserve observed intermediate jump and fall positions in Titanium movement history without changing position-update fields, guards or cadence.
+- Preserve observed intermediate jump and fall positions in Titanium movement history without changing position-update fields, guards or cadence. Invalid optional paths fall back to endpoint history with a diagnostic reason and cannot refuse ordinary movement.
