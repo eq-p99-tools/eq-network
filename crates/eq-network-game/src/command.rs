@@ -1482,7 +1482,7 @@ pub enum GameCommand {
     /// Position, current velocity and observed Forward input are separate facts.
     /// The ordinary guard, transaction, packing and report gate remain in force.
     /// A frame inside the minimum interval waits for a fresh observation;
-    /// only admitted/refused frames publish MotionSent, never a false acceptance.
+    /// only admitted/refused frames publish `MotionSent`, never a false acceptance.
     GroundFrame {
         /// Genuine creation stamp, admission and collision-resolved position.
         request: crate::movement::MovementRequest,
