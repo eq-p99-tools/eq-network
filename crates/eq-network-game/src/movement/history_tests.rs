@@ -370,6 +370,10 @@ fn a_jump_in_place_records_every_frame_of_its_rise_and_fall() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Paired trajectory and packet-gate replay"
+)]
 fn observed_jump_path_keeps_the_apex_without_changing_position_packets_or_gates() {
     use crate::movement::{MovementPath, MovementPoint};
     let start = Instant::now();
@@ -389,42 +393,42 @@ fn observed_jump_path_keeps_the_apex_without_changing_position_packets_or_gates(
             (
                 100_u64,
                 100_u64,
-                vec![(0, 0.0), (50, 1.921002), (100, 3.392894)],
+                vec![(0, 0.0), (50, 1.921_002), (100, 3.392_894)],
             ),
             (
                 238,
                 138,
                 vec![
-                    (0, 3.392894),
-                    (46, 3.392894),
-                    (92, 4.429017),
-                    (138, 5.042313),
+                    (0, 3.392_894),
+                    (46, 3.392_894),
+                    (92, 4.429_017),
+                    (138, 5.042_313),
                 ],
             ),
             (
                 376,
                 138,
                 vec![
-                    (0, 5.042313),
-                    (46, 5.245340),
-                    (92, 5.050284),
-                    (138, 4.468968),
+                    (0, 5.042_313),
+                    (46, 5.245_34),
+                    (92, 5.050_284),
+                    (138, 4.468_968),
                 ],
             ),
             (
                 514,
                 138,
                 vec![
-                    (0, 4.468968),
-                    (46, 3.512865),
-                    (92, 2.193106),
-                    (138, 0.520491),
+                    (0, 4.468_968),
+                    (46, 3.512_865),
+                    (92, 2.193_106),
+                    (138, 0.520_491),
                 ],
             ),
             (
                 652,
                 138,
-                vec![(0, 0.520491), (46, 0.0), (92, 0.0), (138, 0.0)],
+                vec![(0, 0.520_491), (46, 0.0), (92, 0.0), (138, 0.0)],
             ),
         ] {
             let mut proposed = request(at(ms), 0.0);
@@ -503,7 +507,7 @@ fn observed_path_rejection_and_failed_send_commit_no_frames_or_movement() {
         .with_history(true);
     motion.jumped();
     let mut proposed = request(now, 0.0);
-    proposed.position.z = 3.392894;
+    proposed.position.z = 3.392_894;
     let endpoint = proposed.position;
     let path = |middle| {
         MovementPath::new(vec![
@@ -531,7 +535,7 @@ fn observed_path_rejection_and_failed_send_commit_no_frames_or_movement() {
         .is_err());
     assert_eq!(motion.position(), Position::default());
     assert_eq!(motion.history.as_ref().unwrap().frames, 0);
-    proposed.history = Some(path(1.921002));
+    proposed.history = Some(path(1.921_002));
     assert!(motion
         .send_move(&proposed, now, |_| anyhow::bail!("transport failed"))
         .is_err());

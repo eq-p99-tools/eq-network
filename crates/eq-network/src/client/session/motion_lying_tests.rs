@@ -50,6 +50,7 @@ fn request(mode: MovementMode, created: Instant, position: Position) -> Movement
         position,
         support: None,
         vertical_speed: None,
+        history: None,
     }
 }
 
