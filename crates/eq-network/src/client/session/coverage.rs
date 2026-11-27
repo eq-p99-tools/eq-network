@@ -1176,6 +1176,44 @@ mod tests {
     }
 
     #[test]
+    fn empty_3464_is_counted_quietly_without_training_news() {
+        use crate::client::{Gap, GapKind, GapStage};
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            } else if let ClientEvent::Diagnostic(line) = event {
+                diagnostics.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        for _ in 0..2 {
+            unheard.tell(&Titanium, 0x3464, &[], &mut log).unwrap();
+            let decoded = eq_network_game::message::titanium(0x3464, &[]);
+            let kept = unheard
+                .sift(&Titanium, (0x3464, &[]), decoded, &mut log)
+                .unwrap();
+            assert!(
+                matches!(kept.as_slice(), []),
+                "no training or other state news"
+            );
+        }
+        log.end_stage().unwrap();
+        drop(log);
+        assert_eq!(gaps.iter().map(|gap| gap.count).sum::<u64>(), 2);
+        assert!(gaps.iter().all(|gap| gap.opcode == 0x3464
+            && gap.min_length == 0
+            && gap.max_length == 0
+            && matches!(gap.kind, GapKind::Skipped { .. })));
+        assert_eq!(diagnostics, Vec::<String>::new());
+    }
+
+    #[test]
     fn the_zone_tells_once_of_each_message_it_leaves_unread() {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
         let mut said = Vec::new();

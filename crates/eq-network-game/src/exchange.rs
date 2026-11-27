@@ -69,8 +69,9 @@ pub struct WindowCloses {
     pub beyond: Option<f32>,
 }
 
-/// Titanium's trade path is unread: a cancel only answers another player's,
-/// and walking away closes nothing.
+/// Titanium's outgoing close request and distance rule remain unread: a
+/// cancel only answers another player's, and walking away closes nothing.
+/// Its received-cancel handler separately closes any active exchange.
 pub const TITANIUM_CLOSES: WindowCloses = WindowCloses {
     cancel_for_any_partner: false,
     beyond: None,
@@ -134,9 +135,9 @@ pub enum ExchangeUpdate {
     /// A side closed the window, or the server did (at logout, the player's
     /// own ID). What the player's trade slots held comes back as item updates.
     Cancelled {
-        /// The ID the server names: an NPC's own, but this player's when
-        /// another player cancelled, as `EQEmu` rewrites the forwarded
-        /// packet for its recipient.
+        /// The ID the server names, which can be zero or an unknown spawn.
+        /// Titanium uses it for feedback, not to select the active window.
+        /// `EQEmu` can rewrite it to this player's ID when forwarding a cancel.
         by: u32,
     },
     /// The other side could not, or would not, trade.

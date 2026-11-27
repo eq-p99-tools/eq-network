@@ -85,7 +85,9 @@ impl From<Exchange> for Exchanging {
 /// its closing.
 #[derive(Default)]
 pub(super) struct Exchanges {
-    anonymous_npc_cancel: bool,
+    /// Titanium's active-window cancel handler uses the sender only for
+    /// its message, not to decide whether the exchange ends (0x454123).
+    cancel_from_any_sender: bool,
 }
 
 /// Tells the host why no window opened or why it went away.
@@ -99,9 +101,9 @@ fn refused(session_id: u64, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Exchanges {
-    pub(super) fn project1999() -> Self {
+    pub(super) fn titanium() -> Self {
         Self {
-            anonymous_npc_cancel: true,
+            cancel_from_any_sender: true,
         }
     }
 
@@ -350,14 +352,10 @@ impl Feature for Exchanges {
                 ExchangeUpdate::Finished => exchange.stage == Stage::Accepted,
                 ExchangeUpdate::Cancelled { by } => {
                     let named = *by == partner || world.own_spawn.map(u32::from) == Some(*by);
-                    // P99's captured cancellation of a submitted NPC give
-                    // names no spawn (0). Separate inventory records retain
-                    // their own custody; no item identity is inferred here.
-                    let anonymous = *by == 0
-                        && self.anonymous_npc_cancel
-                        && exchange.partner == Partner::Npc
-                        && exchange.stage == Stage::Accepted;
-                    !asked && (named || anonymous)
+                    // Titanium 0x454123 closes any active give/trade window.
+                    // The sender chooses only its feedback; keep it intact.
+                    // Received item records remain the sole return authority.
+                    !asked && (named || self.cancel_from_any_sender)
                 }
                 ExchangeUpdate::Accepted { by } => !asked && *by == partner,
                 ExchangeUpdate::Offered { .. }
