@@ -49,14 +49,7 @@ fn request(at: Position, moved: [f32; 3], heading: f32, now: Instant) -> Movemen
 }
 
 fn piece(ms: u64, heading: f32, input: SwimInput) -> SwimControl {
-    SwimControl::new(
-        Duration::from_millis(ms),
-        heading,
-        WetKind::Normal,
-        input,
-        1.,
-    )
-    .unwrap()
+    SwimControl::new(Duration::from_millis(ms), heading, WetKind::Normal, input).unwrap()
 }
 
 // Independent oracle uses the actual recurrence, not the validator's input builder.
@@ -154,7 +147,7 @@ fn candidate(
         for (total, delta) in moved.iter_mut().zip(delta) {
             *total += delta;
         }
-        controls.push(SwimControl::new(until, heading, kind, input, 1.).unwrap());
+        controls.push(SwimControl::new(until, heading, kind, input).unwrap());
         previous = until;
     }
     let now = basis.started_at() + previous;
@@ -595,17 +588,6 @@ fn malformed_observations_have_no_phase_or_velocity_escape_hatch() {
             heading,
             WetKind::Normal,
             SwimInput::Idle,
-            1.
-        )
-        .is_err());
-    }
-    for share in [-0.01, 1.01, f32::NAN] {
-        assert!(SwimControl::new(
-            Duration::from_millis(100),
-            0.,
-            WetKind::Normal,
-            SwimInput::Idle,
-            share
         )
         .is_err());
     }
@@ -624,6 +606,66 @@ fn malformed_observations_have_no_phase_or_velocity_escape_hatch() {
 }
 
 #[test]
+fn native_pitch_keeps_full_horizontal_input_and_no_fraction_can_fit_an_endpoint() {
+    let start = Instant::now();
+    let calibrated = calibration(0);
+    let swim = calibrated.swim.unwrap();
+    let mut horizontal = None;
+    for pitch in [
+        0.0_f32,
+        std::f32::consts::FRAC_PI_4,
+        -std::f32::consts::FRAC_PI_4,
+    ] {
+        let mut session = owner(start, 0);
+        let mut physical = WetVelocity::default();
+        // The native/controller path keeps full horizontal input and adds
+        // sin(pitch) only to vertical input; this is a synthetic oracle.
+        let (across, up) = physical.advance(
+            swim.set_for(WetKind::Normal),
+            WetInput {
+                horizontal: [0., swim.forward],
+                vertical: swim.forward * pitch.sin(),
+                jump: false,
+            },
+            0.1,
+        );
+        if let Some(expected) = horizontal {
+            assert!((across[1] - expected).abs() < 1e-6);
+        }
+        horizontal = Some(across[1]);
+        let basis = session.swim_basis().unwrap();
+        let controls =
+            SwimControls::new(basis, vec![piece(100, 0., SwimInput::Forward(Pace::Run))]).unwrap();
+        let request = request(
+            session.position(),
+            [across[0], across[1], up],
+            0.,
+            start + Duration::from_millis(100),
+        );
+        session
+            .send_swim_sample(&request, Some(&controls), request.created, |_| Ok(()))
+            .unwrap();
+        assert!(session.swim_basis().is_some());
+    }
+    let mut session = owner(start, 0);
+    let basis = session.swim_basis().unwrap();
+    let controls =
+        SwimControls::new(basis, vec![piece(100, 0., SwimInput::Forward(Pace::Run))]).unwrap();
+    let endpoint = request(
+        session.position(),
+        [0., horizontal.unwrap() * 0.5, 0.],
+        0.,
+        start + Duration::from_millis(100),
+    );
+    // A shorter endpoint can be legal under the old cap after collision,
+    // but no caller-selected fraction can grant it owned replay continuity.
+    session
+        .send_swim_sample(&endpoint, Some(&controls), endpoint.created, |_| Ok(()))
+        .unwrap();
+    assert!(session.swim_basis().is_none());
+}
+
+#[test]
 fn sub_rounding_clock_pieces_cannot_recover_an_unavailable_phase() {
     let start = Instant::now();
     let mut session = owner(start, 0);
@@ -636,7 +678,6 @@ fn sub_rounding_clock_pieces_cannot_recover_an_unavailable_phase() {
                 0.,
                 WetKind::Normal,
                 SwimInput::Idle,
-                1.,
             )
             .unwrap(),
         );

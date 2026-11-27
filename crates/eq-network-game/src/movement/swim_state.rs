@@ -46,36 +46,30 @@ pub struct SwimControl {
     heading: f32,
     kind: water::WetKind,
     input: SwimInput,
-    share: f32,
 }
 
 impl SwimControl {
-    /// Observes actual controls; `share` is the horizontal share (e.g. look
-    /// pitch's cosine), never a supplied speed or velocity.
+    /// Observes an actual ordinary digital control piece. Horizontal rates
+    /// come entirely from calibration and the named input/pace. Native look
+    /// pitch adds vertical input without reducing this horizontal input.
     ///
     /// # Errors
-    /// Rejects noncanonical headings and shares outside zero through one.
+    /// Rejects noncanonical headings.
     pub fn new(
         until: Duration,
         heading: f32,
         kind: water::WetKind,
         input: SwimInput,
-        share: f32,
     ) -> Result<Self> {
         ensure!(
             (0.0..512.0).contains(&heading),
             "invalid swim control heading"
-        );
-        ensure!(
-            (0.0..=1.0).contains(&share),
-            "invalid horizontal input share"
         );
         Ok(Self {
             until,
             heading,
             kind,
             input,
-            share,
         })
     }
 
@@ -118,10 +112,7 @@ impl SwimControl {
             }
         };
         let (sin, cos) = (self.heading / 512.0 * std::f32::consts::TAU).sin_cos();
-        Ok([
-            (sin * along + cos * across) * self.share,
-            (cos * along - sin * across) * self.share,
-        ])
+        Ok([sin * along + cos * across, cos * along - sin * across])
     }
 }
 

@@ -20,11 +20,17 @@ Only another independently matched real reset can begin a new proved sequence.
 
 `SwimControls` contains the opaque basis and a bounded, strictly ordered sequence
 of actual `SwimControl` pieces. Each piece gives its ending time, canonical body
-heading, existing water kind, normal input mode and horizontal share. The owner
+heading, existing water kind and normal digital input mode. The owner
 derives all rates from calibration, including separately calibrated backward
 input and the walking share of strafe. Forward plus strafe uses the ordinary
 normalized forward/walk water rate; unsupported input combinations keep the old
 path. The caller cannot supply velocity, phase, rate, a reset flag or a fitted arc.
+
+Ordinary native water controls use the full selected horizontal rate. Look
+pitch adds its vertical input separately; it does not apply a cosine share to
+horizontal input. This API exposes no arbitrary rate multiplier. Unsupported
+or uncertain input retains the old path. Vertical movement keeps its existing
+independent cap checks; horizontal replay grants no vertical model authority.
 
 The controls must cover the entire reset/accepted-state-to-request span, ending
 at the request's heading, within 250 ms. Only observed idle pieces can precede
