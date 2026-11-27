@@ -927,7 +927,9 @@ impl MotionSession {
 
     /// Clears what a reset ends: the root and the speeds before a change.
     fn clear_grant(&mut self) {
-        self.wet.invalidate();
+        // Waiting for calibration consumes no physical calls. Preserve only
+        // an actual, unconsumed admission/correction reset; never infer rest.
+        self.wet.recalibrate();
         self.ground_waiting = None;
         self.current_ground = None;
         self.calibration = None;

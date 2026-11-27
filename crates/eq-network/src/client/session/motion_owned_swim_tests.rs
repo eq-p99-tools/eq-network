@@ -25,6 +25,42 @@ fn calibrated() -> MotionCalibration {
     .unwrap()
 }
 
+#[test]
+fn regrant_republishes_an_untouched_real_reset_receipt() {
+    let start = Instant::now();
+    let mut world = World::new(11);
+    let mut feature = Motion::new(true, true, None).with_swimming();
+    testing::run(|out| {
+        world.body.admit(owner(start, out, false));
+        feature.publish_swim_state(&mut world, None);
+        feature.withdraw_input(&mut world, out).unwrap();
+        world
+            .body
+            .motion
+            .as_mut()
+            .unwrap()
+            .calibrate(calibrated(), start + Duration::from_millis(100))
+            .unwrap();
+        feature.publish_swim_state(&mut world, None);
+    });
+    let resets: Vec<_> = world
+        .take_news()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Event(WorldEvent::SwimState {
+                basis: Some(basis), ..
+            }) => Some(basis),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resets.len(), 2);
+    assert_eq!(
+        resets[0], resets[1],
+        "no artificial reset or epoch was minted"
+    );
+    assert!(resets[1].is_reset());
+}
+
 fn owner(start: Instant, out: &Out<'_, '_>, gate: bool) -> MotionSession {
     let mut motion = MotionSession::new(11, 7, Position::default(), start)
         .unwrap()
