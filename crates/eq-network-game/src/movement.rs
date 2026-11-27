@@ -20,6 +20,7 @@ mod session;
 mod shoreline;
 mod speeds;
 mod state;
+mod swim_state;
 pub mod water;
 pub use carry::{between_reports, carry, Carried, ZBetween};
 pub use counter::{UpdateCounter, TITANIUM_HISTORY_FRAMES_PER_SECOND, TITANIUM_UPDATE_COUNTER};
@@ -39,6 +40,7 @@ pub use shoreline::{
 };
 pub use speeds::{eqmac as eqmac_speeds, titanium as titanium_speeds, SpeedState, Speeds};
 pub use state::{GroundSampleResult, GroundState};
+pub use swim_state::{SwimBasis, SwimControl, SwimControls, SwimInput};
 
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};

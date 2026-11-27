@@ -1302,6 +1302,20 @@ pub enum WorldEvent {
         /// Why the worker refused the sample. None means locally accepted.
         refused: Option<String>,
     },
+    /// Process-local owned swim continuity, queued after its correction or
+    /// local movement result. It is not a server acknowledgment.
+    SwimState {
+        /// Current admission.
+        session_id: u64,
+        /// Exact accepted position associated with this receipt.
+        position: Position,
+        /// Matching local proposal, absent for a real reset/grant observation.
+        #[serde(skip)]
+        created: Option<std::time::Instant>,
+        /// Opaque state receipt, absent when continuity was withdrawn.
+        #[serde(skip)]
+        basis: Option<crate::movement::SwimBasis>,
+    },
     /// The worker discarded a movement request without publishing a position.
     MotionRefused {
         /// Admission named by the original request.

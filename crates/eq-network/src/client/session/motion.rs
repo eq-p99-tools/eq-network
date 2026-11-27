@@ -447,6 +447,8 @@ pub(super) struct Motion {
     /// with nothing withdrawn since. A server's move clears the movement
     /// session's calibration, so this is what says the grant goes on.
     grant_in_force: bool,
+    /// Last queued owned swim receipt; repeated grants do not mint a reset.
+    swim_basis: Option<eq_network_game::movement::SwimBasis>,
 }
 
 impl Motion {
@@ -468,6 +470,7 @@ impl Motion {
             sneaking: false,
             hit_points: None,
             grant_in_force: false,
+            swim_basis: None,
         }
     }
 
@@ -503,7 +506,26 @@ impl Motion {
     /// host's calibration grants them.
     fn grant(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let granted = self.apply_grant(world, out)?;
+        self.publish_swim_state(world, None);
         self.acknowledge_inputs(world, out, granted)
+    }
+
+    fn publish_swim_state(&mut self, world: &mut World, created: Option<Instant>) {
+        let Some(motion) = world.body.motion.as_ref() else {
+            return;
+        };
+        let basis = motion.swim_basis();
+        if created.is_some() || basis != self.swim_basis {
+            let position = motion.position();
+            self.swim_basis = basis;
+            // Queued news follows the original Position/Entered or MotionSent.
+            world.happened(Message::Event(WorldEvent::SwimState {
+                session_id: world.session_id,
+                position,
+                created,
+                basis,
+            }));
+        }
     }
 
     /// Evaluate the existing movement rule, distinguishing successful current
@@ -893,6 +915,21 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        Self::step_with_controls(request, ground, None, now, world, out)
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one shared control and counted send transaction"
+    )]
+    fn step_with_controls(
+        request: &MovementRequest,
+        ground: Option<GroundState>,
+        swim: Option<&eq_network_game::movement::SwimControls>,
+        now: Instant,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let command = ClientCommand::Move(request.clone());
         if let Some(reason) = world.posture.input_refusal(&command) {
             return actions::refuse(&command, reason, out.log);
@@ -1004,7 +1041,11 @@ impl Motion {
             sent
         };
         let result = match ground {
-            None => motion.send_move_sample(request, now, send).map(|()| true),
+            None => match swim {
+                Some(controls) => motion.send_swim_sample(request, Some(controls), now, send),
+                None => motion.send_move_sample(request, now, send),
+            }
+            .map(|()| true),
             Some(state) => match motion.try_send_ground_sample(request, state, now, send) {
                 Ok(GroundSampleResult::Accepted) => Ok(true),
                 Ok(GroundSampleResult::WaitingForInterval) => motion
@@ -1218,6 +1259,7 @@ impl Feature for Motion {
             command,
             ClientCommand::Move(_)
                 | ClientCommand::GroundFrame { .. }
+                | ClientCommand::SwimFrame { .. }
                 | ClientCommand::Jump { .. }
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
@@ -1255,7 +1297,30 @@ impl Feature for Motion {
         }
         self.refresh_belongings(world, out)?;
         match command {
-            ClientCommand::Move(request) => Self::step(request, world, out),
+            ClientCommand::Move(request) => {
+                Self::step(request, world, out)?;
+                self.publish_swim_state(world, Some(request.created));
+                Ok(())
+            }
+            ClientCommand::SwimFrame { request, controls } => {
+                if world.arrival.is_some() {
+                    return actions::refuse(
+                        command,
+                        "The player is arriving aboard a boat",
+                        out.log,
+                    );
+                }
+                Self::step_with_controls(
+                    request,
+                    None,
+                    Some(controls),
+                    Instant::now(),
+                    world,
+                    out,
+                )?;
+                self.publish_swim_state(world, Some(request.created));
+                Ok(())
+            }
             ClientCommand::GroundFrame { request, state } => {
                 if world.arrival.is_some() {
                     return actions::refuse(
@@ -1446,6 +1511,10 @@ mod ducking_tests;
 #[cfg(test)]
 #[path = "motion_ground_frame_tests.rs"]
 mod ground_frame_tests;
+
+#[cfg(test)]
+#[path = "motion_owned_swim_tests.rs"]
+mod owned_swim_tests;
 
 #[cfg(test)]
 mod tests {
