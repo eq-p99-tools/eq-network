@@ -823,7 +823,8 @@ fn foreign_receipts_and_favorable_endpoint_arcs_do_not_authorize_backing() {
     let start = Instant::now();
     let mut foreign = MotionSession::new(12, 7, Position::default(), start)
         .unwrap()
-        .with_swimming(true);
+        .with_swimming(true)
+        .with_heading_snapshots(true);
     foreign.calibrate(calibration(0), start).unwrap();
     let mut session = owner(start, 0);
     let controls = SwimControls::new(
