@@ -69,8 +69,9 @@ pub struct WindowCloses {
     pub beyond: Option<f32>,
 }
 
-/// Titanium's trade path is unread: a cancel only answers another player's,
-/// and walking away closes nothing.
+/// Titanium's outgoing close request and distance rule remain unread: a
+/// cancel only answers another player's, and walking away closes nothing.
+/// Its received-cancel handler separately closes any active exchange.
 pub const TITANIUM_CLOSES: WindowCloses = WindowCloses {
     cancel_for_any_partner: false,
     beyond: None,
