@@ -250,10 +250,14 @@ impl Owner {
         let mut previous = Duration::ZERO;
         let mut total = [0.0; 2];
         for piece in &controls.pieces {
+            ensure!(velocity.frame_phase().is_some(), "unknown water phase");
             // The initial reset may precede calibration. Only observed idle
             // water frames can fill that prefix; they earn no acceleration.
             ensure!(
-                piece.input == SwimInput::Idle || started + previous >= granted_from,
+                piece.input == SwimInput::Idle
+                    || started
+                        .checked_add(previous)
+                        .is_some_and(|at| at >= granted_from),
                 "swim input predates the calibrated interval"
             );
             let input = water::WetInput {
@@ -270,6 +274,7 @@ impl Owner {
                     .expect("checked ordered controls")
                     .as_secs_f32(),
             );
+            ensure!(velocity.frame_phase().is_some(), "unknown water phase");
             total[0] += moved[0];
             total[1] += moved[1];
             previous = piece.until;

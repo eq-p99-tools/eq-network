@@ -624,6 +624,50 @@ fn malformed_observations_have_no_phase_or_velocity_escape_hatch() {
 }
 
 #[test]
+fn sub_rounding_clock_pieces_cannot_recover_an_unavailable_phase() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let basis = session.swim_basis().unwrap();
+    let mut pieces = Vec::new();
+    for micros in 1..=20 {
+        pieces.push(
+            SwimControl::new(
+                Duration::from_micros(micros),
+                0.,
+                WetKind::Normal,
+                SwimInput::Idle,
+                1.,
+            )
+            .unwrap(),
+        );
+    }
+    pieces.push(piece(100, 0., SwimInput::Idle));
+    let controls = SwimControls::new(basis, pieces).unwrap();
+    assert!(session
+        .wet
+        .trial(
+            11,
+            &controls,
+            calibration(0),
+            0.,
+            start + Duration::from_millis(100),
+            start
+        )
+        .is_err());
+    let request = request(
+        Position::default(),
+        [0.; 3],
+        0.,
+        start + Duration::from_millis(100),
+    );
+    // The ordinary still sample remains legal, but cannot resurrect a phase.
+    session
+        .send_swim_sample(&request, Some(&controls), request.created, |_| Ok(()))
+        .unwrap();
+    assert!(session.swim_basis().is_none());
+}
+
+#[test]
 fn calibration_modes_holds_and_explicit_withdrawal_destroy_continuity() {
     let start = Instant::now();
     for seam in 0..9 {
