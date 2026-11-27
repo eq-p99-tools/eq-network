@@ -4,6 +4,61 @@ use crate::movement::{
     water::*, Pace, SpeedState, StrafeSide, SwimControl, SwimControls, SwimInput,
 };
 
+#[test]
+fn admission_and_correction_resets_survive_waiting_for_calibration_only() {
+    let start = Instant::now();
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_swimming(true)
+        .with_heading_snapshots(true);
+    for corrected in [false, true] {
+        if corrected {
+            session
+                .correct(Position::default(), start + Duration::from_millis(100))
+                .unwrap();
+        }
+        session.withdraw();
+        assert!(session.swim_basis().is_none(), "ungranted is not usable");
+        session
+            .calibrate(calibration(0), start + Duration::from_millis(200))
+            .unwrap();
+        let basis = session.swim_basis().unwrap();
+        assert!(basis.is_reset());
+        assert_eq!(
+            basis.started_at(),
+            if corrected {
+                start + Duration::from_millis(100)
+            } else {
+                start
+            }
+        );
+    }
+}
+
+#[test]
+fn recalibration_cannot_turn_an_accepted_zero_move_into_a_reset() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let request = MovementRequest::new(
+        MovementMode::Forward,
+        11,
+        session.position(),
+        start + Duration::from_millis(100),
+    );
+    session
+        .send_move_sample(&request, request.created, |_| Ok(()))
+        .unwrap();
+    assert!(session.swim_basis().is_none());
+    session.withdraw();
+    session
+        .calibrate(calibration(0), start + Duration::from_millis(200))
+        .unwrap();
+    assert!(
+        session.swim_basis().is_none(),
+        "zero displacement is no reset proof"
+    );
+}
+
 fn applied_idle(seconds: f32) -> Vec<SwimControl> {
     let mut left = seconds;
     let mut until = Duration::ZERO;

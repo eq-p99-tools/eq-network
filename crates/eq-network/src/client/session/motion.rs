@@ -772,6 +772,9 @@ impl Motion {
     /// Withdraws input while retaining bounded passive descent and heartbeats.
     fn withdraw_input(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.grant_in_force = false;
+        // A later grant must publish its usable receipt again, even when an
+        // unused real reset remained physically unchanged while ungranted.
+        self.swim_basis = None;
         self.accepted_inputs = None;
         self.kept_since = None;
         self.unproven = None;
