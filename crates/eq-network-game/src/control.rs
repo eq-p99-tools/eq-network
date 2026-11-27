@@ -27,6 +27,56 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::time::Duration;
 
+impl crate::GameDialect {
+    /// Whether this program's signed HP controls unconscious posture and
+    /// voluntary input. Only Titanium's entry/recovery rules are established;
+    /// Mac and later generations remain unread.
+    #[must_use]
+    pub const fn models_unconscious(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+}
+
+/// A received own-HP report and the equipped item HP the host counted from
+/// complete current inventory facts, plus separately counted local damage
+/// already submitted to transport. This is not server-confirmed damage or death.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct HitPointBasis {
+    /// Signed current HP exactly as received, before equipped item HP.
+    pub reported_current: i32,
+    /// Maximum HP exactly as received, to identify the report being counted.
+    pub reported_maximum: i32,
+    /// Equipped item HP, counted by the host from the worker inventory.
+    pub item_hit_points: i64,
+    /// Worker inventory revision used for the equipment count.
+    pub inventory_revision: u64,
+    /// Successfully submitted local environmental damage since this report.
+    /// A fresh server HP report replaces it, even when its value repeats.
+    pub local_damage: u64,
+    /// Native pre-damage cutoff (-10 minus effect 328), when the host can
+    /// resolve that effect total. None preserves the unknown total.
+    pub damage_floor: Option<i64>,
+}
+
+impl HitPointBasis {
+    /// Full signed current HP; None for an overflowing host input.
+    #[must_use]
+    pub fn current(self) -> Option<i64> {
+        let reported = i64::from(self.reported_current);
+        let local = if self.local_damage == 0 {
+            reported
+        } else {
+            reported
+                .saturating_sub(i64::try_from(self.local_damage).unwrap_or(i64::MAX))
+                .clamp(-32768, 10_000_000)
+        };
+        local.checked_add(self.item_hit_points)
+    }
+}
+
 /// `OP_Stun`: the raw stun length in milliseconds, including zero.
 pub const STUN_OPCODE: u16 = 0x1e51;
 /// `EQMac`'s `OP_Stun`, the same four bytes.
@@ -198,6 +248,37 @@ pub fn eqmac_berserk(opcode: u16, body: &[u8]) -> Result<Option<bool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_hp_delta_clamps_the_stored_base_before_the_equipment_bonus() {
+        let basis = HitPointBasis {
+            reported_current: 10_000_010,
+            reported_maximum: 10_000_020,
+            item_hit_points: -20,
+            inventory_revision: 1,
+            local_damage: 1,
+            damage_floor: None,
+        };
+        assert_eq!(basis.current(), Some(9_999_980));
+        let lower = HitPointBasis {
+            reported_current: -32760,
+            reported_maximum: 100,
+            item_hit_points: -50,
+            local_damage: 100,
+            ..basis
+        };
+        // The final value can be below the stored-base bound.
+        assert_eq!(lower.current(), Some(-32818));
+        // Merely receiving a report does not apply the delta routine's clamp.
+        assert_eq!(
+            HitPointBasis {
+                local_damage: 0,
+                ..basis
+            }
+            .current(),
+            Some(9_999_990)
+        );
+    }
 
     #[test]
     fn stuns_carry_their_length_and_preserve_received_zero() {

@@ -113,9 +113,9 @@ fn same_finite_xyz(current: [f32; 3], observed: Position) -> bool {
         && current.map(f32::to_bits) == [observed.x, observed.y, observed.z].map(f32::to_bits)
 }
 
-/// The HP below which the Titanium program takes the death path instead of
-/// sending its damage record: -10, less effect 328's total, which the
-/// session doesn't resolve (read R49-3 d, e; inferred, 6.491b).
+/// The earlier report-only fallback for suppressing a damage record. The
+/// current host basis resolves effect 328 separately; neither cutoff is
+/// authority to establish death (0x41c905, 0x422769).
 const DEATH_FLOOR: i64 = -10;
 
 /// The races whose spawn the Titanium program flags as a carrier (spawn
@@ -194,15 +194,20 @@ impl Hazards {
 
     /// Whether the Titanium damage record follows this report (R49-3 c,
     /// R49-3a): unless the player's HP, less the amount, is below
-    /// [`DEATH_FLOOR`], where the program takes the death path and sends
-    /// none (read R49-3 e 7). The session drops no HP of its own, so the
-    /// server's last report, with what the items add, stands in for the
-    /// program's local HP (inferred, 6.491b). That report leaves the items
-    /// out, so where the session can't count them it can't place the player
-    /// below the floor, and the record goes: `EQEmu` only relays it.
+    /// [`DEATH_FLOOR`], where the program omits that damage record and sends
+    /// none (read R49-3 e 7). A current host count includes the successfully
+    /// submitted local damage and the resolved effect-328 floor. Without
+    /// that basis, retain the earlier received-report fallback; an unknown
+    /// count cannot place the player below the floor.
     fn records(&self, amount: u32, world: &World) -> bool {
         if self.notice {
             return false;
+        }
+        if let Some(allowed) = world
+            .posture
+            .damage_record_allowed(amount, world.inventory.revision())
+        {
+            return allowed;
         }
         let known = self
             .hit_points
@@ -219,6 +224,11 @@ impl Hazards {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if !self.notice && world.posture.damage_held(world.inventory.revision()) {
+            return out.log.diagnostic(
+                "The local HP is below the resolved environmental damage cutoff".into(),
+            );
+        }
         // Both programs announce Safe Fall first, even when it left nothing.
         if safe_fall && hazard == Hazard::Falling {
             out.request(&Request::SafeFall)?;
@@ -260,6 +270,7 @@ impl Hazards {
                 // posture policy as received damage (read R31 / 6.475).
                 // Submission establishes no received damage or HP authority.
                 posture::stand_for_own_damage(amount, world, out)?;
+                posture::local_damage(amount, world, out)?;
                 out.log
                     .send(ClientEvent::World(WorldEvent::HazardReported {
                         session_id: world.session_id,

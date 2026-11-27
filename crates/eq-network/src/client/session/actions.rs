@@ -236,6 +236,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::FinishLocalPad { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::FeignLanded { .. }
+        | ClientCommand::OwnHitPoints { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::SendChatInAdmission { .. }
         // The chat server's link is its own connection.
@@ -649,6 +650,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ArrivalPlacement { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::FeignLanded { .. }
+        | ClientCommand::OwnHitPoints { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::SendChatInAdmission { .. }
         | ClientCommand::DepopLocalNpc { .. }

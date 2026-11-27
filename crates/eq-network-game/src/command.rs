@@ -356,6 +356,18 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Count a received own-HP report with the equipped item HP the host
+    /// derived from complete worker inventory facts. Titanium's unconscious
+    /// transition belongs to the existing posture owner; no death is inferred.
+    /// The worker refuses a basis that does not match its latest HP report.
+    OwnHitPoints {
+        /// Current zone admission.
+        session_id: u64,
+        /// Received report and the equipment contribution, never predicted HP.
+        basis: crate::control::HitPointBasis,
+        /// Reject delayed counts rather than applying them in a later state.
+        created: std::time::Instant,
+    },
     /// The host's statement that a spell with the feign effect (74) landed
     /// on the player, which the generation's program lies them down for.
     /// Only the host holds the spell data, so only it can tell. Send it only
@@ -1554,6 +1566,7 @@ impl GameCommand {
             Self::SocialEmote { .. } => "SocialEmote",
             Self::SetPosture { .. } => "SetPosture",
             Self::FeignLanded { .. } => "FeignLanded",
+            Self::OwnHitPoints { .. } => "OwnHitPoints",
             Self::MoveInventory(..) => "MoveInventory",
             Self::DestroyItem(..) => "DestroyItem",
             Self::DropItem(..) => "DropItem",
@@ -1719,6 +1732,7 @@ impl GameCommand {
             | Self::CastSpell { session_id, .. }
             | Self::SetPosture { session_id, .. }
             | Self::FeignLanded { session_id, .. }
+            | Self::OwnHitPoints { session_id, .. }
             | Self::InspectItem { session_id, .. }
             | Self::Consider { session_id, .. }
             | Self::Camp { session_id, .. }
@@ -1890,7 +1904,9 @@ impl GameCommand {
             Self::ClickDoor { .. } | Self::DoorRadii { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } | Self::FinishLocalPad { .. } => Capability::Zoning,
-            Self::SetPosture { .. } | Self::FeignLanded { .. } => Capability::Posture,
+            Self::SetPosture { .. } | Self::FeignLanded { .. } | Self::OwnHitPoints { .. } => {
+                Capability::Posture
+            }
             Self::Move(_)
             | Self::GroundFrame { .. }
             | Self::ConfigureMotion { .. }
@@ -2144,6 +2160,7 @@ impl GameCommand {
             | Self::EmoteAnimation { created, .. }
             | Self::SetPosture { created, .. }
             | Self::FeignLanded { created, .. }
+            | Self::OwnHitPoints { created, .. }
             | Self::Consider { created, .. }
             | Self::DepopLocalNpc { created, .. }
             | Self::Camp { created, .. }
@@ -2368,6 +2385,7 @@ pub fn encode(
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::SpeedInputs { .. }
         | GameCommand::FeignLanded { .. }
+        | GameCommand::OwnHitPoints { .. }
         | GameCommand::ClimbReach { .. }
         | GameCommand::MovementPacketSnapshot { .. }
         | GameCommand::DoorRadii { .. }

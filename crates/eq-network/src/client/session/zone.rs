@@ -172,6 +172,7 @@ impl Features {
             return Some("Gameplay departures are not offered on this server");
         }
         actions::stale(command, world.session_id, now)
+            .or_else(|| world.posture.input_refusal(command))
             .or_else(|| actions::Held::new(self.holds(world, now)).conflict(command))
     }
 
@@ -1063,7 +1064,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 155;
+    const KINDS: usize = 156;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1107,6 +1108,7 @@ mod tests {
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
+            ClientCommand::OwnHitPoints { .. } => 155,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
             ClientCommand::DropItem(_) => 86,
@@ -1435,6 +1437,18 @@ mod tests {
             ClientCommand::FeignLanded {
                 session_id,
                 spawn_id: 7,
+                created,
+            },
+            ClientCommand::OwnHitPoints {
+                session_id,
+                basis: eq_network_game::control::HitPointBasis {
+                    reported_current: 100,
+                    reported_maximum: 100,
+                    item_hit_points: 0,
+                    inventory_revision: 0,
+                    local_damage: 0,
+                    damage_floor: None,
+                },
                 created,
             },
             ClientCommand::MoveInventory(InventoryMove {
