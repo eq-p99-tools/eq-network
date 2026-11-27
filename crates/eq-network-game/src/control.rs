@@ -70,8 +70,7 @@ impl HitPointBasis {
     pub fn current(self) -> Option<i64> {
         let base = match (self.local_damage, self.local_base) {
             (0, None) => self.reported_current,
-            (0, Some(_)) | (_, None) => return None,
-            (_, Some(base)) if (-32768..=10_000_000).contains(&base) => base,
+            (damage, Some(base)) if damage != 0 && (-32768..=10_000_000).contains(&base) => base,
             _ => return None,
         };
         i64::from(base).checked_add(self.item_hit_points)
