@@ -6,10 +6,17 @@ name: CI
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: Validation platform (Linux is an explicit deferred sweep)
+        type: choice
+        default: windows
+        options:
+          - windows
+          - linux
       toolchain:
-        description: Rust toolchain (stable by default; 1.99.0 tests the declared minimum)
+        description: Rust toolchain (1.99.0 is the routine minimum; stable is opt-in)
         required: false
-        default: stable
+        default: '1.99.0'
         type: string
 
 permissions:
@@ -21,13 +28,14 @@ concurrency:
 
 jobs:
   quality:
+    if: inputs.platform == 'linux'
     name: Lint, test, and document
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
+          toolchain: ${{ inputs.toolchain || '1.99.0' }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Lint all targets
@@ -40,14 +48,23 @@ jobs:
         run: cargo doc --workspace --all-features --no-deps
 
   windows:
+    if: inputs.platform != 'linux'
     name: Native Windows tests
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
+          toolchain: ${{ inputs.toolchain || '1.99.0' }}
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows
-      - run: cargo test --workspace --all-targets --all-features
+          shared-key: windows
+      - name: Lint all targets
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Test all targets
+        run: cargo test --workspace --all-targets --all-features
+      - name: Build API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
