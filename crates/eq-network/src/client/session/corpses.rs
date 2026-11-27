@@ -74,14 +74,16 @@ impl From<&str> for Refused {
 fn request(command: &ClientCommand, world: &World, official: bool) -> Result<Request, Refused> {
     let cite = |string_id| official.then_some(string_id);
     let player = world.player.as_ref().ok_or("Not in the zone yet")?;
-    // Servers ignore anything but a player's corpse.
+    // Titanium sends the selected corpse regardless of which corpse kind the
+    // record names. Permission to move it remains the server's decision.
     let corpse = |spawn_id: u16| -> Result<String, Refused> {
         let spawn = world
             .spawns
             .all()
             .find(|spawn| spawn.spawn_id == spawn_id)
             .ok_or("That corpse is not here")?;
-        if spawn.kind == SpawnKind::PlayerCorpse {
+        if spawn.kind == SpawnKind::PlayerCorpse || (official && spawn.kind == SpawnKind::NpcCorpse)
+        {
             Ok(spawn.name.clone())
         } else {
             Err("That is not a player's corpse".into())
@@ -357,6 +359,7 @@ mod tests {
     #[test]
     fn summons_and_drags_name_a_player_corpse() {
         let mut world = world();
+        world.spawns.insert(testing::spawn(8, SpawnKind::Npc));
         let summon = ClientCommand::SummonCorpse {
             session_id: 5,
             spawn_id: 4,
@@ -377,7 +380,7 @@ mod tests {
             [corpses::drag("Tester's corpse4", "Tester").unwrap()]
         );
         for (spawn_id, reason) in [
-            (5, "That is not a player's corpse"),
+            (8, "That is not a player's corpse"),
             (6, "That corpse is not here"),
         ] {
             let outcome =
@@ -398,5 +401,34 @@ mod tests {
         );
         let outcome = testing::run(|out| Corpses::default().handle(&drop(None), &mut world, out));
         assert_eq!(outcome.sent, [corpses::release(None).unwrap()]);
+    }
+
+    #[test]
+    fn titanium_corpse_requests_do_not_require_the_player_corpse_kind() {
+        let mut world = world();
+        let mut corpse = testing::spawn(4, SpawnKind::NpcCorpse);
+        corpse.name = "Tester's corpse4".into();
+        world.spawns.insert(corpse);
+        for command in [
+            ClientCommand::SummonCorpse {
+                session_id: 5,
+                spawn_id: 4,
+            },
+            ClientCommand::DragCorpse {
+                session_id: 5,
+                spawn_id: 4,
+            },
+        ] {
+            let outcome = testing::run(|out| Corpses::default().handle(&command, &mut world, out));
+            outcome.result.unwrap();
+            assert!(refusals(&outcome.events).is_empty());
+            assert_eq!(outcome.sent.len(), 1);
+            let expected = if matches!(command, ClientCommand::SummonCorpse { .. }) {
+                corpses::summon("Tester's corpse4", "Tester").unwrap()
+            } else {
+                corpses::drag("Tester's corpse4", "Tester").unwrap()
+            };
+            assert_eq!(outcome.sent, [expected]);
+        }
     }
 }
