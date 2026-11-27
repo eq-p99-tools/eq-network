@@ -66,9 +66,67 @@ fn command(world: &World, from: i32, to: i32, quantity: MoveQuantity) -> ClientC
 }
 
 #[test]
-fn p99_unnamed_npc_cancel_reconciles_the_real_give_pipeline_without_item_deduplication() {
+fn titanium_cancel_reconciles_both_provider_give_pipelines_without_item_deduplication() {
+    for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+        for accepted in [false, true] {
+            for by in [0, 50, u32::MAX] {
+                titanium_cancel_pipeline(protocol, accepted, by);
+            }
+        }
+    }
+}
+
+#[test]
+fn cancel_sender_policy_follows_the_client_generation_in_the_real_feature_list() {
+    use super::super::exchange::{Exchange, Stage};
+    use eq_network_game::exchange::{ExchangeUpdate, Partner};
+    for protocol in [
+        ServerProtocol::Project1999,
+        ServerProtocol::EqEmu,
+        ServerProtocol::Quarm,
+        ServerProtocol::Takp,
+    ] {
+        for by in [0, 50, 99, u32::MAX] {
+            let (mut features, mut world) = setup(protocol, vec![]);
+            world.exchange = Exchange {
+                with: 42,
+                partner: Partner::Npc,
+                stage: Stage::Open,
+            }
+            .into();
+            let outcome = testing::run_on(servers::server_type(protocol).wire(), |out| {
+                hear(
+                    vec![Message::Event(WorldEvent::Exchange(
+                        ExchangeUpdate::Cancelled { by },
+                    ))],
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )
+            });
+            outcome.result.unwrap();
+            let titanium = matches!(
+                protocol,
+                ServerProtocol::Project1999 | ServerProtocol::EqEmu
+            );
+            assert_eq!(world.exchange.is_none(), titanium, "{protocol:?} {by}");
+            assert_eq!(
+                outcome.events.iter().any(|event| matches!(event,
+                    crate::client::ClientEvent::World(WorldEvent::Exchange(
+                        ExchangeUpdate::Cancelled { by: heard }
+                    )) if *heard == by
+                )),
+                titanium,
+                "{protocol:?} {by}"
+            );
+            assert_eq!(outcome.sent, []);
+        }
+    }
+}
+
+fn titanium_cancel_pipeline(protocol: ServerProtocol, accepted: bool, by: u32) {
     use eq_network_game::{exchange, world::SpawnKind};
-    let protocol = ServerProtocol::Project1999;
     let server = servers::server_type(protocol);
     let wire = server.wire();
     let mut offered = testing::item(30);
@@ -103,16 +161,18 @@ fn p99_unnamed_npc_cancel_reconciles_the_real_give_pipeline_without_item_dedupli
         )?;
         let place = command(&world, 30, 3000, MoveQuantity::Whole);
         apply_commands(&[place], &mut features, &mut world, out, true)?;
-        apply_commands(
-            &[ClientCommand::AcceptTrade {
-                session_id: 5,
-                created: Instant::now(),
-            }],
-            &mut features,
-            &mut world,
-            out,
-            true,
-        )?;
+        if accepted {
+            apply_commands(
+                &[ClientCommand::AcceptTrade {
+                    session_id: 5,
+                    created: Instant::now(),
+                }],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+        }
         let mut returned = offered.clone();
         returned.slot = InventorySlot(23);
         hear(
@@ -125,12 +185,10 @@ fn p99_unnamed_npc_cancel_reconciles_the_real_give_pipeline_without_item_dedupli
             true,
         )?;
         assert!(world.inventory.items().contains_key(&InventorySlot(3000)));
+        let mut body = by.to_le_bytes().to_vec();
+        body.extend_from_slice(&1_u32.to_le_bytes());
         hear(
-            wire.messages(
-                exchange::CANCEL_OPCODE,
-                &[0, 0, 0, 0, 1, 0, 0, 0],
-                server.item_rules(),
-            ),
+            wire.messages(exchange::CANCEL_OPCODE, &body, server.item_rules()),
             &mut features,
             &mut world,
             out,
@@ -154,8 +212,8 @@ fn p99_unnamed_npc_cancel_reconciles_the_real_give_pipeline_without_item_dedupli
     assert!(outcome.events.iter().any(|event| matches!(
         event,
         crate::client::ClientEvent::World(WorldEvent::Exchange(
-            exchange::ExchangeUpdate::Cancelled { by: 0 }
-        ))
+            exchange::ExchangeUpdate::Cancelled { by: heard }
+        )) if *heard == by
     )));
     assert!(!outcome
         .sent

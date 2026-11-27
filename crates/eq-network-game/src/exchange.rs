@@ -134,9 +134,9 @@ pub enum ExchangeUpdate {
     /// A side closed the window, or the server did (at logout, the player's
     /// own ID). What the player's trade slots held comes back as item updates.
     Cancelled {
-        /// The ID the server names: an NPC's own, but this player's when
-        /// another player cancelled, as `EQEmu` rewrites the forwarded
-        /// packet for its recipient.
+        /// The ID the server names, which can be zero or an unknown spawn.
+        /// Titanium uses it for feedback, not to select the active window.
+        /// `EQEmu` can rewrite it to this player's ID when forwarding a cancel.
         by: u32,
     },
     /// The other side could not, or would not, trade.
