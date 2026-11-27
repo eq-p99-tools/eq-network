@@ -1151,7 +1151,7 @@ mod tests {
             ClientCommand::SpeedInputs { .. } => 72,
             ClientCommand::ShowHelm { .. } => 73,
             ClientCommand::ClimbReach { .. } => 74,
-            ClientCommand::MovementPacketSnapshot { .. } => 151,
+            ClientCommand::MovementPacketSnapshot { .. } => 153,
             ClientCommand::DoorRadii { .. } => 150,
             ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::RespondToPopup { .. } => 89,
