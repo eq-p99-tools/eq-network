@@ -1,74 +1,77 @@
-# Reset-anchored horizontal swimming (inert API)
+# Reset-anchored horizontal swimming
 
-`MotionSession::send_swim_sample` is an optional validation seam. No existing
-session command or client calls it. It is not an ordinary water-entry fix.
-Existing `send_move_sample` behavior, caps, report gate and wire format remain
-unchanged. A later client integration must prove the matching reset and actual
-complete controls before opting in; obtaining a receipt alone proves neither.
-This first envelope requires the stream's existing swimming and absolute-heading
-snapshot permissions, a calibrated wet model, and no root, hold, flight or
-carrier ownership. Other streams retain the old path. No capability is enabled
-by this API. The actual liquid/control observations must come from the existing
-scene/controller owners, not a reconstructed or conveniently selected path.
+`MotionSession::send_swim_sample` and the optional process-local `SwimFrame`
+command validate complete ordinary swim controls. Existing clients use the
+legacy movement path until they can establish the matching real reset and
+actual ordered controls. A receipt alone proves neither. This is not an
+ordinary water-entry fix. Existing caps, report gate and wire format remain.
 
-The first `SwimBasis` comes only from admission or a genuine server correction.
-The client must match that same physical reset, including its zero horizontal
-wet velocity and frame phase. A local pad is not that reset: it preserves the
-client's wet state. After legacy motion, clipping, incomplete input, uncertain
-entry/ownership, a grant change or explicit withdrawal, no new anchor is inferred.
-Only another independently matched real reset can begin a new proved sequence.
+The envelope requires existing swimming and absolute-heading snapshot
+permissions, a calibrated wet model, and no root, hold, flight or carrier
+ownership. No capability is enabled by this API. Liquid and input observations
+must come from the scene/controller owners, not a reconstructed path.
 
-`SwimControls` contains the opaque basis and a bounded, strictly ordered sequence
-of actual `SwimControl` pieces. Each piece gives its ending time, canonical body
-heading, existing water kind and normal digital input mode. The owner
-derives all rates from calibration, including separately calibrated backward
-input and the walking share of strafe. Forward plus strafe uses the ordinary
-normalized forward/walk water rate; unsupported input combinations keep the old
-path. The caller cannot supply velocity, phase, rate, a reset flag or a fitted arc.
+The first opaque `SwimBasis` comes only from admission or genuine correction.
+The client must match that physical reset, including zero horizontal wet
+velocity and clock. A local pad preserves velocity and is not a reset. Legacy
+motion, clipping, incomplete input, uncertain entry/ownership, grant changes
+or withdrawal invalidate continuity. Only another independently matched real
+reset can establish it again.
 
-Ordinary native water controls use the full selected horizontal rate. Look
-pitch adds its vertical input separately; it does not apply a cosine share to
-horizontal input. This API exposes no arbitrary rate multiplier. Unsupported
-or uncertain input retains the old path. Vertical movement keeps its existing
-independent cap checks; horizontal replay grants no vertical model authority.
+Each `SwimControl` records actual input facing, water kind, ordinary digital
+input and an ordered ending cursor. Rates always come from calibration,
+including backward and walking strafe. Full selected horizontal input is
+independent of pitch's vertical contribution. Callers supply no velocity,
+phase, fitted arc, arbitrary rate multiplier or reset assertion. Unsupported
+input keeps the old guard. Vertical movement retains independent cap checks.
 
-The controls must cover the entire reset/accepted-state-to-request span, ending
-at the request's heading, within 250 ms. Only observed idle pieces can precede
-the initial calibration timestamp. That prefix earns no horizontal acceleration;
-the existing guard still applies its unchanged calibrated interval budget. A
-gap, partial declaration, unknown clock or stale basis cannot earn replay credit.
-`withdraw_swim_controls` explicitly makes continuity unavailable.
+`SwimControls::new` requires complete wall-span observations and matching
+final input/pose heading. `from_applied` instead records exact positive f32
+durations at the real native calls and checks final pose independently. Its
+shape is full fixed caller slices followed by at most one remainder, at most
+64 pieces and 250 ms. Scheduling gaps add no fabricated idle physics. Cursor
+rounding allowance is at most 32 ns; geometry tolerance remains 0.01. The request
+still obeys wall freshness, cadence, calibrated elapsed budget and all caps.
 
-The owner clones its accepted horizontal velocity and phase, runs the existing
-water recurrence and integrates travel over each physical piece. It compares
-the endpoint with that result and retains every existing total-horizontal,
-vertical, elapsed, availability, session, transport and report-gate check. Only
-that proved replay replaces the old ending-heading backward-displacement test.
-Unqualified input or an unexplained endpoint runs the original checks and
-invalidates continuity, even if the old path admits the endpoint. There is no
-retry with a more permissive rule. A rejected replay or failed send cannot commit
-its trial. A locally accepted held sample does commit, under the existing gate;
-this is not a wire or server acknowledgement.
+The owner clones accepted horizontal velocity and raw clock, runs unchanged
+native recurrence and integrates each actual call. Native `due += frame`
+can leave tiny known overdue debt after a final remainder while the public
+nominal `frame_phase` view is unavailable. Complete owned applied history
+retains that raw state in a finite domain of at most two 10 us boundary windows
+of debt. Intervening full calls must finish canonical; only a final remainder
+can leave bounded debt. Arbitrary tiny-call tapes decline. Public nominal
+phase behavior and legacy observations are unchanged. Unknown state never
+becomes a guessed phase.
 
-At a fixed heading, fresh backward input is at most its existing rate B (zero
-without a grant). In normal water, `b_next <= .95*b + .05*B`, so starting inside
-B stays inside B. An earned turn may carry an independently known larger
-projection temporarily, but fixed-heading input cannot renew it. The model
-integrates that finite coast; it neither truncates history at 90 frames nor
-uses endpoint velocity times elapsed as the travel allowance. Other water sets
-use their existing coefficients and caps, not a new universal damping rule.
+Only a matched endpoint replay replaces the old ending-heading backward
+projection test. Every total/vertical/time/session/availability/transport and
+report check remains. Unqualified input or unexplained travel uses existing
+checks and invalidates continuity, even if the old guard admits it. There is
+no retry with a more permissive rule. Trial commits only on matching local
+acceptance; failed send does not commit. A held accepted sample can commit
+under the existing gate. Neither local acceptance nor queued receipt is a
+packet submission or server acknowledgement.
 
-The step and coefficients are read-backed for Titanium (`eqgame.exe` 0x4bfe0f);
-the unchanged 60 Hz clock is this client's inferred model, not a newly proven
-native frame rate. The ordinary collision path keeps horizontal velocity while
-shortening travel, so this first envelope declines clipping instead of treating
-achieved travel divided by time as an instantaneous seed. Ordinary land/fall
-entry, shoreline/surface ownership and unmatched reset/phase remain on the old
-guard until separately proved. They can still exhibit the original refusals.
+`SwimFrame` follows normal request ownership/lifecycle and the common position
+sender and successful-submit counter. `WorldEvent::SwimState` queues actual
+position and opaque process-local basis after the originating correction or
+local result. Basis and timestamp are skipped in serialization. A producer
+must retain reset/input/result chronology, restore its trial on refusal or
+discard, and prevent stale results restoring a corrected epoch.
 
-Tests use synthetic controls and the real wet recurrence. They distinguish the
-physical travelled path, the sum of report-interval chords, and net endpoint
-displacement. Constant-turn examples are labelled synthetic angular conditions;
-they are not reconstructions of live aggregate distances or refusal counts.
-Removing validator loss does not imply making fast-turn path length equal
-straight travel, or normalizing speed to meet a target distance.
+At fixed heading, fresh backward input stays at calibrated B, including zero.
+For normal water, `b_next <= .95*b + .05*B`, so starting inside B stays inside.
+Earned turn carry may temporarily project farther backward but fixed-heading
+input cannot renew it. Native integrated coast is neither a truncated history
+nor endpoint velocity times elapsed. Other sets retain their coefficients.
+
+Coefficients follow the Titanium read at `eqgame.exe` 0x4bfe0f. The unchanged
+60 Hz clock is this client's inferred model, not a measured native frame rate.
+Clipping, ordinary land/fall entry, surface/shoreline ownership and unmatched
+reset remain on the old guard and can still exhibit its refusals.
+
+Synthetic regressions use the real recurrence and distinguish physical path,
+accepted report chords and net endpoint. They are not reconstructions of live
+aggregate rows. Removing validator loss does not imply fast turns travel the
+same distance as straight input. `inspect_swim_replay` is read-only trial
+diagnostics, not admission, commit, send or proof that all other guards pass.
