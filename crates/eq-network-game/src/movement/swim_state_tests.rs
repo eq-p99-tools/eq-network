@@ -615,7 +615,7 @@ fn malformed_observations_have_no_phase_or_velocity_escape_hatch() {
 #[test]
 fn calibration_modes_holds_and_explicit_withdrawal_destroy_continuity() {
     let start = Instant::now();
-    for seam in 0..7 {
+    for seam in 0..9 {
         let mut session = owner(start, 0);
         let mut velocity = WetVelocity::default();
         advance(
@@ -649,14 +649,36 @@ fn calibration_modes_holds_and_explicit_withdrawal_destroy_continuity() {
                     .send_move_sample(&request, request.created, |_| Ok(()))
                     .unwrap();
             }
-            _ => {
+            6 => {
                 let mut options = session.options();
                 options.fly = true;
                 session.set_options(options, now).unwrap();
             }
+            7 => session = session.with_swimming(false).with_swimming(true),
+            _ => {
+                session = session
+                    .with_heading_snapshots(false)
+                    .with_heading_snapshots(true)
+            }
         }
         assert!(session.swim_basis().is_none());
     }
+}
+
+#[test]
+fn a_server_reset_during_a_hold_does_not_authorize_wet_input_until_new_continuity() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    session.set_hold(Hold::Frozen);
+    let now = start + Duration::from_secs(1);
+    session.correct(Position::default(), now).unwrap();
+    session.calibrate(calibration(0), now).unwrap();
+    assert!(session.swim_basis().is_none());
+    session.set_hold(Hold::None);
+    assert!(session.swim_basis().is_none());
+    session.correct(Position::default(), now).unwrap();
+    session.calibrate(calibration(0), now).unwrap();
+    assert!(session.swim_basis().is_some());
 }
 
 #[test]

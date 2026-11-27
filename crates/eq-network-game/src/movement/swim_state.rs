@@ -180,7 +180,7 @@ impl Owner {
         })
     }
 
-    pub fn invalidate(&mut self) {
+    pub const fn invalidate(&mut self) {
         self.known = None;
         self.reset = false;
         self.revision = self.revision.saturating_add(1);
