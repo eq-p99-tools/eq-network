@@ -84,7 +84,9 @@ impl From<Exchange> for Exchanging {
 /// Asks other characters to trade and carries the window through to Give or
 /// its closing.
 #[derive(Default)]
-pub(super) struct Exchanges;
+pub(super) struct Exchanges {
+    anonymous_npc_cancel: bool,
+}
 
 /// Tells the host why no window opened or why it went away.
 fn refused(session_id: u64, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
@@ -97,6 +99,12 @@ fn refused(session_id: u64, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Exchanges {
+    pub(super) fn project1999() -> Self {
+        Self {
+            anonymous_npc_cancel: true,
+        }
+    }
+
     /// Asks a visible character within reach, while the player holds an item
     /// or coins on the cursor to hand over.
     fn offer(
@@ -341,7 +349,15 @@ impl Feature for Exchanges {
                 ExchangeUpdate::Busy { by, .. } => asked && *by == partner,
                 ExchangeUpdate::Finished => exchange.stage == Stage::Accepted,
                 ExchangeUpdate::Cancelled { by } => {
-                    !asked && (*by == partner || world.own_spawn.map(u32::from) == Some(*by))
+                    let named = *by == partner || world.own_spawn.map(u32::from) == Some(*by);
+                    // P99's captured cancellation of a submitted NPC give
+                    // names no spawn (0). Separate inventory records retain
+                    // their own custody; no item identity is inferred here.
+                    let anonymous = *by == 0
+                        && self.anonymous_npc_cancel
+                        && exchange.partner == Partner::Npc
+                        && exchange.stage == Stage::Accepted;
+                    !asked && (named || anonymous)
                 }
                 ExchangeUpdate::Accepted { by } => !asked && *by == partner,
                 ExchangeUpdate::Offered { .. }
@@ -450,6 +466,7 @@ impl Feature for Exchanges {
 
 #[cfg(test)]
 mod tests {
+    mod anonymous;
     use super::super::feature::testing;
     use super::*;
     use eq_network_game::world::Position;
@@ -508,7 +525,7 @@ mod tests {
 
     #[test]
     fn only_a_character_in_reach_is_asked() {
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         for with_id in [43, 44, 45] {
             let mut world = beside_npc();
             let outcome = testing::run(|out| exchanges.handle(&offer(with_id), &mut world, out));
@@ -560,14 +577,14 @@ mod tests {
         }));
         let mut world = giving_to_npc();
         let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
-            Exchanges.observe(&cancelled, &mut world, out)
+            Exchanges::default().observe(&cancelled, &mut world, out)
         });
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
         assert!(world.exchange.is_none());
         // Titanium answers only another player's.
         let mut world = giving_to_npc();
-        let outcome = testing::run(|out| Exchanges.observe(&cancelled, &mut world, out));
+        let outcome = testing::run(|out| Exchanges::default().observe(&cancelled, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent, []);
         assert!(world.exchange.is_none());
@@ -583,7 +600,7 @@ mod tests {
         npc.position.x = exchange::REACH;
         world.spawns.insert(npc.clone());
         let tick = |world: &mut World, wire| {
-            let outcome = testing::run_on(wire, |out| Exchanges.tick(now, world, out));
+            let outcome = testing::run_on(wire, |out| Exchanges::default().tick(now, world, out));
             assert!(outcome.result.is_ok());
             outcome
         };
@@ -614,7 +631,7 @@ mod tests {
     fn eqmac_gives_in_its_own_packets_naming_the_npc() {
         use eq_network_game::exchange::eqmac;
         let wire = &super::super::wire::EqMac;
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         let mut world = beside_npc();
         let outcome = testing::run_on(wire, |out| exchanges.handle(&offer(NPC), &mut world, out));
         outcome.result.unwrap();
@@ -660,7 +677,7 @@ mod tests {
 
     #[test]
     fn a_refusal_names_its_reason_and_closes_the_request() {
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         let mut world = beside_npc();
         testing::run(|out| exchanges.handle(&offer(PLAYER), &mut world, out))
             .result
@@ -677,7 +694,7 @@ mod tests {
 
     #[test]
     fn the_npcs_answer_opens_the_window_and_give_or_closing_ends_it() {
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         let mut world = beside_npc();
         testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out))
             .result
@@ -735,7 +752,7 @@ mod tests {
 
     #[test]
     fn another_players_request_opens_the_window_unless_a_trade_is_under_way() {
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         let mut world = beside_npc();
         let asked = |from| news(ExchangeUpdate::Requested { from });
         let outcome =
@@ -768,7 +785,7 @@ mod tests {
 
     #[test]
     fn a_player_who_closes_the_window_gets_their_items_back_and_so_does_this_side() {
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         let mut world = beside_npc();
         testing::run(|out| {
             exchanges.observe(
@@ -844,19 +861,22 @@ mod tests {
                 partner,
                 stage: Stage::Open,
             });
-            let outcome = testing::run_on(wire, |out| Exchanges.handle(&close, &mut world, out));
+            let outcome = testing::run_on(wire, |out| {
+                Exchanges::default().handle(&close, &mut world, out)
+            });
             outcome.result.unwrap();
             assert_eq!(outcome.sent, [eqmac::cancel(7, with).unwrap()]);
             assert!(world.exchange.is_none());
             for by in echoes {
                 let mut echo = news(ExchangeUpdate::Cancelled { by });
-                Exchanges.explain(&mut echo, &world);
+                Exchanges::default().explain(&mut echo, &world);
                 assert!(
                     matches!(echo, Message::Withheld),
                     "echo {by} reached the host"
                 );
-                let outcome =
-                    testing::run_on(wire, |out| Exchanges.observe(&echo, &mut world, out));
+                let outcome = testing::run_on(wire, |out| {
+                    Exchanges::default().observe(&echo, &mut world, out)
+                });
                 outcome.result.unwrap();
                 assert_eq!(outcome.sent, [], "answered echo {by}");
                 assert!(outcome.events.is_empty(), "told {:?}", outcome.events);
@@ -884,12 +904,12 @@ mod tests {
             ExchangeUpdate::Finished,
         ] {
             let mut message = news(update);
-            Exchanges.explain(&mut message, &world);
+            Exchanges::default().explain(&mut message, &world);
             assert!(matches!(message, Message::Withheld));
         }
         world.exchange.0.as_mut().unwrap().stage = Stage::Accepted;
         let mut message = news(ExchangeUpdate::Finished);
-        Exchanges.explain(&mut message, &world);
+        Exchanges::default().explain(&mut message, &world);
         assert!(matches!(
             message,
             Message::Event(WorldEvent::Exchange(ExchangeUpdate::Finished))
@@ -903,11 +923,11 @@ mod tests {
             session_id: 5,
             created: Instant::now(),
         };
-        let first = testing::run(|out| Exchanges.handle(&give, &mut world, out));
+        let first = testing::run(|out| Exchanges::default().handle(&give, &mut world, out));
         first.result.unwrap();
         assert_eq!(first.sent, [exchange::accept(7).unwrap()]);
         assert_eq!(world.exchange.unwrap().trade_slots(), 0);
-        let repeat = testing::run(|out| Exchanges.handle(&give, &mut world, out));
+        let repeat = testing::run(|out| Exchanges::default().handle(&give, &mut world, out));
         repeat.result.unwrap();
         assert_eq!(
             repeat.sent,
@@ -917,7 +937,7 @@ mod tests {
 
     #[test]
     fn an_unanswered_request_is_withdrawn() {
-        let mut exchanges = Exchanges;
+        let mut exchanges = Exchanges::default();
         let mut world = beside_npc();
         testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out))
             .result

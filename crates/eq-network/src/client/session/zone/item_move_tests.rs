@@ -65,6 +65,104 @@ fn command(world: &World, from: i32, to: i32, quantity: MoveQuantity) -> ClientC
     })
 }
 
+#[test]
+fn p99_unnamed_npc_cancel_reconciles_the_real_give_pipeline_without_item_deduplication() {
+    use eq_network_game::{exchange, world::SpawnKind};
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    let mut offered = testing::item(30);
+    offered.rules.ground_drop_serial = NonZeroU32::new(1);
+    let mut separate = offered.clone();
+    separate.slot = InventorySlot(27);
+    separate.rules.ground_drop_serial = NonZeroU32::new(99);
+    let (mut features, mut world) = setup(protocol, vec![offered.clone(), separate.clone()]);
+    world.spawns.insert(testing::spawn(42, SpawnKind::Npc));
+    let outcome = testing::run_on(wire, |out| -> anyhow::Result<()> {
+        apply_commands(
+            &[ClientCommand::OfferTrade {
+                session_id: 5,
+                with_id: 42,
+                created: Instant::now(),
+            }],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        hear(
+            wire.messages(
+                exchange::ACKNOWLEDGE_OPCODE,
+                &[7, 0, 0, 0, 42, 0, 0, 0],
+                server.item_rules(),
+            ),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        let place = command(&world, 30, 3000, MoveQuantity::Whole);
+        apply_commands(&[place], &mut features, &mut world, out, true)?;
+        apply_commands(
+            &[ClientCommand::AcceptTrade {
+                session_id: 5,
+                created: Instant::now(),
+            }],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        let mut returned = offered.clone();
+        returned.slot = InventorySlot(23);
+        hear(
+            vec![Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(
+                vec![returned.clone()],
+            )))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        assert!(world.inventory.items().contains_key(&InventorySlot(3000)));
+        hear(
+            wire.messages(
+                exchange::CANCEL_OPCODE,
+                &[0, 0, 0, 0, 1, 0, 0, 0],
+                server.item_rules(),
+            ),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        assert!(world.exchange.is_none());
+        assert!(!world
+            .inventory
+            .items()
+            .keys()
+            .any(|slot| slot.is_in_trade()));
+        assert_eq!(world.inventory.items()[&returned.slot], returned);
+        assert_eq!(world.inventory.items()[&separate.slot], separate);
+        Ok(())
+    });
+    outcome.result.unwrap();
+    assert!(outcome.events.iter().any(|event| matches!(
+        event,
+        crate::client::ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::TradeEmptied))
+    )));
+    assert!(outcome.events.iter().any(|event| matches!(
+        event,
+        crate::client::ClientEvent::World(WorldEvent::Exchange(
+            exchange::ExchangeUpdate::Cancelled { by: 0 }
+        ))
+    )));
+    assert!(!outcome
+        .sent
+        .iter()
+        .any(|packet| packet.opcode == exchange::CANCEL_OPCODE));
+}
+
 fn submit(
     protocol: ServerProtocol,
     features: &mut Features,
