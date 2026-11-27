@@ -203,6 +203,19 @@ impl Features {
             actions::refuse(command, "The zone connection ended", out.log)?;
             return Ok(true);
         }
+        if matches!(command, ClientCommand::MovementPacketSnapshot { .. }) {
+            // An observation is not a player action. Bypass gameplay notice
+            // and after-command hooks as well as the owner's motion refresh.
+            let Some(owner) = self
+                .provided
+                .iter_mut()
+                .find(|feature| feature.owns(command))
+            else {
+                return Ok(false);
+            };
+            owner.handle(command, world, out)?;
+            return Ok(true);
+        }
         for feature in &mut self.provided {
             feature.notice(command, world, out)?;
         }
@@ -3822,6 +3835,72 @@ mod tests {
         });
         own_skill(&mut other, &world);
         assert!(matches!(other, Message::Unreadable { .. }));
+    }
+    #[test]
+    fn movement_counter_snapshot_is_not_a_gameplay_notice_or_after_command() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        struct Hooks(Arc<AtomicUsize>);
+        impl Feature for Hooks {
+            fn notice(
+                &mut self,
+                _: &ClientCommand,
+                _: &mut World,
+                _: &mut Out<'_, '_>,
+            ) -> Result<()> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            fn after_command(&mut self, _: &World) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let called = Arc::new(AtomicUsize::new(0));
+        let mut features = Features {
+            provided: vec![
+                Box::new(Hooks(Arc::clone(&called))),
+                Box::new(super::super::motion::Motion::new(true, false, None)),
+            ],
+            choices: vec![],
+            spell_landing_flag: None,
+            answers_list_polls: false,
+            dialect: eq_network_game::GameDialect::Titanium,
+            server_filters_at_once: false,
+            gameplay_departures: false,
+        };
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        let output = super::super::feature::testing::run(|out| {
+            features.handle(
+                &ClientCommand::MovementPacketSnapshot {
+                    session_id: 5,
+                    request_id: 7,
+                },
+                &mut world,
+                out,
+            )
+        });
+        assert!(output.result.unwrap());
+        assert_eq!(called.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            output.sent,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        assert_eq!(
+            output.unreliable,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        assert!(matches!(
+            output.events.as_slice(),
+            [ClientEvent::MovementPacketSnapshot {
+                session_id: 5,
+                request_id: 7,
+                sent: 0,
+                ..
+            }]
+        ));
     }
 }
 
