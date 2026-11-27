@@ -1486,6 +1486,7 @@ mod tests {
                     item_hit_points: 0,
                     inventory_revision: 0,
                     local_damage: 0,
+                    local_base: None,
                     damage_floor: None,
                 },
                 created,
