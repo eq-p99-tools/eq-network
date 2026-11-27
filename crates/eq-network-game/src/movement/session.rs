@@ -540,6 +540,9 @@ impl MotionSession {
     /// Allows bounded swimming on a supported Titanium position stream.
     #[must_use]
     pub const fn with_swimming(mut self, enabled: bool) -> Self {
+        if self.swimming && !enabled {
+            self.wet.invalidate();
+        }
         self.swimming = enabled;
         self
     }
@@ -547,6 +550,9 @@ impl MotionSession {
     /// Allows absolute mouse heading snapshots for a Titanium position stream.
     #[must_use]
     pub const fn with_heading_snapshots(mut self, enabled: bool) -> Self {
+        if self.heading_snapshots && !enabled {
+            self.wet.invalidate();
+        }
         self.heading_snapshots = enabled;
         self
     }
@@ -1437,7 +1443,12 @@ impl MotionSession {
     /// real reset and retains complete ordinary wet controls from that point.
     #[must_use]
     pub fn swim_basis(&self) -> Option<super::SwimBasis> {
-        (self.swimming && self.granted() && !self.rooted && !self.options.fly)
+        (self.swimming
+            && self.heading_snapshots
+            && self.granted()
+            && !self.rooted
+            && !self.options.fly
+            && self.hold == Hold::None)
             .then(|| self.wet.basis(self.guard.session_id))
             .flatten()
     }
@@ -1470,6 +1481,7 @@ impl MotionSession {
                 || !self.swimming
                 || !self.heading_snapshots
                 || self.rooted
+                || self.hold != Hold::None
                 || self.options.fly
                 || self.guard.carrier_pose.is_some()
                 || self
