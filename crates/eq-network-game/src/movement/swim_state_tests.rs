@@ -658,7 +658,7 @@ fn calibration_modes_holds_and_explicit_withdrawal_destroy_continuity() {
             _ => {
                 session = session
                     .with_heading_snapshots(false)
-                    .with_heading_snapshots(true)
+                    .with_heading_snapshots(true);
             }
         }
         assert!(session.swim_basis().is_none());

@@ -5,6 +5,11 @@ session command or client calls it. It is not an ordinary water-entry fix.
 Existing `send_move_sample` behavior, caps, report gate and wire format remain
 unchanged. A later client integration must prove the matching reset and actual
 complete controls before opting in; obtaining a receipt alone proves neither.
+This first envelope requires the stream's existing swimming and absolute-heading
+snapshot permissions, a calibrated wet model, and no root, hold, flight or
+carrier ownership. Other streams retain the old path. No capability is enabled
+by this API. The actual liquid/control observations must come from the existing
+scene/controller owners, not a reconstructed or conveniently selected path.
 
 The first `SwimBasis` comes only from admission or a genuine server correction.
 The client must match that same physical reset, including its zero horizontal
