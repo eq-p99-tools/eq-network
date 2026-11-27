@@ -1436,6 +1436,10 @@ mod ducking_tests;
 mod ground_frame_tests;
 
 #[cfg(test)]
+#[path = "motion_owned_swim_tests.rs"]
+mod owned_swim_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::feature::testing;
     use super::*;
