@@ -709,6 +709,22 @@ pub enum ConnectionStage {
 pub enum ClientEvent {
     /// World state for graphical clients; contains no login or profile secrets.
     World(crate::world::WorldEvent),
+    /// On-demand diagnostic boundary; not movement admission or a wire report.
+    MovementPacketSnapshot {
+        /// Exact current zone admission which answered the request.
+        session_id: u64,
+        /// Echoed host correlation identity.
+        request_id: u64,
+        /// Typed worker-attempt identity, never inferred from a display label.
+        run_id: u64,
+        /// Successful player-position transport submissions in that attempt.
+        sent: u64,
+        /// Monotonic worker observation time, shared only within this process.
+        #[serde(skip)]
+        observed: Instant,
+        /// Wall-clock milliseconds for logs; not an elapsed-time authority.
+        unix_timestamp_ms: i64,
+    },
     /// Periodic health and connection status.
     Status(SessionStatus),
     /// Completed connection milestone.

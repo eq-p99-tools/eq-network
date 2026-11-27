@@ -298,3 +298,153 @@ fn ground_frame_packet_counter_matches_transport_submissions_not_local_acceptanc
     );
     assert!(received(&output.events).len() > output.unreliable.len());
 }
+
+#[test]
+fn counter_snapshot_boundaries_are_current_timestamped_and_do_not_change_movement() {
+    let start = Instant::now();
+    let mut recordings = Vec::new();
+    for observe in [false, true] {
+        let mut world = world(start, &Titanium);
+        let mut feature = Motion::new(true, false, None);
+        let before = Instant::now();
+        let output = testing::run(|out| {
+            if observe {
+                feature
+                    .handle(
+                        &ClientCommand::MovementPacketSnapshot {
+                            session_id: 5,
+                            request_id: 41,
+                        },
+                        &mut world,
+                        out,
+                    )
+                    .unwrap();
+            }
+            for frame in 1_u16..=600 {
+                let created = start + Duration::from_nanos(u64::from(frame) * 16_666_667);
+                let request = MovementRequest {
+                    created,
+                    ..request(start, 0, f32::from(frame) * 0.1)
+                };
+                Motion::step_with_ground(
+                    &request,
+                    Some(GroundState::new([6., 0.], true).unwrap()),
+                    created,
+                    &mut world,
+                    out,
+                )
+                .unwrap();
+                world.body.heartbeat(created, out).unwrap();
+            }
+            let position = world.body.position();
+            if observe {
+                feature
+                    .handle(
+                        &ClientCommand::MovementPacketSnapshot {
+                            session_id: 5,
+                            request_id: 42,
+                        },
+                        &mut world,
+                        out,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(world.body.position(), position);
+        });
+        let after = Instant::now();
+        let snapshots: Vec<_> = output
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::MovementPacketSnapshot {
+                    session_id,
+                    request_id,
+                    run_id,
+                    sent,
+                    observed,
+                    unix_timestamp_ms,
+                } => Some((
+                    *session_id,
+                    *request_id,
+                    *run_id,
+                    *sent,
+                    *observed,
+                    *unix_timestamp_ms,
+                )),
+                _ => None,
+            })
+            .collect();
+        if observe {
+            assert_eq!(snapshots.len(), 2);
+            assert_eq!((snapshots[0].0, snapshots[0].1, snapshots[0].3), (5, 41, 0));
+            assert_eq!((snapshots[1].0, snapshots[1].1), (5, 42));
+            assert_eq!(snapshots[0].2, snapshots[1].2);
+            assert_eq!(
+                snapshots[1].3,
+                u64::try_from(output.unreliable.len()).unwrap()
+            );
+            assert!(
+                before <= snapshots[0].4
+                    && snapshots[0].4 <= snapshots[1].4
+                    && snapshots[1].4 <= after
+            );
+            assert!(snapshots.iter().all(|snapshot| snapshot.5 > 0));
+        } else {
+            assert_eq!(snapshots, Vec::new());
+        }
+        recordings.push((output.sent, output.unreliable));
+    }
+    assert_eq!(
+        recordings[0], recordings[1],
+        "diagnostic requests changed movement reports"
+    );
+}
+
+#[test]
+fn counter_snapshot_requires_the_exact_live_admission_and_bypasses_motion_refresh() {
+    let start = Instant::now();
+    for (admitted, session_id) in [(false, 5), (true, 6), (true, 5)] {
+        let mut world = world(start, &Titanium);
+        if !admitted {
+            world.admitted = None;
+        }
+        let before = world.body.position();
+        let mut feature = Motion::new(true, false, None);
+        let output = testing::run(|out| {
+            out.log.movement_packets_sent = 7;
+            feature
+                .handle(
+                    &ClientCommand::MovementPacketSnapshot {
+                        session_id,
+                        request_id: 99,
+                    },
+                    &mut world,
+                    out,
+                )
+                .unwrap();
+            assert_eq!(out.log.movement_packets_sent, 7);
+        });
+        assert_eq!(world.body.position(), before);
+        assert_eq!(
+            output.sent,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        assert_eq!(
+            output.unreliable,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        let snapshots = output
+            .events
+            .iter()
+            .filter(|event| matches!(event, ClientEvent::MovementPacketSnapshot { .. }))
+            .count();
+        assert_eq!(snapshots, usize::from(admitted && session_id == 5));
+        if admitted && session_id == 5 {
+            assert_eq!(
+                output.events.len(),
+                1,
+                "snapshot refreshed movement prerequisites"
+            );
+        }
+    }
+}

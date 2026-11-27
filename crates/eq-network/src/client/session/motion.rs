@@ -1210,6 +1210,7 @@ impl Feature for Motion {
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
                 | ClientCommand::ClimbReach { .. }
+                | ClientCommand::MovementPacketSnapshot { .. }
                 | ClientCommand::SetMovementOptions { .. }
         )
     }
@@ -1220,6 +1221,26 @@ impl Feature for Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        // Read-only diagnostics bypass refresh/calibration/input observation.
+        if let ClientCommand::MovementPacketSnapshot {
+            session_id,
+            request_id,
+        } = *command
+        {
+            if session_id != world.session_id || !world.ready() {
+                return out
+                    .log
+                    .diagnostic("Ignored movement counter snapshot outside its admission".into());
+            }
+            return out.log.send(ClientEvent::MovementPacketSnapshot {
+                session_id: world.session_id,
+                request_id,
+                run_id: out.log.spell_tables.run_id(),
+                sent: out.log.movement_packets_sent,
+                observed: Instant::now(),
+                unix_timestamp_ms: jiff::Timestamp::now().as_millisecond(),
+            });
+        }
         self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),

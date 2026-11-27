@@ -1151,6 +1151,7 @@ mod tests {
             ClientCommand::SpeedInputs { .. } => 72,
             ClientCommand::ShowHelm { .. } => 73,
             ClientCommand::ClimbReach { .. } => 74,
+            ClientCommand::MovementPacketSnapshot { .. } => 151,
             ClientCommand::DoorRadii { .. } => 150,
             ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::RespondToPopup { .. } => 89,
@@ -1744,6 +1745,10 @@ mod tests {
             ClientCommand::ClimbReach {
                 session_id,
                 per_step: 3.15,
+            },
+            ClientCommand::MovementPacketSnapshot {
+                session_id,
+                request_id: 1,
             },
             ClientCommand::DoorRadii {
                 session_id,

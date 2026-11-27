@@ -360,6 +360,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
+        | ClientCommand::MovementPacketSnapshot { .. }
         | ClientCommand::DoorRadii { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::PoisonWait { .. }
@@ -665,6 +666,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
+        | ClientCommand::MovementPacketSnapshot { .. }
         | ClientCommand::DoorRadii { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::PoisonWait { .. }
