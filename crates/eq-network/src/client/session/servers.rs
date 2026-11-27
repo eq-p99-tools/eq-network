@@ -844,8 +844,8 @@ mod shared {
         Box::<Exchanges>::default()
     }
 
-    pub(super) fn project1999_exchange() -> Box<dyn Feature> {
-        Box::new(Exchanges::project1999())
+    pub(super) fn titanium_exchange() -> Box<dyn Feature> {
+        Box::new(Exchanges::titanium())
     }
 
     pub(super) fn abilities(listed: &'static [Ability]) -> Box<dyn Feature> {
@@ -1261,7 +1261,7 @@ impl ServerType for Project1999 {
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::project1999_exchange())
+        offer(shared::titanium_exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
@@ -1479,7 +1479,7 @@ impl ServerType for EqEmu {
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::exchange())
+        offer(shared::titanium_exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {

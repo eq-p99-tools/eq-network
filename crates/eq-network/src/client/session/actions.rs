@@ -370,6 +370,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SetServerFilters { .. }
         | ClientCommand::SetMovementOptions { .. }
         | ClientCommand::SetBookOptions { .. }
+        | ClientCommand::PollSpellbook { .. }
         | ClientCommand::BoatControl { .. }
         | ClientCommand::ArrivalPlacement { .. }
         | ClientCommand::Move(_) | ClientCommand::GroundFrame { .. } => &[],
@@ -674,6 +675,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::PoisonWait { .. }
         | ClientCommand::AnswerListPolls { .. }
         | ClientCommand::SetBookOptions { .. }
+        | ClientCommand::PollSpellbook { .. }
         | ClientCommand::CloseContainer { .. }
         // The host sends a death report on its own; nobody waits on it.
         | ClientCommand::BledOut { .. } => return None,
@@ -1004,6 +1006,7 @@ mod tests {
 
     fn memorize() -> ClientCommand {
         ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 1,
             gem: 0,
             spell_id: 42,

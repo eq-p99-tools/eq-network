@@ -259,6 +259,42 @@ impl Features {
         }
     }
 
+    /// Resolve only the observed P99 no-reason peer close, then run the
+    /// ordinary failure cleanup. A timeout, out-of-session, opaque refusal or
+    /// unrelated handler error is not a camp completion.
+    fn receive_failed(
+        &mut self,
+        error: &anyhow::Error,
+        protocol: crate::client::ServerProtocol,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        use eq_network_transport::modern::SessionTermination;
+        let closed = Some(SessionTermination::PeerDisconnected { reason: None });
+        let expected_close = match protocol {
+            crate::client::ServerProtocol::Project1999 => true,
+            crate::client::ServerProtocol::EqEmu
+            | crate::client::ServerProtocol::Quarm
+            | crate::client::ServerProtocol::Takp
+            | crate::client::ServerProtocol::EqEmuRof2 => false,
+        };
+        if expected_close
+            && error.downcast_ref::<SessionTermination>().copied() == closed
+            && out.sink.termination() == closed
+        {
+            for feature in &mut self.provided {
+                feature.peer_closed(world, out)?;
+                if world.ending() {
+                    break;
+                }
+            }
+        }
+        if !world.ending() {
+            self.connection_ended(world);
+        }
+        Ok(())
+    }
+
     /// Lets every feature hear a message once the zone has admitted the
     /// player, until one ends the session.
     fn observe(
@@ -480,7 +516,17 @@ fn run_connected(
             Err(error) => {
                 // A feature may expect the zone to close the connection.
                 if !recording_only {
-                    features.connection_ended(&mut world);
+                    features.receive_failed(
+                        &error,
+                        config.protocol,
+                        &mut world,
+                        &mut Out {
+                            sink: session,
+                            log: &mut *log,
+                            wire: server.wire(),
+                            sender: speaker,
+                        },
+                    )?;
                 }
                 return match world.take_exit() {
                     Some(exit) => Ok(exit),
@@ -1045,6 +1091,7 @@ mod tests {
             ClientCommand::DeleteSpell { .. } => 8,
             ClientCommand::ForgetSpell { .. } => 9,
             ClientCommand::MemorizeSpell { .. } => 10,
+            ClientCommand::PollSpellbook { .. } => 154,
             ClientCommand::CastSpell { .. } => 11,
             ClientCommand::UseKnightAbility { .. } => 87,
             ClientCommand::UseDiscipline { .. } => 88,
@@ -1337,9 +1384,14 @@ mod tests {
                 created,
             },
             ClientCommand::MemorizeSpell {
+                preparation: None,
                 session_id,
                 gem: 0,
                 spell_id: 202,
+                created,
+            },
+            ClientCommand::PollSpellbook {
+                session_id,
                 created,
             },
             ClientCommand::UseDiscipline {
@@ -2305,9 +2357,11 @@ mod tests {
             if matches!(command, ClientCommand::SetServerFilters { .. }) {
                 // The session keeps the filters itself, before the feature
                 // gates, on every server type.
-                assert!(servers.iter().all(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::ServerFilters)));
+                assert!(servers.iter().all(|features| {
+                    features
+                        .capabilities()
+                        .contains(&crate::world::Capability::ServerFilters)
+                }));
                 continue;
             }
             // Built and tested, and listed by no server type until each
@@ -2759,6 +2813,7 @@ mod tests {
             created: Instant::now(),
         };
         let memorize = ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 5,
             gem: 2,
             spell_id: 204,
@@ -2862,6 +2917,7 @@ mod tests {
             outcome.events.as_slice(),
             [
                 ClientEvent::World(WorldEvent::CastPending {
+                    gem: Some(0),
                     session_id: 5,
                     spell_id: Some(202)
                 }),
@@ -2871,10 +2927,12 @@ mod tests {
                 }),
                 ClientEvent::Diagnostic(reason),
                 ClientEvent::World(WorldEvent::CastPending {
+                    gem: Some(0),
                     session_id: 5,
                     spell_id: Some(202)
                 }),
                 ClientEvent::World(WorldEvent::CastPending {
+                    gem: None,
                     session_id: 5,
                     spell_id: None
                 }),
@@ -2976,6 +3034,7 @@ mod tests {
             })
             .collect();
         let pending = WorldEvent::CastPending {
+            gem: Some(2),
             session_id: 5,
             spell_id: Some(202),
         };
@@ -4010,3 +4069,7 @@ mod discipline_tests;
 mod local_damage_tests;
 #[cfg(test)]
 mod tracking_zone_tests;
+
+#[cfg(test)]
+#[path = "zone/camp_close_tests.rs"]
+mod camp_close_tests;

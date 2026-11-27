@@ -716,6 +716,7 @@ impl Casting {
             self.guard.release();
             if pending {
                 out.log.send(ClientEvent::World(WorldEvent::CastPending {
+                    gem: None,
                     session_id: world.session_id,
                     spell_id: None,
                 }))?;
@@ -1007,6 +1008,10 @@ impl Casting {
         out.log.send(ClientEvent::World(WorldEvent::CastPending {
             session_id: world.session_id,
             spell_id: Some(spell_id),
+            gem: match source {
+                Source::Gem(gem) => Some(gem),
+                _ => None,
+            },
         }))
     }
 }
@@ -1274,6 +1279,7 @@ impl Feature for Casting {
                     }),
                     None if pending.is_some() && self.guard.pending().is_none() => {
                         Some(WorldEvent::CastPending {
+                            gem: None,
                             session_id: world.session_id,
                             spell_id: None,
                         })
@@ -1574,6 +1580,7 @@ mod tests {
             outcome.events[..],
             [ClientEvent::World(WorldEvent::CastPending {
                 spell_id: Some(202),
+                gem: Some(0),
                 ..
             })]
         ));
@@ -1956,6 +1963,7 @@ mod tests {
                 created,
             },
             ClientCommand::MemorizeSpell {
+                preparation: None,
                 session_id: 1,
                 gem: 0,
                 spell_id: 73,

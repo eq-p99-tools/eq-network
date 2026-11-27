@@ -197,6 +197,7 @@ mod tests {
     fn prepared_requests_wait_for_exact_slot_spell_and_mode() {
         let now = Instant::now();
         let next = ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 7,
             gem: 2,
             spell_id: 73,
@@ -275,6 +276,7 @@ mod tests {
             created: now,
         };
         let memorize = ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 7,
             gem: 0,
             spell_id: 42,

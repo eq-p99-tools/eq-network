@@ -4,7 +4,7 @@
 //! trained; each practice raises one skill by a point for a practice point
 //! and, past a skill of 10, coins; leaving says goodbye. An ordinary skill
 //! update has no receipt fields. `EQEmu` retains the existing local point
-//! and purse projection. P99 waits for a fresh balance after a practice.
+//! and purse projection. P99 follows Titanium press-time spending (6.683).
 //!
 //! Layout reference: `EQEmu`'s `GMTrainee_Struct`, `GMSkillChange_Struct` and
 //! `GMTrainEnd_Struct` (`common/eq_packet_structs.h`) and the Titanium
@@ -325,6 +325,16 @@ impl TrainingOffer {
 pub enum TrainingUpdate {
     /// A guildmaster opened training.
     Offered(TrainingOffer),
+    /// Titanium's local accepted Practice press (0x56b48e, read 6.683).
+    /// This spends locally; it is not a server acknowledgement.
+    Practiced {
+        /// The selected bank and entry.
+        subject: TrainingSubject,
+        /// The value at the press, before any local increment.
+        from: u32,
+        /// The local price paid, in copper.
+        cost: u64,
+    },
     /// `EQEmu`'s existing projection after a matching received increase. The
     /// ID is the update ID (100 + language ID for languages); cost and
     /// point changes are projections, not receipt fields.
@@ -348,7 +358,7 @@ pub enum PracticePoints {
     /// No current balance is known.
     #[default]
     Unknown,
-    /// Balance from the profile or the existing `EQEmu` policy.
+    /// Balance from the profile or a supported native/local projection.
     Balance(u32),
 }
 

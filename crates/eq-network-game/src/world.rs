@@ -491,6 +491,10 @@ pub enum CampStatus {
     /// The documented local logout-close deadline elapsed without a reply.
     /// Selection follows locally; server logout/cleanup is unconfirmed.
     ClosedWithoutReply,
+    /// After Logout was submitted, the P99 peer explicitly closed its session
+    /// without a preceding logout reply. Local selection follows; application
+    /// acknowledgement and server cleanup remain unconfirmed.
+    ServerClosedWithoutReply,
     /// Local validation rejected the request before transmission.
     Rejected(String),
 }
@@ -1106,6 +1110,13 @@ pub enum WorldEvent {
     SpellBook(crate::spells::SpellBook),
     /// Local progress of a spellbook request, separate from server confirmation.
     BookAction(crate::spells::BookActionStatus),
+    /// Local worker-owned memorization gauge, not a server result.
+    MemorizationProgress {
+        /// Admission owning this preparation.
+        session_id: u64,
+        /// Actual countdown snapshot; None ends or cancels preparation.
+        progress: Option<crate::spells::MemorizationProgress>,
+    },
     /// Server-driven spell and casting state.
     Spell(crate::spells::SpellUpdate),
     /// Whether the player holds a Feign Death standing, by Move While
@@ -1134,6 +1145,10 @@ pub enum WorldEvent {
         /// Pending spell, or None before the answering spell update.
         /// Own death clears the hold as part of the death event.
         spell_id: Option<u32>,
+        /// The submitted gem, when this is a gem cast. Item/ability casts
+        /// and clear notices carry None; consumers must not infer a gem
+        /// merely because its spell matches an item effect.
+        gem: Option<u8>,
     },
     /// A submitted cast received no matching update during the local acknowledgement wait.
     CastRequestUnconfirmed {
