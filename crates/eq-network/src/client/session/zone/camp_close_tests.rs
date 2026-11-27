@@ -5,8 +5,8 @@ use eq_network_game::{command::Posture, request::Sender, world::CampStatus};
 #[test]
 fn only_a_p99_peer_close_after_submitted_logout_finishes_the_local_camp() {
     for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
-        // Idle, preparing, abandoned, and committed departure.
-        for phase in 0..4 {
+        // Idle, preparing, abandoned, committed, and cancelled-then-restarted.
+        for phase in 0..5 {
             let (mut connection, worker) = logout_peer(false);
             // Complete the synthetic peer's expected requests independently
             // of the local feature state being tested.
@@ -56,7 +56,7 @@ fn only_a_p99_peer_close_after_submitted_logout_finishes_the_local_camp() {
                     .unwrap();
             }
             drop(log);
-            let completed = protocol == ServerProtocol::Project1999 && phase == 3;
+            let completed = protocol == ServerProtocol::Project1999 && phase >= 3;
             assert_eq!(
                 matches!(world.take_exit(), Some(ZoneExit::CharacterSelect)),
                 completed
@@ -99,7 +99,7 @@ fn camp_phase(protocol: ServerProtocol, phase: u8) -> (Features, World) {
                 out,
             )?;
         }
-        if phase == 2 {
+        if phase == 2 || phase == 4 {
             features.handle(
                 &ClientCommand::SetPosture {
                     session_id: 5,
@@ -111,7 +111,17 @@ fn camp_phase(protocol: ServerProtocol, phase: u8) -> (Features, World) {
                 out,
             )?;
         }
-        if phase == 3 {
+        if phase == 4 {
+            features.handle(
+                &ClientCommand::Camp {
+                    session_id: 5,
+                    created: now,
+                },
+                &mut world,
+                out,
+            )?;
+        }
+        if phase >= 3 {
             features.tick(now + Duration::from_secs(31), &mut world, out)?;
         }
         Ok(())

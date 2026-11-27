@@ -270,7 +270,14 @@ impl Features {
     ) -> Result<()> {
         use eq_network_transport::modern::SessionTermination;
         let closed = Some(SessionTermination::PeerDisconnected { reason: None });
-        if protocol == crate::client::ServerProtocol::Project1999
+        let expected_close = match protocol {
+            crate::client::ServerProtocol::Project1999 => true,
+            crate::client::ServerProtocol::EqEmu
+            | crate::client::ServerProtocol::Quarm
+            | crate::client::ServerProtocol::Takp
+            | crate::client::ServerProtocol::EqEmuRof2 => false,
+        };
+        if expected_close
             && error.downcast_ref::<SessionTermination>().copied() == closed
             && out.sink.termination() == closed
         {
