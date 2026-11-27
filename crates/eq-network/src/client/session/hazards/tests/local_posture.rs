@@ -160,7 +160,7 @@ fn submitted_drowning_at_one_hp_lies_holds_reports_and_wakes_without_inventing_d
             .count(),
         1
     );
-    assert!(output.unreliable.is_empty());
+    assert_eq!(output.unreliable, []);
     assert_no_damage_authority(&output.events);
     assert!(!output.events.iter().any(|event| matches!(
         event,

@@ -153,6 +153,68 @@ pub(super) fn invalidate_effect_floor(
     Ok(())
 }
 
+impl OwnPosture {
+    pub(in crate::client::session) fn damage_record_allowed(
+        &self,
+        amount: u32,
+        inventory_revision: u64,
+    ) -> Option<bool> {
+        let basis = self
+            .health
+            .accepted
+            .filter(|basis| basis.inventory_revision == inventory_revision)?;
+        Some(basis.current()?.saturating_sub(i64::from(amount)) >= basis.damage_floor?)
+    }
+
+    /// A known cutoff never asserts death. Unknown effect totals and stale
+    /// equipment do not invent one.
+    pub(in crate::client::session) fn damage_held(&self, inventory_revision: u64) -> bool {
+        self.health
+            .accepted
+            .filter(|basis| basis.inventory_revision == inventory_revision)
+            .is_some_and(|basis| {
+                basis
+                    .current()
+                    .zip(basis.damage_floor)
+                    .is_some_and(|(current, floor)| current < floor)
+            })
+    }
+
+    pub(in crate::client::session) const fn unconscious(&self) -> bool {
+        self.health.unconscious
+    }
+
+    /// Input made before either transition cannot replay after waking.
+    /// Environmental ticks, chat, cleanup and settings are not voluntary
+    /// movement and do not acquire this hold.
+    pub(in crate::client::session) fn input_refusal(
+        &self,
+        command: &ClientCommand,
+    ) -> Option<&'static str> {
+        if !matches!(
+            command,
+            ClientCommand::Move(_)
+                | ClientCommand::GroundFrame { .. }
+                | ClientCommand::Jump { .. }
+                | ClientCommand::SetPosture { .. }
+                | ClientCommand::FeignLanded { .. }
+        ) {
+            return None;
+        }
+        if self
+            .health
+            .changed
+            .is_some_and(|changed| command.created().is_some_and(|created| created <= changed))
+        {
+            Some("Player input predates the current unconscious state")
+        } else if self.unconscious() {
+            Some("The player is unconscious")
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +276,7 @@ mod tests {
         report(&mut world, -20);
         let alive = testing::run(|out| count(basis(-20, 25), &mut world, out));
         alive.result.unwrap();
-        assert!(alive.sent.is_empty());
+        assert_eq!(alive.sent, []);
         assert!(!world.posture.unconscious());
         for current in [0, -1, -20] {
             report(&mut world, current);
@@ -226,9 +288,9 @@ mod tests {
                     [eq_network_game::feign::titanium_posture(7).unwrap()]
                 );
             } else {
-                assert!(output.sent.is_empty());
+                assert_eq!(output.sent, []);
             }
-            assert!(output.unreliable.is_empty());
+            assert_eq!(output.unreliable, []);
             assert!(world.posture.unconscious());
             assert_eq!(world.posture.current(), Some(PostureState::Lying));
             assert!(!world.lifecycle.is_dead());
@@ -256,7 +318,7 @@ mod tests {
         assert!(world.posture.input_refusal(&old_move).is_some());
         let again = testing::run(|out| count(basis(1, 0), &mut world, out));
         again.result.unwrap();
-        assert!(again.sent.is_empty());
+        assert_eq!(again.sent, []);
         assert!(!world.lifecycle.is_dead());
     }
 
@@ -266,11 +328,11 @@ mod tests {
         report(&mut world, 1);
         let stale = testing::run(|out| count(basis(0, 0), &mut world, out));
         stale.result.unwrap();
-        assert!(stale.sent.is_empty());
+        assert_eq!(stale.sent, []);
         assert!(!world.posture.unconscious());
         let other = testing::run_on(&wire::EqMac, |out| count(basis(1, -1), &mut world, out));
         other.result.unwrap();
-        assert!(other.sent.is_empty());
+        assert_eq!(other.sent, []);
         assert!(!world.posture.unconscious());
         report(&mut world, 0);
         testing::run(|out| count(basis(0, 0), &mut world, out))
@@ -293,7 +355,7 @@ mod tests {
         report(&mut world, 50);
         let transferring = testing::run(|out| count(basis(50, 0), &mut world, out));
         transferring.result.unwrap();
-        assert!(transferring.sent.is_empty());
+        assert_eq!(transferring.sent, []);
         assert!(world.posture.unconscious());
         world.lifecycle.finish(false, Instant::now()).unwrap();
         assert!(
@@ -304,7 +366,7 @@ mod tests {
         report(&mut world, 50);
         let late = testing::run(|out| count(basis(50, 0), &mut world, out));
         late.result.unwrap();
-        assert!(late.sent.is_empty());
+        assert_eq!(late.sent, []);
         assert!(world.lifecycle.is_dead());
         assert!(world.posture.unconscious());
         assert!(World::new(6)
@@ -316,67 +378,5 @@ mod tests {
                 created: Instant::now(),
             })
             .is_none());
-    }
-}
-
-impl OwnPosture {
-    pub(in crate::client::session) fn damage_record_allowed(
-        &self,
-        amount: u32,
-        inventory_revision: u64,
-    ) -> Option<bool> {
-        let basis = self
-            .health
-            .accepted
-            .filter(|basis| basis.inventory_revision == inventory_revision)?;
-        Some(basis.current()?.saturating_sub(i64::from(amount)) >= basis.damage_floor?)
-    }
-
-    /// A known cutoff never asserts death. Unknown effect totals and stale
-    /// equipment do not invent one.
-    pub(in crate::client::session) fn damage_held(&self, inventory_revision: u64) -> bool {
-        self.health
-            .accepted
-            .filter(|basis| basis.inventory_revision == inventory_revision)
-            .is_some_and(|basis| {
-                basis
-                    .current()
-                    .zip(basis.damage_floor)
-                    .is_some_and(|(current, floor)| current < floor)
-            })
-    }
-
-    pub(in crate::client::session) const fn unconscious(&self) -> bool {
-        self.health.unconscious
-    }
-
-    /// Input made before either transition cannot replay after waking.
-    /// Environmental ticks, chat, cleanup and settings are not voluntary
-    /// movement and do not acquire this hold.
-    pub(in crate::client::session) fn input_refusal(
-        &self,
-        command: &ClientCommand,
-    ) -> Option<&'static str> {
-        if !matches!(
-            command,
-            ClientCommand::Move(_)
-                | ClientCommand::GroundFrame { .. }
-                | ClientCommand::Jump { .. }
-                | ClientCommand::SetPosture { .. }
-                | ClientCommand::FeignLanded { .. }
-        ) {
-            return None;
-        }
-        if self
-            .health
-            .changed
-            .is_some_and(|changed| command.created().is_some_and(|created| created <= changed))
-        {
-            Some("Player input predates the current unconscious state")
-        } else if self.unconscious() {
-            Some("The player is unconscious")
-        } else {
-            None
-        }
     }
 }
