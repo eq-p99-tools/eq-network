@@ -214,6 +214,8 @@ fn three_angular_conditions_use_observed_frames_and_report_path_separately_from_
             let mut velocity = WetVelocity::default();
             let mut traveled = 0.;
             let mut report_chords = 0.;
+            let mut accepted_3d_path = 0.;
+            let mut accepted = 0_u16;
             let mut elapsed = 0_u64;
             while elapsed < 10_000 {
                 let before = session.position();
@@ -248,6 +250,10 @@ fn three_angular_conditions_use_observed_frames_and_report_path_separately_from_
                 let (request, _) = advance(&mut session, &mut velocity, &frames);
                 report_chords +=
                     (request.position.x - before.x).hypot(request.position.y - before.y);
+                accepted_3d_path += (request.position.x - before.x)
+                    .hypot(request.position.y - before.y)
+                    .hypot(request.position.z - before.z);
+                accepted += 1;
                 elapsed += milliseconds;
             }
             let chord = session.position().x.hypot(session.position().y);
@@ -256,7 +262,12 @@ fn three_angular_conditions_use_observed_frames_and_report_path_separately_from_
             if degrees > 1. {
                 assert!(traveled > chord + 1.);
             }
-            eprintln!("synthetic angular_rate={degrees} sample_ms={milliseconds} traveled_path={traveled} sum_report_chords={report_chords} endpoint_chord={chord}; not a live replay");
+            let net = [
+                session.position().x,
+                session.position().y,
+                session.position().z,
+            ];
+            eprintln!("offline_synthetic seconds=10 angular_rate={degrees} sample_ms={milliseconds} accepted={accepted} refused=0 oracle_horizontal_travel={traveled} sum_accepted_horizontal_lengths={report_chords} sum_accepted_3d_lengths={accepted_3d_path} net_displacement={net:?} net_horizontal_length={chord}; local acceptance, not a live replay or server ACK");
         }
     }
 }
