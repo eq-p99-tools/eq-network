@@ -1004,7 +1004,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 153;
+    const KINDS: usize = 154;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];

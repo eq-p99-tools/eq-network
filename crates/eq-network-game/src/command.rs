@@ -1832,7 +1832,7 @@ impl GameCommand {
     }
 
     /// What the zone session must let the player do for this command; None
-    /// for pre-zone commands and local diagnostics with their own admission check.
+    /// for the world server's commands, which come before any zone session.
     /// A front end greys out a command whose capability the session lacks.
     #[must_use]
     #[allow(
@@ -1847,8 +1847,7 @@ impl GameCommand {
             | Self::ChooseServerFilters { .. }
             | Self::GenerateName { .. }
             | Self::DeleteCharacter(_)
-            | Self::CreateCharacter { .. }
-            | Self::MovementPacketSnapshot { .. } => return None,
+            | Self::CreateCharacter { .. } => return None,
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
             }
@@ -1882,7 +1881,8 @@ impl GameCommand {
             | Self::GroundFrame { .. }
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
-            | Self::ClimbReach { .. } => Capability::Moving,
+            | Self::ClimbReach { .. }
+            | Self::MovementPacketSnapshot { .. } => Capability::Moving,
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
