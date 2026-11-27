@@ -841,7 +841,11 @@ mod shared {
     }
 
     pub(super) fn exchange() -> Box<dyn Feature> {
-        Box::new(Exchanges)
+        Box::<Exchanges>::default()
+    }
+
+    pub(super) fn project1999_exchange() -> Box<dyn Feature> {
+        Box::new(Exchanges::project1999())
     }
 
     pub(super) fn abilities(listed: &'static [Ability]) -> Box<dyn Feature> {
@@ -1257,7 +1261,7 @@ impl ServerType for Project1999 {
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::exchange())
+        offer(shared::project1999_exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {

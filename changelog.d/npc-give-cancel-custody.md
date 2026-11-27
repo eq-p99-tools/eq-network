@@ -1,0 +1,1 @@
+- Project 1999's unnamed cancellation now retires the current submitted NPC give through ordinary exchange closure. Received item records remain independent; identical item IDs do not establish return identity.
