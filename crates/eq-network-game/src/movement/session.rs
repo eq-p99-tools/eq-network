@@ -358,6 +358,7 @@ impl Rates {
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)] // Independent session permissions and motion state.
 pub struct MotionSession {
+    wet: super::swim_state::Owner,
     guard: MovementGuard,
     spawn_id: u16,
     /// What the next update's counter field carries ([`UpdateCounter`]).
@@ -471,6 +472,7 @@ struct PreparedMove<'a> {
     /// Trace validation is independent of the already accepted movement.
     history: Result<Option<(super::MovementPath, Instant)>>,
     ground: Option<GroundState>,
+    wet: Option<super::water::WetVelocity>,
 }
 
 impl PreparedMove<'_> {
@@ -489,6 +491,7 @@ impl PreparedMove<'_> {
             moving,
             history,
             ground,
+            wet,
         } = self;
         let (history, discarded) = match history {
             Ok(history) => (history, None),
@@ -518,6 +521,7 @@ impl PreparedMove<'_> {
         owner.flags = flags;
         owner.guard = guard;
         let sampled = owner.guard.sampled;
+        owner.wet.accepted(wet, sampled);
         owner.earlier.retain(|(until, _)| *until > sampled);
         owner.previous_position = Some(owner.position);
         if let Some(history) = owner.history.as_mut() {
@@ -536,6 +540,9 @@ impl MotionSession {
     /// Allows bounded swimming on a supported Titanium position stream.
     #[must_use]
     pub const fn with_swimming(mut self, enabled: bool) -> Self {
+        if self.swimming && !enabled {
+            self.wet.invalidate();
+        }
         self.swimming = enabled;
         self
     }
@@ -543,6 +550,9 @@ impl MotionSession {
     /// Allows absolute mouse heading snapshots for a Titanium position stream.
     #[must_use]
     pub const fn with_heading_snapshots(mut self, enabled: bool) -> Self {
+        if self.heading_snapshots && !enabled {
+            self.wet.invalidate();
+        }
         self.heading_snapshots = enabled;
         self
     }
@@ -646,6 +656,9 @@ impl MotionSession {
     /// generations' rules send differently under ([`FlagRule`]). The caller
     /// passes [`Hold::None`] while a departure lets a stunned player move.
     pub fn set_hold(&mut self, hold: Hold) {
+        if self.hold != hold {
+            self.wet.invalidate();
+        }
         self.hold = hold;
         if hold != Hold::None {
             self.ground_waiting = None;
@@ -749,6 +762,7 @@ impl MotionSession {
         }
         .encode()?;
         Ok(Self {
+            wet: super::swim_state::Owner::new(now),
             guard: MovementGuard::new(session_id, position, now),
             spawn_id,
             counter: Counter::new(now),
@@ -815,6 +829,7 @@ impl MotionSession {
         if self.options == options {
             return Ok(());
         }
+        self.wet.invalidate();
         if !self.options.same_permissions(options) {
             self.stop_voluntary();
         }
@@ -837,6 +852,7 @@ impl MotionSession {
     pub fn calibrate(&mut self, value: MotionCalibration, now: Instant) -> Result<()> {
         ensure!(!self.suspended, "movement session is suspended");
         value.validate()?;
+        self.wet.recalibrate();
         if self.granted() {
             self.change_in_place(now);
             self.guard.speed = Some(value.units_per_second);
@@ -862,6 +878,7 @@ impl MotionSession {
         if self.rooted {
             return Ok(());
         }
+        self.wet.invalidate();
         if self.granted() {
             self.change_in_place(now);
         } else {
@@ -910,6 +927,7 @@ impl MotionSession {
 
     /// Clears what a reset ends: the root and the speeds before a change.
     fn clear_grant(&mut self) {
+        self.wet.invalidate();
         self.ground_waiting = None;
         self.current_ground = None;
         self.calibration = None;
@@ -1043,6 +1061,8 @@ impl MotionSession {
         // Keep the existing periodic deadline for the landing or movement from it.
         let (here, base) = (self.position, self.counter.value(now));
         self.correct(landing.position, now)?;
+        // Local pads preserve the client's wet state, unlike a server reset.
+        self.wet.invalidate();
         // The history keeps the same entries in the same order: the region's
         // two at the old place (without the lift, inferred), the warp's frame
         // there, the entry update, and the landing.
@@ -1172,11 +1192,17 @@ impl MotionSession {
     /// Lets the next sample also rise what is left of how far the lift its
     /// request names has risen ([`super::MovementGuard::allow_lift_rise`]).
     pub fn allow_lift_rise(&mut self, lift: Option<(u8, f32)>) {
+        if lift.is_some() {
+            self.wet.invalidate();
+        }
         self.guard.allow_lift_rise(lift);
     }
 
     /// Supplies the session-verified pose of the named carrier report.
     pub fn allow_carrier(&mut self, pose: Option<(super::CarrierSample, Position)>) {
+        if pose.is_some() {
+            self.wet.invalidate();
+        }
         self.guard.allow_carrier(pose);
     }
 
@@ -1192,6 +1218,7 @@ impl MotionSession {
     /// Replace any paced moving update with its stationary stop; the normal
     /// update gate still decides when that existing position sample is sent.
     pub fn stop_voluntary(&mut self) {
+        self.wet.invalidate();
         self.guard.clear_shoreline();
         self.hold_stop();
     }
@@ -1411,6 +1438,120 @@ impl MotionSession {
         Ok(GroundSampleResult::Accepted)
     }
 
+    /// The latest owned horizontal swim basis, not an assertion that the host
+    /// matched its reset. This path is inert until a client verifies the same
+    /// real reset and retains complete ordinary wet controls from that point.
+    #[must_use]
+    pub fn swim_basis(&self) -> Option<super::SwimBasis> {
+        (self.swimming
+            && self.heading_snapshots
+            && self.granted()
+            && !self.rooted
+            && !self.options.fly
+            && self.hold == Hold::None)
+            .then(|| self.wet.basis(self.guard.session_id))
+            .flatten()
+    }
+
+    /// Withdraw continuity before an unobserved input, clipping, water entry,
+    /// ownership seam or incomplete interval. This never creates a new anchor.
+    pub fn withdraw_swim_controls(&mut self) {
+        self.wet.invalidate();
+    }
+
+    /// Validates ordinary water input from an independently matched reset and
+    /// the last accepted state. Unknown/withdrawn controls, an uncertain entry,
+    /// or an unexplained endpoint uses the existing checks unchanged and earns
+    /// no replay state. Vertical bounds and report cadence remain unchanged.
+    /// Only a matching local acceptance commits the trial; no packet ACK is
+    /// inferred. The typed ordinary producer records actual integrator calls.
+    ///
+    /// # Errors
+    /// Returns the ordinary movement/transport errors if that guarded path fails.
+    pub fn send_swim_sample(
+        &mut self,
+        request: &MovementRequest,
+        controls: Option<&super::SwimControls>,
+        now: Instant,
+        send: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<()> {
+        // A retired input cannot withdraw a newer corrected/reset basis.
+        // These are the same ordinary admission/freshness/spacing checks,
+        // performed before any continuity bookkeeping is invalidated.
+        self.guard.check_current(request, now)?;
+        ensure!(
+            self.guard.sample_interval_ready(request.created),
+            "movement samples arrive too frequently"
+        );
+        let wet = controls.and_then(|controls| self.swim_trial(request, controls).ok());
+        if wet.is_none() {
+            self.wet.invalidate();
+        }
+        self.prepare_move_sample_with_wet(request, now, None, wet)?
+            .submit(send)
+    }
+
+    /// Read-only diagnostic of ordinary horizontal replay eligibility and match.
+    /// This neither admits a proposal nor commits state, sends a packet, or
+    /// replaces the full movement/control/timing checks in `send_swim_sample`.
+    /// No diagnostics are emitted unless the caller explicitly requests them.
+    ///
+    /// # Errors
+    /// Identifies unavailable continuity, controls, calibration or an unmatched
+    /// horizontal endpoint. Success is only a replay match, not movement approval.
+    pub fn inspect_swim_replay(
+        &self,
+        request: &MovementRequest,
+        controls: &super::SwimControls,
+    ) -> Result<()> {
+        self.swim_trial(request, controls).map(|_| ())
+    }
+
+    fn swim_trial(
+        &self,
+        request: &MovementRequest,
+        controls: &super::SwimControls,
+    ) -> Result<super::water::WetVelocity> {
+        ensure!(
+            request.mode == MovementMode::Swim && request.support.is_none(),
+            "swim replay requires ordinary unsupported water motion"
+        );
+        ensure!(
+            self.swimming
+                && self.heading_snapshots
+                && !self.rooted
+                && self.hold == Hold::None
+                && !self.options.fly
+                && self.guard.carrier_pose.is_none(),
+            "ordinary swim replay is currently unavailable"
+        );
+        ensure!(
+            !self
+                .earlier
+                .iter()
+                .any(|(until, _)| *until > self.guard.sampled),
+            "swim calibration crosses the pending interval"
+        );
+        let calibration = self
+            .calibration
+            .ok_or_else(|| anyhow::anyhow!("missing swim calibration"))?;
+        let (velocity, expected) = self.wet.trial(
+            self.guard.session_id,
+            controls,
+            calibration,
+            request.position.heading,
+            request.created,
+            self.guard.sampled,
+        )?;
+        let error = (request.position.x - self.position.x - expected[0])
+            .hypot(request.position.y - self.position.y - expected[1]);
+        ensure!(
+            error <= 0.01,
+            "native swim horizontal endpoint differs by {error}"
+        );
+        Ok(velocity)
+    }
+
     fn prepare_move_sample(
         &mut self,
         request: &MovementRequest,
@@ -1433,6 +1574,21 @@ impl MotionSession {
         request: &MovementRequest,
         now: Instant,
         state: Option<GroundState>,
+    ) -> Result<PreparedMove<'_>> {
+        self.prepare_move_sample_with_wet(request, now, state, None)
+    }
+
+    #[allow(
+        clippy::float_cmp,
+        clippy::too_many_lines,
+        reason = "One checked prepare/encode transaction, retaining exact coordinates"
+    )]
+    fn prepare_move_sample_with_wet(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+        state: Option<GroundState>,
+        wet: Option<super::water::WetVelocity>,
     ) -> Result<PreparedMove<'_>> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(self.pad_arrival.is_none(), "pad arrival physics is pending");
@@ -1554,7 +1710,11 @@ impl MotionSession {
             now,
             run_speed_multiplier,
             lateral_rate,
-            (self.swimming, swim_backward, swim_caps),
+            (
+                self.swimming,
+                if wet.is_some() { None } else { swim_backward },
+                swim_caps,
+            ),
         )?;
         // Following a slope has no vertical stroke. Titanium builds the
         // update from the actor's own three velocity fields (0x465244, read
@@ -1677,6 +1837,7 @@ impl MotionSession {
             moving: moving || turn != 0,
             history,
             ground: state,
+            wet,
         })
     }
 
@@ -1990,6 +2151,7 @@ impl MotionSession {
         // Movement waits for a new calibration, so a moving player stops
         // where the server put them.
         self.hold_stop();
+        self.wet.corrected(now);
         Ok(())
     }
 
@@ -2163,6 +2325,9 @@ mod history_tests;
 #[cfg(test)]
 #[path = "lift_tests.rs"]
 mod lift_tests;
+#[cfg(test)]
+#[path = "swim_state_tests.rs"]
+mod swim_state_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;

@@ -48,6 +48,7 @@ pub(super) fn stale(
         command,
         ClientCommand::Move(_)
             | ClientCommand::GroundFrame { .. }
+            | ClientCommand::SwimFrame { .. }
             | ClientCommand::FinishLocalPad { .. }
     ) {
         return None;
@@ -373,7 +374,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::PollSpellbook { .. }
         | ClientCommand::BoatControl { .. }
         | ClientCommand::ArrivalPlacement { .. }
-        | ClientCommand::Move(_) | ClientCommand::GroundFrame { .. } => &[],
+        | ClientCommand::Move(_) | ClientCommand::GroundFrame { .. } | ClientCommand::SwimFrame { .. } => &[],
     }
 }
 
@@ -442,7 +443,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::FinishLocalPad { session_id, revision, .. } => WorldEvent::LocalPadRefused {
             session_id: *session_id, revision: *revision, reason: reason.into(),
         },
-        ClientCommand::Move(request) | ClientCommand::GroundFrame { request, .. } => crate::client::motion_refused(request, reason),
+        ClientCommand::Move(request) | ClientCommand::GroundFrame { request, .. } | ClientCommand::SwimFrame { request, .. } => crate::client::motion_refused(request, reason),
         ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
             request: request.clone(),
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
