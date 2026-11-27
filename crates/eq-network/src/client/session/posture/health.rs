@@ -3,7 +3,7 @@
 use super::{ClientCommand, ClientEvent, OwnPosture, Posture, World, WorldEvent};
 use crate::client::session::feature::Out;
 use anyhow::Result;
-use eq_network_game::{control::HitPointBasis, message::Message, GameDialect};
+use eq_network_game::{control::HitPointBasis, message::Message};
 use std::time::Instant;
 
 #[derive(Debug, Default)]
@@ -34,7 +34,7 @@ pub(super) fn note(message: &Message, world: &mut World) {
 
 pub(super) fn count(basis: HitPointBasis, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     let refuse = |reason: &str, out: &mut Out<'_, '_>| out.log.diagnostic(reason.into());
-    if out.wire.dialect() != GameDialect::Titanium {
+    if !out.wire.dialect().models_unconscious() {
         return refuse(
             "Unconscious HP counts are not established for this generation",
             out,
@@ -99,7 +99,7 @@ pub(in crate::client::session) fn local_damage(
     world: &mut World,
     out: &mut Out<'_, '_>,
 ) -> Result<()> {
-    if out.wire.dialect() != GameDialect::Titanium || world.lifecycle.blocks_motion() {
+    if !out.wire.dialect().models_unconscious() || world.lifecycle.blocks_motion() {
         return Ok(());
     }
     world.posture.health.local_damage = world

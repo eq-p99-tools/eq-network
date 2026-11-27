@@ -27,6 +27,19 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::time::Duration;
 
+impl crate::GameDialect {
+    /// Whether this program's signed HP controls unconscious posture and
+    /// voluntary input. Only Titanium's entry/recovery rules are established;
+    /// Mac and RoF2 remain unread.
+    #[must_use]
+    pub const fn models_unconscious(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+}
+
 /// A received own-HP report and the equipped item HP the host counted from
 /// complete current inventory facts, plus separately counted local damage
 /// already submitted to transport. This is not server-confirmed damage or death.
