@@ -294,13 +294,31 @@ pub struct WetFramePiece {
 }
 
 impl WetVelocity {
+    /// Internal domain for an already-owned native ordinary-call history.
+    /// A canonical clock followed by one rounding-size tail can be overdue
+    /// by at most two boundary windows. The next normal call consumes that
+    /// exact debt using `advance`; nothing resets or reconstructs its phase.
+    /// This predicate grants no authority to an externally supplied velocity.
+    pub(crate) fn has_ordinary_call_clock(self) -> bool {
+        self.due.is_finite()
+            && self.due >= -2.0 * BOUNDARY
+            && self.due <= WET_FRAME_SECONDS + BOUNDARY
+            && self
+                .horizontal
+                .iter()
+                .chain(std::iter::once(&self.vertical))
+                .all(|value| value.is_finite())
+    }
+
     /// Views the carried phase without reconstructing it from position or
     /// elapsed request time. A copied [`WetVelocity`] retains this phase.
     ///
     /// Returns `None` if the stored phase cannot describe one frame. In
     /// particular, repeated sub-rounding-window calls to the legacy
     /// [`Self::advance`] can leave an overdue phase. A continuation must
-    /// decline that state rather than fabricate a replacement phase.
+    /// decline that one-frame view rather than fabricate a replacement phase.
+    /// An internal replay of a complete owned ordinary-call history instead
+    /// retains the raw native clock and never converts its debt to this view.
     #[must_use]
     pub fn frame_phase(self) -> Option<WetFramePhase> {
         (self.due.is_finite() && self.due >= -BOUNDARY && self.due <= WET_FRAME_SECONDS + BOUNDARY)

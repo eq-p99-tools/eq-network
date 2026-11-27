@@ -4,6 +4,133 @@ use crate::movement::{
     water::*, Pace, SpeedState, StrafeSide, SwimControl, SwimControls, SwimInput,
 };
 
+fn applied_idle(seconds: f32) -> Vec<SwimControl> {
+    let mut left = seconds;
+    let mut until = Duration::ZERO;
+    let mut pieces = Vec::new();
+    while left > 0. {
+        let seconds = left.min(WET_FRAME_SECONDS);
+        until += Duration::from_secs_f32(seconds);
+        pieces.push(
+            SwimControl::applied(until, 0., WetKind::Normal, SwimInput::Idle, seconds).unwrap(),
+        );
+        left -= seconds;
+    }
+    pieces
+}
+
+#[test]
+fn actual_ordinary_calls_keep_owned_rounding_debt_without_guessing_a_phase() {
+    for rate in [0, 25] {
+        for input in [
+            SwimInput::Idle,
+            SwimInput::Backward,
+            SwimInput::Strafe(StrafeSide::Left, Pace::Run),
+            SwimInput::Strafe(StrafeSide::Right, Pace::Run),
+        ] {
+            for turn in [-16_f32, 0., 16.] {
+                let start = Instant::now();
+                let mut session = owner(start, rate);
+                let swim = calibration(rate).swim.unwrap();
+                let mut physical = WetVelocity::default();
+                let mut overdue = 0;
+                for frame in 0..100_u16 {
+                    let basis = session.swim_basis().unwrap();
+                    let before = session.position();
+                    let heading = before.heading;
+                    let pose = (heading + turn).rem_euclid(512.);
+                    let (sin, cos) = (heading / 512. * std::f32::consts::TAU).sin_cos();
+                    let across = match input {
+                        SwimInput::Strafe(StrafeSide::Left, _) => swim.strafe,
+                        SwimInput::Strafe(StrafeSide::Right, _) => -swim.strafe,
+                        _ => 0.,
+                    };
+                    let along = if input == SwimInput::Backward {
+                        -swim.backward
+                    } else {
+                        0.
+                    };
+                    let native = WetInput {
+                        horizontal: [cos * across + sin * along, -sin * across + cos * along],
+                        vertical: 0.,
+                        jump: false,
+                    };
+                    physical.clamp(swim.caps());
+                    let mut left = if frame == 0 { 0.1_f32 } else { 0.116_669_f32 };
+                    let mut until = Duration::ZERO;
+                    let mut pieces = Vec::new();
+                    let mut moved = [0.; 3];
+                    while left > 0. {
+                        let seconds = left.min(WET_FRAME_SECONDS);
+                        let (flat, up) = physical.advance(swim.set, native, seconds);
+                        moved[0] += flat[0];
+                        moved[1] += flat[1];
+                        moved[2] += up;
+                        until += Duration::from_secs_f32(seconds);
+                        pieces.push(
+                            SwimControl::applied(until, heading, WetKind::Normal, input, seconds)
+                                .unwrap(),
+                        );
+                        left -= seconds;
+                    }
+                    overdue += u16::from(physical.frame_phase().is_none());
+                    assert!(physical.has_ordinary_call_clock());
+                    let controls = SwimControls::from_applied(basis, pieces, pose).unwrap();
+                    let now = start + Duration::from_micros(u64::from(frame + 1) * 116_669);
+                    let request = request(before, moved, pose, now);
+                    session.inspect_swim_replay(&request, &controls).unwrap();
+                    assert_eq!(
+                        session.swim_basis(),
+                        Some(basis),
+                        "inspection must not commit"
+                    );
+                    session
+                        .send_swim_sample(&request, Some(&controls), now, |_| Ok(()))
+                        .unwrap();
+                    assert!(session.swim_basis().is_some());
+                }
+                assert!(
+                    overdue > 0,
+                    "fixture must actually cross the nominal phase-view boundary"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tiny_call_tapes_and_unknown_entry_cannot_claim_an_observed_ordinary_clock() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let basis = session.swim_basis().unwrap();
+    let tiny = (1..=20)
+        .map(|micro| {
+            SwimControl::applied(
+                Duration::from_micros(micro),
+                0.,
+                WetKind::Normal,
+                SwimInput::Idle,
+                1e-6,
+            )
+            .unwrap()
+        })
+        .collect();
+    assert!(SwimControls::from_applied(basis, tiny, 0.).is_err());
+    let controls = SwimControls::from_applied(basis, applied_idle(0.1), 0.).unwrap();
+    session.withdraw_swim_controls();
+    let request = request(
+        Position::default(),
+        [0.; 3],
+        0.,
+        start + Duration::from_millis(100),
+    );
+    assert!(session.inspect_swim_replay(&request, &controls).is_err());
+    session
+        .send_swim_sample(&request, Some(&controls), request.created, |_| Ok(()))
+        .unwrap();
+    assert!(session.swim_basis().is_none());
+}
+
 #[test]
 fn actual_applied_clock_keeps_input_facing_separate_from_the_later_pose() {
     for turn in [-16_f32, 16.] {
@@ -81,15 +208,7 @@ fn applied_clock_retains_waits_without_invented_idle_and_cannot_spend_extra_time
     let start = Instant::now();
     let mut session = owner(start, 0);
     let basis = session.swim_basis().unwrap();
-    let control = SwimControl::applied(
-        Duration::from_secs_f32(0.1),
-        0.,
-        WetKind::Normal,
-        SwimInput::Idle,
-        0.1,
-    )
-    .unwrap();
-    let controls = SwimControls::from_applied(basis, vec![control], 0.).unwrap();
+    let controls = SwimControls::from_applied(basis, applied_idle(0.1), 0.).unwrap();
     let first = request(
         Position::default(),
         [0.; 3],
@@ -105,23 +224,12 @@ fn applied_clock_retains_waits_without_invented_idle_and_cannot_spend_extra_time
         0.,
         WetKind::Normal,
         SwimInput::Idle,
-        0.09,
+        WET_FRAME_SECONDS,
     )
     .unwrap();
     assert!(SwimControls::from_applied(basis, vec![control], 0.).is_err());
-    let controls = SwimControls::from_applied(
-        session.swim_basis().unwrap(),
-        vec![SwimControl::applied(
-            Duration::from_secs_f32(0.2),
-            0.,
-            WetKind::Normal,
-            SwimInput::Idle,
-            0.2,
-        )
-        .unwrap()],
-        0.,
-    )
-    .unwrap();
+    let controls =
+        SwimControls::from_applied(session.swim_basis().unwrap(), applied_idle(0.2), 0.).unwrap();
     let request = request(
         session.position(),
         [0.; 3],

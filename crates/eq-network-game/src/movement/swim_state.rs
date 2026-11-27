@@ -1,4 +1,4 @@
-//! Inert, reset-anchored ordinary horizontal swim validation.
+//! Reset-anchored validation of the actual ordinary water integrator calls.
 use super::{water, MotionCalibration, Pace, StrafeSide};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
@@ -17,7 +17,8 @@ pub struct SwimBasis {
 }
 
 impl SwimBasis {
-    /// Start of the complete interval the next observation must describe.
+    /// Timestamp of the accepted/reset basis. Applied observations retain
+    /// actual model consumption; they never invent calls during a wall gap.
     #[must_use]
     pub const fn started_at(self) -> Instant {
         self.started
@@ -172,7 +173,6 @@ impl SwimControls {
         );
         let mut previous = Duration::ZERO;
         for piece in &pieces {
-            ensure!(piece.until > previous, "invalid applied swim boundary");
             ensure!(
                 piece.until > previous && piece.until <= Duration::from_millis(250),
                 "invalid swim control time"
@@ -191,7 +191,8 @@ impl SwimControls {
         })
     }
 
-    /// Captures all physical calls that produced one ordinary controller step.
+    /// Captures the full fixed slices and final remainder of one actual
+    /// ordinary controller step, in the order the producer called them.
     /// The model may have paused while waiting; no unobserved idle is inserted.
     /// The independent final pose may follow a paced turn after those calls.
     /// Only a producer observing the actual calls may construct this ledger.
@@ -206,10 +207,19 @@ impl SwimControls {
             "invalid swim control count"
         );
         let mut previous = Duration::ZERO;
-        for piece in &pieces {
+        for (index, piece) in pieces.iter().enumerate() {
             let seconds = piece
                 .applied_seconds
                 .ok_or_else(|| anyhow::anyhow!("missing applied swim duration"))?;
+            // The actual ordinary producer calls full fixed slices followed
+            // by at most one remainder. An arbitrary tiny-call tape is not
+            // an observation of that producer and cannot establish its clock.
+            ensure!(
+                seconds <= water::WET_FRAME_SECONDS
+                    && (index + 1 == pieces.len()
+                        || seconds.to_bits() == water::WET_FRAME_SECONDS.to_bits()),
+                "applied swim calls do not match the ordinary producer"
+            );
             ensure!(
                 piece.until.checked_sub(previous) == Some(Duration::from_secs_f32(seconds)),
                 "incomplete applied swim clock"
@@ -338,12 +348,19 @@ impl Owner {
         let swim = calibration
             .swim
             .ok_or_else(|| anyhow::anyhow!("water is not calibrated"))?;
-        ensure!(velocity.frame_phase().is_some(), "unknown water phase");
+        let known_clock = |velocity: water::WetVelocity| {
+            if controls.applied {
+                velocity.has_ordinary_call_clock()
+            } else {
+                velocity.frame_phase().is_some()
+            }
+        };
+        ensure!(known_clock(velocity), "unknown water phase");
         velocity.clamp(swim.caps());
         let mut previous = Duration::ZERO;
         let mut total = [0.0; 2];
-        for piece in &controls.pieces {
-            ensure!(velocity.frame_phase().is_some(), "unknown water phase");
+        for (index, piece) in controls.pieces.iter().enumerate() {
+            ensure!(known_clock(velocity), "unknown water phase");
             // No non-idle physical call may predate its calibrated grant.
             // Actual applied pauses contain no fabricated physical calls.
             ensure!(
@@ -369,7 +386,16 @@ impl Owner {
                         .as_secs_f32()
                 }),
             );
-            ensure!(velocity.frame_phase().is_some(), "unknown water phase");
+            // Only the final remainder may leave the bounded native debt.
+            // Every intervening full caller slice must have a canonical view.
+            ensure!(
+                if controls.applied && index + 1 == controls.pieces.len() {
+                    velocity.has_ordinary_call_clock()
+                } else {
+                    velocity.frame_phase().is_some()
+                },
+                "unknown water phase"
+            );
             total[0] += moved[0];
             total[1] += moved[1];
             previous = piece.until;
