@@ -514,8 +514,8 @@ impl Feature for Spellbook {
             ClientCommand::ScribeSpell { .. }
             | ClientCommand::MemorizeSpell { .. }
             | ClientCommand::ForgetSpell { .. }
-            | ClientCommand::SetBookOptions { .. } => true,
-            ClientCommand::PollSpellbook { .. } => true,
+            | ClientCommand::SetBookOptions { .. }
+            | ClientCommand::PollSpellbook { .. } => true,
             ClientCommand::DeleteSpell { .. } => self.edits.deleting,
             ClientCommand::SwapSpell { .. } => self.edits.moving,
             _ => false,
@@ -812,7 +812,7 @@ mod tests {
         let idle = gauge_poll(&mut book, &mut world, start + Duration::from_secs(60));
         idle.result.unwrap();
         assert_eq!(idle.sent, []);
-        assert_eq!(idle.events, []);
+        assert!(idle.events.is_empty());
     }
 
     /// A book with spell 73 in its first slot, or an empty one.

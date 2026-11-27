@@ -207,7 +207,7 @@ mod tests {
     fn skill_level_strict_threshold_and_stall_have_no_catch_up() {
         let now = Instant::now();
         let mut low = clock(0, 10, 10, now);
-        assert!(!low.poll(now - Duration::from_millis(1)));
+        assert!(!low.poll(now.checked_sub(Duration::from_millis(1)).unwrap()));
         assert!(low.poll(now));
         assert_eq!(low.progress(0, 42).remaining, 88);
         assert!(!low.poll(now + Duration::from_millis(500)));
