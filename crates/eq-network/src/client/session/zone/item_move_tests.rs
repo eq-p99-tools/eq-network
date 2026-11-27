@@ -78,7 +78,7 @@ fn p99_unnamed_npc_cancel_reconciles_the_real_give_pipeline_without_item_dedupli
     separate.rules.ground_drop_serial = NonZeroU32::new(99);
     let (mut features, mut world) = setup(protocol, vec![offered.clone(), separate.clone()]);
     world.spawns.insert(testing::spawn(42, SpawnKind::Npc));
-    let outcome = testing::run_on(wire, |out| {
+    let outcome = testing::run_on(wire, |out| -> anyhow::Result<()> {
         apply_commands(
             &[ClientCommand::OfferTrade {
                 session_id: 5,
