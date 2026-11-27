@@ -1017,7 +1017,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 154;
+    const KINDS: usize = 155;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -2974,7 +2974,7 @@ mod tests {
             })
             .collect();
         let pending = WorldEvent::CastPending {
-            gem: None,
+            gem: Some(2),
             session_id: 5,
             spell_id: Some(202),
         };
