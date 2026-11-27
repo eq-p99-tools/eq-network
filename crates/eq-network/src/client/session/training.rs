@@ -275,6 +275,12 @@ impl Training {
         } else {
             value
         };
+        if self.p99
+            && matches!(subject, TrainingSubject::Language(_))
+            && priced >= training::LANGUAGE_CAP
+        {
+            return Err("You have mastered that language.");
+        }
         if priced >= cap {
             return Err("You cannot be trained any further in that skill.");
         }
@@ -313,6 +319,7 @@ impl Training {
                     "You do not have any practice points left." => Some(0x327d),
                     "You cannot afford to train that skill." => Some(0x2f21),
                     "Your guildmaster cannot train you in that language yet." => Some(0x327c),
+                    "You have mastered that language." => Some(0x327e),
                     "You cannot be trained any further in that skill." => {
                         Some(if language { 0x327f } else { 0x3283 })
                     }
@@ -324,7 +331,9 @@ impl Training {
                         .and_then(|trainer| world.spawns.visible(trainer.spawn_id))
                         .map(|trainer| vec![trainer.name.clone()])
                         .unwrap_or_default()
-                } else if let (TrainingSubject::Language(id), Some(0x327f)) = (subject, string_id) {
+                } else if let (TrainingSubject::Language(id), Some(0x327e | 0x327f)) =
+                    (subject, string_id)
+                {
                     vec![id.to_string()]
                 } else {
                     Vec::new()
@@ -1814,6 +1823,28 @@ mod tests {
             open(&mut training, &mut world, 42).sent,
             [training::titanium_open(42, 7)]
         );
+    }
+
+    #[test]
+    fn p99_mastered_language_and_no_points_keep_the_native_refusal_context() {
+        for (points, expected) in [(3, 0x327e), (0, 0x327d)] {
+            let (mut training, mut world) = p99();
+            world.player.corrected().unwrap().languages = Some(vec![100; 32]);
+            training.points = Some(points);
+            open_and_admit(&mut training, &mut world, 42);
+            let refused = handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(1),
+                },
+            );
+            assert_eq!(refused.sent, []);
+            assert!(refused.events.iter().any(|event| matches!(event,
+                ClientEvent::World(WorldEvent::TrainingRefused { string_id: Some(id), .. }) if *id == expected)));
+            assert_eq!(training.points, Some(points));
+        }
     }
 
     #[test]
