@@ -3657,8 +3657,9 @@ mod tests {
         assert!(world.inventory.items().contains_key(&InventorySlot(3000)));
         // Closing the window empties the slots; the server sends the item back.
         let close = ClientCommand::CancelTrade { session_id: 5 };
-        let outcome =
-            testing::run(|out| super::super::exchange::Exchanges.handle(&close, &mut world, out));
+        let outcome = testing::run(|out| {
+            super::super::exchange::Exchanges::default().handle(&close, &mut world, out)
+        });
         outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(
@@ -4022,7 +4023,7 @@ mod tests {
             .0
             .apply(InventoryUpdate::Set(vec![item(3000)]));
         let cancel = ClientCommand::CancelTrade { session_id: 5 };
-        let result = testing::run(|out| Exchanges.handle(&cancel, &mut world, out));
+        let result = testing::run(|out| Exchanges::default().handle(&cancel, &mut world, out));
         result.result.unwrap();
         assert_eq!(result.sent.len(), 1);
         assert!(world.exchange.is_none());
