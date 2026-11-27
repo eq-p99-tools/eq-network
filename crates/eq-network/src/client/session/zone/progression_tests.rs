@@ -237,7 +237,7 @@ fn p99_completed_translocate_cannot_reopen_or_move_through_an_old_echo() {
 }
 
 #[test]
-fn p99_skill_update_remains_authoritative_without_releasing_practice() {
+fn p99_skill_updates_replace_local_values_without_another_practice_spend() {
     let mut visit = Visit::new();
     let mut trainer = testing::spawn(42, SpawnKind::Npc);
     trainer.class = Some(20);
@@ -279,8 +279,109 @@ fn p99_skill_update_remains_authoritative_without_releasing_practice() {
     )));
     let player = visit.world.player.as_ref().unwrap();
     assert_eq!(player.skills.as_ref().unwrap()[30], 13);
-    assert_eq!(player.practice_points, Some(3));
-    assert_eq!(visit.command(request(train)).sent, []);
+    assert_eq!(player.practice_points, Some(2));
+    assert_eq!(
+        visit.command(request(train)).sent,
+        [training::titanium_train(42, 30).unwrap()]
+    );
+    assert_eq!(
+        visit.world.player.as_ref().unwrap().practice_points,
+        Some(1)
+    );
+    assert_eq!(
+        visit
+            .world
+            .player
+            .as_ref()
+            .unwrap()
+            .skills
+            .as_ref()
+            .unwrap()[30],
+        14
+    );
+}
+
+#[test]
+fn p99_paid_practice_projects_once_and_absolute_updates_replace_it() {
+    use eq_network_game::world::Coins;
+    let mut visit = Visit::new();
+    visit
+        .world
+        .player
+        .corrected()
+        .unwrap()
+        .skills
+        .as_mut()
+        .unwrap()[30] = 20;
+    visit
+        .news(vec![Message::Event(WorldEvent::Coins(Coins {
+            copper: 20,
+            ..Coins::default()
+        }))])
+        .result
+        .unwrap();
+    let mut trainer = testing::spawn(42, SpawnKind::Npc);
+    trainer.class = Some(20);
+    visit.world.spawns.insert(trainer);
+    visit
+        .command(language_training_command(TrainingRequest::Open {
+            trainer: 42,
+        }))
+        .result
+        .unwrap();
+    let mut reply = training::titanium_open(42, 7).body;
+    reply[412] = 1;
+    reply[8 + 30 * 4] = 200;
+    visit.packet(training::OFFER_OPCODE, &reply).result.unwrap();
+    let press = || {
+        language_training_command(TrainingRequest::TrainAt {
+            trainer: 42,
+            skill: 30,
+        })
+    };
+    assert_eq!(visit.command(press()).sent.len(), 1);
+    assert_eq!(visit.world.coins.purse.unwrap().total_copper(), 10);
+    assert_eq!(
+        visit.world.player.as_ref().unwrap().practice_points,
+        Some(2)
+    );
+    visit
+        .packet(0x6a93, &[30u32.to_le_bytes(), 21u32.to_le_bytes()].concat())
+        .result
+        .unwrap();
+    assert_eq!(visit.world.coins.purse.unwrap().total_copper(), 10);
+    assert_eq!(
+        visit.world.player.as_ref().unwrap().practice_points,
+        Some(2)
+    );
+    // Absolute server coin news replaces the projection rather than charging again.
+    visit
+        .news(vec![Message::Event(WorldEvent::Coins(Coins {
+            copper: 17,
+            ..Coins::default()
+        }))])
+        .result
+        .unwrap();
+    assert_eq!(visit.command(press()).sent.len(), 1);
+    assert_eq!(visit.world.coins.purse.unwrap().total_copper(), 4);
+    assert_eq!(
+        visit.world.player.as_ref().unwrap().practice_points,
+        Some(1)
+    );
+    let refused = visit.command(press());
+    assert_eq!(refused.sent, []);
+    assert!(refused.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::TrainingRefused {
+            string_id: Some(0x2f21),
+            ..
+        })
+    )));
+    assert_eq!(visit.world.coins.purse.unwrap().total_copper(), 4);
+    assert_eq!(
+        visit.world.player.as_ref().unwrap().practice_points,
+        Some(1)
+    );
 }
 
 fn language_training_command(request: TrainingRequest) -> ClientCommand {

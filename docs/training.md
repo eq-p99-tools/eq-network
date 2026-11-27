@@ -1,5 +1,30 @@
 # Trainer skills and languages
 
+## Default-ignored message (6.684)
+
+Titanium's native dispatcher 0x45b8f0/0x45f687 sends 0x3464 to its default
+return at 0x461757 (read 6.684). The retained inbound body was empty. Its
+purpose remains unknown; the session quietly counts it as skipped and never
+uses it as a practice, balance, skill or trainer-close acknowledgement.
+The EQEmu server's empty OP_GMEndTrainingResponse after Done is a hypothesis
+about its origin, not an established name for the opcode.
+
+## Native local practice (6.683)
+
+P99 follows Titanium 0x56b48e: after normal eligibility and successful local
+request submission, spend one point and the computed price locally. A skill
+already above zero increments locally; a zero skill and a language keep their
+value until received news. The first skill press prints 0x2f22; languages use
+0x2f22/0x2f23. Ordinary skill increases above zero print nothing at the press.
+The received 0x6a93 sets the skill and prints 0x2f3b without another spend.
+These are projections, not server receipts. Absolute coin/point updates and a
+fresh profile replace them. Failed submission commits no projection. Closing,
+reopening, timeout or UI reload neither refunds nor reapplies a spend. No
+per-zone practice lock is introduced. Native no-points/coin refusal lines
+remain separate from diagnostic bookkeeping, which produces no invented chat.
+
+## Skills and languages
+
 `TrainingSubject` keeps ordinary skills (bank 0) and languages (bank 1)
 separate. Legacy `TrainingRequest::Train`/`TrainAt`, `Request::Train` and
 `titanium_train` remain ordinary-skill APIs. `PracticeAt` selects a typed
@@ -40,12 +65,12 @@ cannot safely distinguish the outstanding old answer. An already answered
 offer simply invalidates on replacement or death; a fresh request and reply
 can reopen that trainer in the same admission. Any unresolved language spend
 independently keeps point/purse authority unknown until fresh balances.
-P99 retains its one unresolved practice and fresh-balance policy, even when
-a language increase is received. Silence is never a successful practice.
+P99 instead uses the native press-time projection described above; a skill
+increase is never interpreted as a spend receipt.
 Validate actual point and coin spending against the next received profile;
 keep that separate from the projection and the received proficiency.
 
 Pure regressions cover bank encoding/bounds, native race/class boundaries,
 current offer/trainee scope, separate update IDs, language caps/unknown
-values, timeout uncertainty and P99 pending balance behavior. Runtime and
+values, timeout uncertainty and native P99 press-time balances. Runtime and
 attended P99 verification are separate checks.
