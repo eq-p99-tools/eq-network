@@ -326,6 +326,9 @@ impl Owner {
             created
                 .checked_sub(controls.pieces.last().expect("checked controls").until)
                 .ok_or_else(|| anyhow::anyhow!("invalid applied swim clock"))?
+                // Independent f32-to-nanosecond cursor rounding must not
+                // place a call before the actual accepted/reset basis.
+                .max(started)
         } else {
             started
         };

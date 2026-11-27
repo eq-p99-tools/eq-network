@@ -48,6 +48,17 @@ fn actual_applied_clock_keeps_input_facing_separate_from_the_later_pose() {
             }
             let controls = SwimControls::from_applied(basis, pieces, pose).unwrap();
             let now = start + Duration::from_millis(u64::from(frame + 1) * 100);
+            session
+                .wet
+                .trial(
+                    11,
+                    &controls,
+                    calibration(0),
+                    pose,
+                    now,
+                    session.guard.sampled,
+                )
+                .expect("exact physical calls must replay before ordinary endpoint validation");
             let request = request(before, travel, pose, now);
             session
                 .send_swim_sample(&request, Some(&controls), now, |_| Ok(()))
