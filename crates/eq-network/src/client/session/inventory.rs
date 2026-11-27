@@ -282,7 +282,9 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             Some(false)
         }
         // The server takes a practice's cost without saying so.
-        WorldEvent::Training(TrainingUpdate::Trained { cost, .. }) if *cost > 0 => {
+        WorldEvent::Training(
+            TrainingUpdate::Trained { cost, .. } | TrainingUpdate::Practiced { cost, .. },
+        ) if *cost > 0 => {
             wallet.pay(*cost);
             Some(true)
         }

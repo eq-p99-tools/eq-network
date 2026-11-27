@@ -1176,13 +1176,16 @@ mod tests {
     }
 
     #[test]
-    fn empty_3464_stays_an_unlisted_gap_without_training_news() {
+    fn empty_3464_is_counted_quietly_without_training_news() {
         use crate::client::{Gap, GapKind, GapStage};
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
         let mut gaps: Vec<Gap> = Vec::new();
+        let mut diagnostics = Vec::new();
         let mut handler = |event| {
             if let ClientEvent::Gap(gap) = event {
                 gaps.push(*gap);
+            } else if let ClientEvent::Diagnostic(line) = event {
+                diagnostics.push(line);
             }
             Ok(())
         };
@@ -1206,8 +1209,8 @@ mod tests {
         assert!(gaps.iter().all(|gap| gap.opcode == 0x3464
             && gap.min_length == 0
             && gap.max_length == 0
-            && gap.name.is_none()
-            && matches!(gap.kind, GapKind::Unlisted)));
+            && matches!(gap.kind, GapKind::Skipped { .. })));
+        assert_eq!(diagnostics, Vec::<String>::new());
     }
 
     #[test]
