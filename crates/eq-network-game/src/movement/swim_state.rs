@@ -179,7 +179,10 @@ impl SwimControls {
             );
             previous = piece.until;
         }
-        let pose = pieces.last().expect("checked nonempty controls").heading;
+        let pose = pieces
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("empty swim controls"))?
+            .heading;
         Ok(Self {
             basis,
             pieces,

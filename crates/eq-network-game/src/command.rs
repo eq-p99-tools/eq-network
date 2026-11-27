@@ -1491,7 +1491,7 @@ pub enum GameCommand {
         /// Genuine physics-end stamp and collision-resolved proposal.
         request: crate::movement::MovementRequest,
         /// Complete applied controls, never a path fitted to the endpoint.
-        controls: crate::movement::SwimControls,
+        controls: Box<crate::movement::SwimControls>,
     },
     /// A host's completed ordinary Forward ground frame, before its next input.
     /// Position, current velocity and observed Forward input are separate facts.

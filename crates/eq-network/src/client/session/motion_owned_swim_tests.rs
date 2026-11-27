@@ -95,7 +95,10 @@ fn typed_swim_uses_normal_owner_sender_and_queues_receipt_after_local_result() {
         let (request, controls) = observed(&motion, &mut WetVelocity::default());
         let position = request.position;
         world.body.admit(motion);
-        let command = ClientCommand::SwimFrame { request, controls };
+        let command = ClientCommand::SwimFrame {
+            request,
+            controls: Box::new(controls),
+        };
         assert!(feature.owns(&command));
         assert_eq!(command.session_id(), Some(11));
         feature.handle(&command, &mut world, out).unwrap();

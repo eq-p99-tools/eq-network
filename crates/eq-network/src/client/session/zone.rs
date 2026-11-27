@@ -1245,7 +1245,7 @@ mod tests {
         vec![
             ClientCommand::SwimFrame {
                 request: MovementRequest::new(MovementMode::Swim, session_id, position, created),
-                controls,
+                controls: Box::new(controls),
             },
             ClientCommand::StopSong {
                 session_id,
