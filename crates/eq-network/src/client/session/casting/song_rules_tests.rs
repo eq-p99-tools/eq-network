@@ -169,6 +169,7 @@ fn bag_move() -> ClientCommand {
 
 fn memorize() -> ClientCommand {
     ClientCommand::MemorizeSpell {
+        preparation: None,
         session_id: 5,
         gem: 2,
         spell_id: 204,
