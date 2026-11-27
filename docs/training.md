@@ -1,5 +1,20 @@
 # Trainer skills and languages
 
+## Unlisted empty message (6.684)
+
+`0x3464` remains unlisted and unread, including an empty body. Normal gap
+reporting retains its opcode, zero length and count. Retained timing places
+one arrival after closing Training; timing alone cannot establish a practice
+receipt, point spend or trainer-close response. The EQEmu source sends an
+empty `OP_GMEndTrainingResponse` from `OPGMEndTraining`, but its Titanium table
+does not map that response or identify `0x3464`. This is a hypothesis to
+investigate, not an opcode classification. No training state consumes it.
+
+References: [Titanium table](https://github.com/EQEmu/Server/blob/master/utils/patches/patch_Titanium.conf),
+[trainer close](https://github.com/EQEmu/Server/blob/master/zone/client_process.cpp).
+
+## Skills and languages
+
 `TrainingSubject` keeps ordinary skills (bank 0) and languages (bank 1)
 separate. Legacy `TrainingRequest::Train`/`TrainAt`, `Request::Train` and
 `titanium_train` remain ordinary-skill APIs. `PracticeAt` selects a typed
