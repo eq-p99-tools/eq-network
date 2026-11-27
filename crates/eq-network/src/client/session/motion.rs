@@ -893,6 +893,10 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let command = ClientCommand::Move(request.clone());
+        if let Some(reason) = world.posture.input_refusal(&command) {
+            return actions::refuse(&command, reason, out.log);
+        }
         let lying = lies_still(world, out);
         let Some(motion) = world.body.motion.as_mut() else {
             return actions::refuse(
@@ -1087,6 +1091,14 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let command = ClientCommand::Jump {
+            session_id: world.session_id,
+            posture,
+            created,
+        };
+        if let Some(reason) = world.posture.input_refusal(&command) {
+            return actions::refuse(&command, reason, out.log);
+        }
         if let Some(reason) = world.control.input_refusal(created) {
             return out.log.diagnostic(format!("Rejected jump: {reason}"));
         }

@@ -396,7 +396,7 @@ impl World {
     /// Whether the player may not move now: a death or transfer, or an
     /// arrival aboard not yet settled.
     pub(super) fn motion_held(&self) -> bool {
-        self.lifecycle.blocks_motion() || self.arrival.is_some()
+        self.lifecycle.blocks_motion() || self.arrival.is_some() || self.posture.unconscious()
     }
 
     /// Whether the zone connection permits scoped local `EQEmu` fixture commands.

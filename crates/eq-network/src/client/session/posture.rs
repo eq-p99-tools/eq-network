@@ -3,6 +3,7 @@
 //! last sent or was told, reports it to the client, and stands the character up
 //! before it moves, as the official client does; a server leaves a seated
 //! character seated while it walks.
+mod health;
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent, Events,
@@ -15,6 +16,7 @@ use eq_network_game::{
     request::Request,
     world::{PostureState, WorldEvent},
 };
+pub(super) use health::local_damage;
 
 /// Explicit stance commands, independent of locomotion. Camping clients can
 /// sit and stand without being granted walking, falling or jumping.
@@ -28,7 +30,9 @@ impl Feature for Stances {
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,
-            ClientCommand::SetPosture { .. } | ClientCommand::FeignLanded { .. }
+            ClientCommand::SetPosture { .. }
+                | ClientCommand::FeignLanded { .. }
+                | ClientCommand::OwnHitPoints { .. }
         )
     }
 
@@ -50,8 +54,14 @@ impl Feature for Stances {
                 world.posture.set(spawn_id, posture, out)
             }
             ClientCommand::FeignLanded { spawn_id, .. } => feign_landed(spawn_id, world, out),
+            ClientCommand::OwnHitPoints { basis, .. } => health::count(basis, world, out),
             _ => Ok(()),
         }
+    }
+
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        health::note(message, world);
+        Ok(())
     }
 
     fn observe(
@@ -60,7 +70,16 @@ impl Feature for Stances {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        health::note(message, world);
         match message {
+            Message::Event(
+                WorldEvent::Buff(_)
+                | WorldEvent::SpellEffect(_)
+                | WorldEvent::AlternateAdvancement { .. }
+                | WorldEvent::BuffSnapshot(_)
+                | WorldEvent::Inventory(_)
+                | WorldEvent::Level { .. },
+            ) => health::invalidate_effect_floor(message, world, out),
             Message::Event(WorldEvent::Posture { spawn_id, posture })
                 if world.is_player(*spawn_id) =>
             {
@@ -167,6 +186,8 @@ pub(super) fn stand_for_own_damage(
 /// The player's stance in this zone admission; unknown counts as standing.
 #[derive(Debug, Default)]
 pub(super) struct OwnPosture {
+    /// The HP-derived control hold; this owner alone changes its posture.
+    health: health::Health,
     /// The last requested or server-reported stance.
     posture: Option<PostureState>,
     /// A Standing report the server still needs although the player already
@@ -283,6 +304,11 @@ impl OwnPosture {
         posture: Posture,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if self.unconscious() {
+            return out
+                .log
+                .diagnostic("Posture is held while the player is unconscious".into());
+        }
         // Titanium's posture routine changes nothing for the posture the
         // player already has (read R19), but an owed stand still goes.
         let unchanged = self.posture == Some(state(posture))

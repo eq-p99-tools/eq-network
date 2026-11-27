@@ -2338,6 +2338,18 @@ pub enum WorldEvent {
         /// A verified stun state, not generic control ownership.
         state: crate::control::StunState,
     },
+    /// The posture owner's accepted HP count and unconscious state. Only
+    /// Titanium has this rule; death remains separate server lifecycle news.
+    OwnUnconscious {
+        /// The zone admission that owns this state.
+        session_id: u64,
+        /// Increases on each unconscious/awake transition this admission.
+        revision: u64,
+        /// Whether the accepted signed HP count is below 1.
+        unconscious: bool,
+        /// The accepted received report and host equipment contribution.
+        basis: crate::control::HitPointBasis,
+    },
     /// The Titanium program's own roll on a hit cleared the player's cast
     /// locally (mode 1 of 0x40f8a0, read R49-50), with no line: the server
     /// was not told and may still finish it. A song's clear says

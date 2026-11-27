@@ -75,6 +75,99 @@ fn all_hazards() -> Hazards {
     Hazards::new(&[Hazard::Falling, Hazard::Drowning, Hazard::Lava], false)
 }
 
+#[test]
+fn submitted_drowning_at_one_hp_lies_holds_reports_and_wakes_without_inventing_death() {
+    use crate::client::session::posture::Stances;
+    use eq_network_game::{
+        control::HitPointBasis,
+        inventory::{Inventory, InventoryUpdate},
+    };
+    let mut world = seated_world(PostureState::Standing, false);
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+    world.inventory = inventory.into();
+    let mut feature = all_hazards();
+    let start = Instant::now();
+    let output = testing::run(|out| -> Result<()> {
+        enter(&feature, &world, out)?;
+        Stances.observe(&hit_points(1), &mut world, out)?;
+        let count = |world: &World| ClientCommand::OwnHitPoints {
+            session_id: 5,
+            created: Instant::now(),
+            basis: HitPointBasis {
+                reported_current: 1,
+                reported_maximum: 100,
+                item_hit_points: 0,
+                inventory_revision: world.inventory.revision(),
+                local_damage: 0,
+                damage_floor: Some(-10),
+            },
+        };
+        Stances.handle(&count(&world), &mut world, out)?;
+        for tick in 0..8 {
+            let revision = out.log.liquid_inputs.current.unwrap().2;
+            feature.handle(
+                &ClientCommand::LiquidDamage {
+                    session_id: 5,
+                    hazard: LiquidHazard::Drowning,
+                    amount: 2,
+                    observation: LiquidObservation {
+                        revision,
+                        position: Position::default(),
+                        sampled_at: start + Duration::from_secs(tick),
+                    },
+                },
+                &mut world,
+                out,
+            )?;
+            assert!(world.posture.unconscious());
+            assert!(world.motion_held());
+            assert!(!world.lifecycle.is_dead());
+            world
+                .body
+                .heartbeat(start + Duration::from_secs(tick + 1), out)?;
+        }
+        // The same positive server value is a fresh refresh: it replaces
+        // local subtraction, and the confirmed count wakes through one stand.
+        Stances.observe(&hit_points(1), &mut world, out)?;
+        Stances.handle(&count(&world), &mut world, out)?;
+        assert!(!world.posture.unconscious());
+        assert!(!world.lifecycle.is_dead());
+        Ok(())
+    });
+    output.result.unwrap();
+    assert_eq!(
+        output
+            .sent
+            .iter()
+            .filter(|packet| packet.opcode == hazards::ENV_DAMAGE_OPCODE)
+            .count(),
+        6
+    );
+    assert_eq!(
+        output
+            .sent
+            .iter()
+            .filter(|packet| **packet == eq_network_game::feign::titanium_posture(7).unwrap())
+            .count(),
+        1
+    );
+    assert_eq!(
+        output
+            .sent
+            .iter()
+            .filter(|packet| **packet == command::titanium_posture(7, Posture::Standing).unwrap())
+            .count(),
+        1
+    );
+    assert!(output.unreliable.is_empty());
+    assert_no_damage_authority(&output.events);
+    assert!(!output.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::Death(_) | WorldEvent::DeathBind { .. })
+    )));
+}
+
 /// What the Titanium session sends for a report: `OP_EnvDamage`, then the
 /// damage record (read R49-3 c, R49-3a).
 fn titanium_report(hazard: Hazard, amount: u32) -> Vec<EncodedCommand> {

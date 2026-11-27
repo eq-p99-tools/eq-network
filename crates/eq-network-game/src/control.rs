@@ -27,6 +27,43 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::time::Duration;
 
+/// A received own-HP report and the equipped item HP the host counted from
+/// complete current inventory facts, plus separately counted local damage
+/// already submitted to transport. This is not server-confirmed damage or death.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct HitPointBasis {
+    /// Signed current HP exactly as received, before equipped item HP.
+    pub reported_current: i32,
+    /// Maximum HP exactly as received, to identify the report being counted.
+    pub reported_maximum: i32,
+    /// Equipped item HP, counted by the host from the worker inventory.
+    pub item_hit_points: i64,
+    /// Worker inventory revision used for the equipment count.
+    pub inventory_revision: u64,
+    /// Successfully submitted local environmental damage since this report.
+    /// A fresh server HP report replaces it, even when its value repeats.
+    pub local_damage: u64,
+    /// Native pre-damage cutoff (-10 minus effect 328), when the host can
+    /// resolve that effect total. None preserves the unknown total.
+    pub damage_floor: Option<i64>,
+}
+
+impl HitPointBasis {
+    /// Full signed current HP; None for an overflowing host input.
+    #[must_use]
+    pub fn current(self) -> Option<i64> {
+        let reported = i64::from(self.reported_current);
+        let local = if self.local_damage == 0 {
+            reported
+        } else {
+            reported
+                .saturating_sub(i64::try_from(self.local_damage).unwrap_or(i64::MAX))
+                .max(-32768)
+        };
+        local.checked_add(self.item_hit_points)
+    }
+}
+
 /// `OP_Stun`: the raw stun length in milliseconds, including zero.
 pub const STUN_OPCODE: u16 = 0x1e51;
 /// `EQMac`'s `OP_Stun`, the same four bytes.
