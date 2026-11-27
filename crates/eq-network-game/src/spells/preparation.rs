@@ -25,7 +25,7 @@ pub struct BardMemorization {
 }
 
 /// Actual worker gauge, separate from a server-confirmed memorize result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct MemorizationProgress {
     /// Destination gem, zero based.
     pub gem: u8,
