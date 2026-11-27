@@ -1,5 +1,16 @@
 # API and integration contracts
 
+## Authored exit destination zones (6.686)
+
+`WorldEvent::ZoneLineZones { session_id, zones }` projects only the received
+table's boundary reference and destination zone ID. It follows `Entered`,
+replaces the whole prior mapping, and is empty after an unreadable or empty
+table. A new zone session starts with an empty table. Hosts must discard old
+admission events and clear their view on zone reset. The mapping does not
+describe local source volumes, remote arrival coordinates, reachability or
+permission to transfer. Navigation still obtains its goal from installed
+authored source geometry; crossing uses the existing zone-line command.
+
 ## Observed ordinary movement paths (6.659)
 
 `MovementRequest::history` is optional recording data. `MovementRequest::new`

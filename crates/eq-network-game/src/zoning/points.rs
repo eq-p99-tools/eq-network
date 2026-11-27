@@ -130,6 +130,16 @@ impl ZonePoints {
         self.0.get(&number)
     }
 
+    /// Destination zone IDs by local boundary reference, without arrival coordinates.
+    /// This is a complete replacement snapshot, including an empty table.
+    #[must_use]
+    pub fn zones(&self) -> BTreeMap<u32, u16> {
+        self.0
+            .iter()
+            .map(|(&number, point)| (number, point.zone_id))
+            .collect()
+    }
+
     /// Resolves a boundary against current admission data; same-zone teleports are separate.
     ///
     /// # Errors

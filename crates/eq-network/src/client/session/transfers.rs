@@ -182,6 +182,13 @@ impl Transfers {
         true
     }
 
+    fn publish_points(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log.send(ClientEvent::World(WorldEvent::ZoneLineZones {
+            session_id: world.session_id,
+            zones: self.points.zones(),
+        }))
+    }
+
     /// Takes the server's offer to move the player, within the zone or out
     /// of it.
     fn offered(offer: &zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
@@ -460,6 +467,10 @@ impl Feature for Transfers {
         Ok(())
     }
 
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.publish_points(world, out)
+    }
+
     /// The zone's zone points, the server's offers and answer, and the next
     /// zone's address.
     fn observe(
@@ -469,6 +480,16 @@ impl Feature for Transfers {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if self.note_points(message) {
+            if matches!(
+                message,
+                Message::ZonePoints(_)
+                    | Message::Unreadable {
+                        part: Part::ZonePoints,
+                        ..
+                    }
+            ) {
+                self.publish_points(world, out)?;
+            }
             return Ok(());
         }
         match message {
@@ -586,6 +607,10 @@ impl Feature for Transfers {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "transfers/points_tests.rs"]
+mod points_tests;
 
 #[cfg(test)]
 mod tests {
