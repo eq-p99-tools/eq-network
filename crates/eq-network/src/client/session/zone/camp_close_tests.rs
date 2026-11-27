@@ -4,7 +4,6 @@ use eq_network_game::{command::Posture, request::Sender, world::CampStatus};
 
 #[test]
 fn only_a_p99_peer_close_after_submitted_logout_finishes_the_local_camp() {
-    use super::super::feature::testing;
     for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
         // Idle, preparing, abandoned, and committed departure.
         for phase in 0..4 {
@@ -19,41 +18,7 @@ fn only_a_p99_peer_close_after_submitted_logout_finishes_the_local_camp() {
             }
             let error = connection.receive().unwrap_err();
             let server = servers::server_type(protocol);
-            let mut features =
-                Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
-            let mut world = World::new(5);
-            world.player.admit(testing::player(7));
-            world.own_spawn = Some(7);
-            let now = Instant::now();
-            let output = testing::run(|out| -> Result<()> {
-                if phase > 0 {
-                    features.handle(
-                        &ClientCommand::Camp {
-                            session_id: 5,
-                            created: now,
-                        },
-                        &mut world,
-                        out,
-                    )?;
-                }
-                if phase == 2 {
-                    features.handle(
-                        &ClientCommand::SetPosture {
-                            session_id: 5,
-                            spawn_id: 7,
-                            posture: Posture::Standing,
-                            created: now,
-                        },
-                        &mut world,
-                        out,
-                    )?;
-                }
-                if phase == 3 {
-                    features.tick(now + Duration::from_secs(31), &mut world, out)?;
-                }
-                Ok(())
-            });
-            output.result.unwrap();
+            let (mut features, mut world) = camp_phase(protocol, phase);
             let config = ClientConfig::new("EXAMPLE", "EXAMPLE", "Test Server", "Tester");
             let mut events = Vec::new();
             let mut handler = |event| {
@@ -113,4 +78,44 @@ fn only_a_p99_peer_close_after_submitted_logout_finishes_the_local_camp() {
             worker.join().unwrap();
         }
     }
+}
+
+fn camp_phase(protocol: ServerProtocol, phase: u8) -> (Features, World) {
+    use super::super::feature::testing;
+    let server = servers::server_type(protocol);
+    let mut features = Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+    let mut world = World::new(5);
+    world.player.admit(testing::player(7));
+    world.own_spawn = Some(7);
+    let now = Instant::now();
+    let output = testing::run(|out| -> Result<()> {
+        if phase > 0 {
+            features.handle(
+                &ClientCommand::Camp {
+                    session_id: 5,
+                    created: now,
+                },
+                &mut world,
+                out,
+            )?;
+        }
+        if phase == 2 {
+            features.handle(
+                &ClientCommand::SetPosture {
+                    session_id: 5,
+                    spawn_id: 7,
+                    posture: Posture::Standing,
+                    created: now,
+                },
+                &mut world,
+                out,
+            )?;
+        }
+        if phase == 3 {
+            features.tick(now + Duration::from_secs(31), &mut world, out)?;
+        }
+        Ok(())
+    });
+    output.result.unwrap();
+    (features, world)
 }
