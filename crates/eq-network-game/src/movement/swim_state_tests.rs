@@ -84,7 +84,7 @@ fn reference_and_distance(
         Pace::Run => swim.forward,
         Pace::Walk => swim.walk,
     };
-    let sign = |side| match side {
+    let handedness = |side| match side {
         StrafeSide::Left => 1.,
         StrafeSide::Right => -1.,
     };
@@ -103,11 +103,11 @@ fn reference_and_distance(
                         / strafe.units_per_second
                 }
             };
-            (sign(side) * swim.strafe * scale, 0.)
+            (handedness(side) * swim.strafe * scale, 0.)
         }
         SwimInput::ForwardStrafe(side, pace) => {
             let r = forward(pace) / 2_f32.sqrt();
-            (sign(side) * r, r)
+            (handedness(side) * r, r)
         }
     };
     let (sin, cos) = (heading / 512. * std::f32::consts::TAU).sin_cos();
