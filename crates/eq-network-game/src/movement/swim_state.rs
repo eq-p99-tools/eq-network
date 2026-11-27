@@ -264,7 +264,11 @@ impl Owner {
             let (moved, _) = velocity.advance(
                 swim.set_for(piece.kind),
                 input,
-                (piece.until - previous).as_secs_f32(),
+                piece
+                    .until
+                    .checked_sub(previous)
+                    .expect("checked ordered controls")
+                    .as_secs_f32(),
             );
             total[0] += moved[0];
             total[1] += moved[1];
