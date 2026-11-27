@@ -376,7 +376,10 @@ impl Training {
             return Ok(());
         };
         if !self.p99 || trainer.offer.is_some() {
-            out.request(&Request::EndTraining(trainer.spawn_id))?;
+            if let Err(error) = out.request(&Request::EndTraining(trainer.spawn_id)) {
+                self.trainer = Some(trainer);
+                return Err(error);
+            }
         }
         if self.p99 {
             self.retire_practice(out)?;
@@ -1859,6 +1862,19 @@ mod tests {
         );
         assert!(matches!(world.take_news().as_slice(), []));
         assert!(training.pending.is_empty());
+        let failed_end = testing::run(|out| {
+            let mut broken = Broken;
+            let mut failing = Out {
+                sink: &mut broken,
+                log: &mut *out.log,
+                wire: out.wire,
+                sender: out.sender,
+            };
+            training.handle(&ask(TrainingRequest::End), &mut world, &mut failing)
+        });
+        assert!(failed_end.result.is_err());
+        assert!(training.trainer.as_ref().unwrap().offer.is_some());
+        assert_eq!(training.points, Some(3));
     }
 
     #[test]
