@@ -19,6 +19,9 @@
 //! damps it; that a skipped step can take two pushes is not modelled.
 use std::time::Duration;
 
+/// Inert numerical criteria for a future owned Titanium wet-move step.
+pub mod titanium_move;
+
 /// One liquid's factors in the step (0x4bfe0f, read R33 section 2).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -402,6 +405,24 @@ impl WetVelocity {
         )
     }
 
+    /// Native vertical velocity in world units per program tick. This is an
+    /// owned-state observation, not a setter or evidence of movement authority.
+    #[must_use]
+    pub const fn vertical_per_tick(self) -> f32 {
+        self.vertical
+    }
+
+    /// Rotates already-owned horizontal axes by one quarter turn, retaining
+    /// vertical velocity and phase. This is an axis conversion, not a new seed.
+    #[must_use]
+    pub const fn quarter_turn(self, clockwise: bool) -> Self {
+        let [x, y] = self.horizontal;
+        Self {
+            horizontal: if clockwise { [y, -x] } else { [-y, x] },
+            ..self
+        }
+    }
+
     /// Holds each axis within `caps`: on entering water, where the program
     /// keeps the land or fall velocity and damps it (the slower choice,
     /// recording checklist 6.483), and when the caps drop.
@@ -423,6 +444,22 @@ impl WetVelocity {
     /// far the sweep actually moved the body down.
     pub fn floor_blocked(&mut self, achieved_down: f32) {
         if achieved_down < 0.001 && self.vertical < -1.0 {
+            self.vertical = -1.0;
+        }
+    }
+
+    /// Zeros only native vertical velocity, retaining horizontal carry and the
+    /// existing integrator phase. Used by a qualified collision owner's floor
+    /// snap or saved-good revert; this does not qualify a pose or create rest.
+    pub fn zero_vertical(&mut self) {
+        self.vertical = 0.0;
+    }
+
+    /// The absolute-height native fast-sink clamp. Its ordinary, not-refused,
+    /// nonstationary branch must be established by the collision owner first.
+    /// Legacy `floor_blocked` callers retain their existing behavior.
+    pub fn clamp_blocked_sink(&mut self, achieved_height: f32) {
+        if titanium_move::tiny_height_fast_sink(achieved_height, self.vertical) == Some(true) {
             self.vertical = -1.0;
         }
     }

@@ -472,7 +472,7 @@ struct PreparedMove<'a> {
     /// Trace validation is independent of the already accepted movement.
     history: Result<Option<(super::MovementPath, Instant)>>,
     ground: Option<GroundState>,
-    wet: Option<super::water::WetVelocity>,
+    wet: Option<super::swim_scene::Trial>,
 }
 
 impl PreparedMove<'_> {
@@ -1463,8 +1463,10 @@ impl MotionSession {
 
     /// Validates ordinary water input from an independently matched reset and
     /// the last accepted state. Unknown/withdrawn controls, an uncertain entry,
-    /// or an unexplained endpoint uses the existing checks unchanged and earns
-    /// no replay state. Vertical bounds and report cadence remain unchanged.
+    /// or an unexplained legacy optional tape uses the existing checks and earns
+    /// no replay state. A physical scene tape must match its complete path;
+    /// failure refuses that trial before the caller returns to ordinary Move.
+    /// Vertical bounds and report cadence remain unchanged.
     /// Only a matching local acceptance commits the trial; no packet ACK is
     /// inferred. The typed ordinary producer records actual integrator calls.
     ///
@@ -1485,7 +1487,19 @@ impl MotionSession {
             self.guard.sample_interval_ready(request.created),
             "movement samples arrive too frequently"
         );
-        let wet = controls.and_then(|controls| self.swim_trial(request, controls).ok());
+        let replay = controls.map(|controls| self.swim_trial(request, controls));
+        let wet = match replay {
+            Some(Ok(trial)) => Some(trial),
+            Some(Err(reason)) if controls.is_some_and(super::SwimControls::uses_scene) => {
+                // A complete-frame scene producer must not present an interior
+                // path when only its endpoint passed the legacy guard. Refuse
+                // this trial; its caller can hand back to ordinary Move. Unknown
+                // entry and legacy optional tapes keep their existing fallback.
+                self.wet.invalidate();
+                return Err(reason);
+            }
+            Some(Err(_)) | None => None,
+        };
         if wet.is_none() {
             self.wet.invalidate();
         }
@@ -1493,14 +1507,15 @@ impl MotionSession {
             .submit(send)
     }
 
-    /// Read-only diagnostic of ordinary horizontal replay eligibility and match.
+    /// Read-only diagnostic of ordinary replay eligibility and endpoint match.
     /// This neither admits a proposal nor commits state, sends a packet, or
     /// replaces the full movement/control/timing checks in `send_swim_sample`.
     /// No diagnostics are emitted unless the caller explicitly requests them.
     ///
     /// # Errors
     /// Identifies unavailable continuity, controls, calibration or an unmatched
-    /// horizontal endpoint. Success is only a replay match, not movement approval.
+    /// endpoint. Scene replay also checks Z. Success is only a replay match,
+    /// not movement approval.
     pub fn inspect_swim_replay(
         &self,
         request: &MovementRequest,
@@ -1513,7 +1528,7 @@ impl MotionSession {
         &self,
         request: &MovementRequest,
         controls: &super::SwimControls,
-    ) -> Result<super::water::WetVelocity> {
+    ) -> Result<super::swim_scene::Trial> {
         ensure!(
             request.mode == MovementMode::Swim && request.support.is_none(),
             "swim replay requires ordinary unsupported water motion"
@@ -1544,13 +1559,24 @@ impl MotionSession {
             request.position.heading,
             request.created,
             self.guard.sampled,
+            [self.position.x, self.position.y, self.position.z],
         )?;
-        let error = (request.position.x - self.position.x - expected[0])
+        let mut error = (request.position.x - self.position.x - expected[0])
             .hypot(request.position.y - self.position.y - expected[1]);
-        ensure!(
-            error <= 0.01,
-            "native swim horizontal endpoint differs by {error}"
-        );
+        if velocity.scene.is_some() {
+            error = error.hypot(request.position.z - self.position.z - expected[2]);
+        }
+        if velocity.scene.is_some() {
+            ensure!(
+                error <= 0.01,
+                "native swim scene endpoint differs by {error}"
+            );
+        } else {
+            ensure!(
+                error <= 0.01,
+                "native swim horizontal endpoint differs by {error}"
+            );
+        }
         Ok(velocity)
     }
 
@@ -1590,7 +1616,7 @@ impl MotionSession {
         request: &MovementRequest,
         now: Instant,
         state: Option<GroundState>,
-        wet: Option<super::water::WetVelocity>,
+        wet: Option<super::swim_scene::Trial>,
     ) -> Result<PreparedMove<'_>> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(self.pad_arrival.is_none(), "pad arrival physics is pending");

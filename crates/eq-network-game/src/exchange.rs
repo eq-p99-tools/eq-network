@@ -306,13 +306,14 @@ pub fn busy(own_id: u16, asker: u32) -> Result<EncodedCommand> {
     Ok(packet)
 }
 
-/// The player clicks Give or Trade.
+/// The player clicks Give or Trade. The accepted-state byte is set before
+/// sending; the remaining bytes of that word are padding, kept zero here.
 ///
 /// # Errors
 /// Rejects the reserved zero ID.
 pub fn accept(own_id: u16) -> Result<EncodedCommand> {
     ensure!(own_id != 0, "the player has no spawn ID");
-    Ok(pair(ACCEPT_OPCODE, u32::from(own_id), 0))
+    Ok(pair(ACCEPT_OPCODE, u32::from(own_id), 1))
 }
 
 /// The player closes the window.
@@ -432,7 +433,7 @@ mod tests {
             accept(7).unwrap(),
             EncodedCommand {
                 opcode: ACCEPT_OPCODE,
-                body: vec![7, 0, 0, 0, 0, 0, 0, 0],
+                body: vec![7, 0, 0, 0, 1, 0, 0, 0],
             }
         );
         assert_eq!(
