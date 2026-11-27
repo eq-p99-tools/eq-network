@@ -71,7 +71,7 @@ impl HitPointBasis {
         } else {
             reported
                 .saturating_sub(i64::try_from(self.local_damage).unwrap_or(i64::MAX))
-                .max(-32768)
+                .clamp(-32768, 10_000_000)
         };
         local.checked_add(self.item_hit_points)
     }
@@ -248,6 +248,37 @@ pub fn eqmac_berserk(opcode: u16, body: &[u8]) -> Result<Option<bool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_hp_delta_clamps_the_stored_base_before_the_equipment_bonus() {
+        let basis = HitPointBasis {
+            reported_current: 10_000_010,
+            reported_maximum: 10_000_020,
+            item_hit_points: -20,
+            inventory_revision: 1,
+            local_damage: 1,
+            damage_floor: None,
+        };
+        assert_eq!(basis.current(), Some(9_999_980));
+        let lower = HitPointBasis {
+            reported_current: -32760,
+            reported_maximum: 100,
+            item_hit_points: -50,
+            local_damage: 100,
+            ..basis
+        };
+        // The final value can be below the stored-base bound.
+        assert_eq!(lower.current(), Some(-32818));
+        // Merely receiving a report does not apply the delta routine's clamp.
+        assert_eq!(
+            HitPointBasis {
+                local_damage: 0,
+                ..basis
+            }
+            .current(),
+            Some(9_999_990)
+        );
+    }
 
     #[test]
     fn stuns_carry_their_length_and_preserve_received_zero() {
