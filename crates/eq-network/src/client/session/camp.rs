@@ -194,7 +194,7 @@ mod stun_tests;
 
 #[cfg(test)]
 #[path = "camp_transport_tests.rs"]
-mod transport_tests;
+pub(super) mod transport_tests;
 
 impl Feature for Camp {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -372,6 +372,19 @@ impl Feature for Camp {
             out.log.send(ClientEvent::World(WorldEvent::Camp(
                 CampStatus::ClosedWithoutReply,
             )))?;
+            world.end(ZoneExit::CharacterSelect);
+        }
+        Ok(())
+    }
+
+    fn peer_closed(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        // Only successful Logout submission commits the local departure.
+        // A close while idle, waiting for a stop or counting down is a failure.
+        if matches!(self.phase, Phase::LoggingOut(_)) {
+            out.log.send(ClientEvent::World(WorldEvent::Camp(
+                CampStatus::ServerClosedWithoutReply,
+            )))?;
+            self.phase = Phase::Idle;
             world.end(ZoneExit::CharacterSelect);
         }
         Ok(())

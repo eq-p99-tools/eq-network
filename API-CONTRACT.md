@@ -1124,6 +1124,14 @@ as headless or scripted runs and this crate's tests.
 ## Camp completion evidence
 
 `CampStatus::Camped` now means an actual `Message::LoggedOut` was received.
+On P99, a matching no-reason peer disconnect after successful Logout submission
+ends the local camp with `CampStatus::ServerClosedWithoutReply`. This is distinct
+from a received LogoutReply and the local close deadline: it does not confirm
+server application acceptance or cleanup. Idle, cancelled and preparing camps,
+opaque reason codes, out-of-session and other failures retain their error path.
+Applications after a terminal control remain unread, including later logout
+replies in the same combined datagram (6.695).
+
 The additive `CampStatus::ClosedWithoutReply` instead names the documented local
 logout-close deadline, with unchanged timing and local selection/desktop routing.
 It does not confirm server logout, cleanup or a reconnect cooldown waiver.

@@ -491,6 +491,10 @@ pub enum CampStatus {
     /// The documented local logout-close deadline elapsed without a reply.
     /// Selection follows locally; server logout/cleanup is unconfirmed.
     ClosedWithoutReply,
+    /// After Logout was submitted, the P99 peer explicitly closed its session
+    /// without a preceding logout reply. Local selection follows; application
+    /// acknowledgement and server cleanup remain unconfirmed.
+    ServerClosedWithoutReply,
     /// Local validation rejected the request before transmission.
     Rejected(String),
 }

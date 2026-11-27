@@ -16,7 +16,9 @@ fn datagram(opcode: u16, body: &[u8]) -> Vec<u8> {
     packet
 }
 
-fn logout_peer(reply: bool) -> (Session, thread::JoinHandle<UdpSocket>) {
+pub(in crate::client::session) fn logout_peer(
+    reply: bool,
+) -> (Session, thread::JoinHandle<UdpSocket>) {
     let server = UdpSocket::bind("127.0.0.1:0").unwrap();
     server
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -58,6 +60,11 @@ fn logout_peer(reply: bool) -> (Session, thread::JoinHandle<UdpSocket>) {
         }
         combined.push(u8::try_from(terminal.len()).unwrap());
         combined.extend_from_slice(&terminal);
+        // A terminal-first packet may contain later replies, which transport
+        // must not turn into received application authority.
+        if !reply {
+            combined.extend_from_slice(&[6, 0, 9, 0, 0, 0xdc, 0x3c]);
+        }
         server.send_to(&datagram(3, &combined), client).unwrap();
         server
     });
