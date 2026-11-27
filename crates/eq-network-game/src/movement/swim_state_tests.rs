@@ -68,6 +68,17 @@ fn reference(
     kind: WetKind,
     seconds: f32,
 ) -> [f32; 3] {
+    reference_and_distance(velocity, calibrated, heading, input, kind, seconds).0
+}
+
+fn reference_and_distance(
+    velocity: &mut WetVelocity,
+    calibrated: MotionCalibration,
+    heading: f32,
+    input: SwimInput,
+    kind: WetKind,
+    seconds: f32,
+) -> ([f32; 3], f32) {
     let swim = calibrated.swim.unwrap();
     let forward = |pace| match pace {
         Pace::Run => swim.forward,
@@ -101,19 +112,28 @@ fn reference(
     };
     let (sin, cos) = (heading / 512. * std::f32::consts::TAU).sin_cos();
     velocity.clamp(swim.caps());
-    let (flat, up) = velocity.advance(
-        swim.set_for(kind),
-        WetInput {
-            horizontal: [sin * along + cos * side, cos * along - sin * side],
-            vertical: 0.,
-            jump: false,
-        },
-        seconds,
-    );
-    [flat[0], flat[1], up]
+    let input = WetInput {
+        horizontal: [sin * along + cos * side, cos * along - sin * side],
+        vertical: 0.,
+        jump: false,
+    };
+    let mut left = seconds;
+    let mut total = [0.; 3];
+    let mut traveled = 0.;
+    while left > 0. {
+        let piece = velocity
+            .advance_piece(WetFrameMedium::Water(swim.set_for(kind)), input, left)
+            .unwrap();
+        total[0] += piece.horizontal[0];
+        total[1] += piece.horizontal[1];
+        total[2] += piece.vertical;
+        traveled += piece.horizontal[0].hypot(piece.horizontal[1]);
+        left -= piece.seconds;
+    }
+    (total, traveled)
 }
 
-fn advance(
+fn candidate(
     session: &mut MotionSession,
     velocity: &mut WetVelocity,
     frames: &[(Duration, f32, SwimInput, WetKind)],
@@ -129,7 +149,7 @@ fn advance(
             heading,
             input,
             kind,
-            (until - previous).as_secs_f32(),
+            until.checked_sub(previous).unwrap().as_secs_f32(),
         );
         for (total, delta) in moved.iter_mut().zip(delta) {
             *total += delta;
@@ -140,8 +160,17 @@ fn advance(
     let now = basis.started_at() + previous;
     let request = request(session.position(), moved, frames.last().unwrap().1, now);
     let controls = SwimControls::new(basis, controls).unwrap();
+    (request, controls)
+}
+
+fn advance(
+    session: &mut MotionSession,
+    velocity: &mut WetVelocity,
+    frames: &[(Duration, f32, SwimInput, WetKind)],
+) -> (MovementRequest, SwimControls) {
+    let (request, controls) = candidate(session, velocity, frames);
     session
-        .send_swim_sample(&request, Some(&controls), now, |_| Ok(()))
+        .send_swim_sample(&request, Some(&controls), request.created, |_| Ok(()))
         .unwrap();
     assert_eq!(session.position(), request.position);
     assert!(session.swim_basis().is_some());
@@ -184,6 +213,7 @@ fn three_angular_conditions_use_observed_frames_and_report_path_separately_from_
             let mut session = owner(start, 0);
             let mut velocity = WetVelocity::default();
             let mut traveled = 0.;
+            let mut report_chords = 0.;
             let mut elapsed = 0_u64;
             while elapsed < 10_000 {
                 let before = session.position();
@@ -201,16 +231,32 @@ fn three_angular_conditions_use_observed_frames_and_report_path_separately_from_
                         WetKind::Normal,
                     ));
                 }
+                let mut path_velocity = velocity;
+                let mut previous = Duration::ZERO;
+                for &(until, heading, input, kind) in &frames {
+                    traveled += reference_and_distance(
+                        &mut path_velocity,
+                        calibration(0),
+                        heading,
+                        input,
+                        kind,
+                        until.checked_sub(previous).unwrap().as_secs_f32(),
+                    )
+                    .1;
+                    previous = until;
+                }
                 let (request, _) = advance(&mut session, &mut velocity, &frames);
-                traveled += (request.position.x - before.x).hypot(request.position.y - before.y);
+                report_chords +=
+                    (request.position.x - before.x).hypot(request.position.y - before.y);
                 elapsed += milliseconds;
             }
             let chord = session.position().x.hypot(session.position().y);
             assert!(traveled > 50. && chord <= traveled + 0.01);
+            assert!(report_chords <= traveled + 0.01 && chord <= report_chords + 0.01);
             if degrees > 1. {
                 assert!(traveled > chord + 1.);
             }
-            eprintln!("synthetic angular_rate={degrees} sample_ms={milliseconds} accepted_path={traveled} endpoint_chord={chord}; not a live replay");
+            eprintln!("synthetic angular_rate={degrees} sample_ms={milliseconds} traveled_path={traveled} sum_report_chords={report_chords} endpoint_chord={chord}; not a live replay");
         }
     }
 }
@@ -569,7 +615,7 @@ fn malformed_observations_have_no_phase_or_velocity_escape_hatch() {
 #[test]
 fn calibration_modes_holds_and_explicit_withdrawal_destroy_continuity() {
     let start = Instant::now();
-    for seam in 0..5 {
+    for seam in 0..7 {
         let mut session = owner(start, 0);
         let mut velocity = WetVelocity::default();
         advance(
@@ -588,8 +634,161 @@ fn calibration_modes_holds_and_explicit_withdrawal_destroy_continuity() {
             1 => session.withdraw_swim_controls(),
             2 => session.set_hold(Hold::Stunned),
             3 => session.stop_voluntary(),
-            _ => session.withdraw(),
+            4 => session.withdraw(),
+            5 => {
+                let request = MovementRequest::new(
+                    MovementMode::Forward,
+                    11,
+                    Position {
+                        y: session.position().y + 0.1,
+                        ..session.position()
+                    },
+                    now + Duration::from_millis(100),
+                );
+                session
+                    .send_move_sample(&request, request.created, |_| Ok(()))
+                    .unwrap();
+            }
+            _ => {
+                let mut options = session.options();
+                options.fly = true;
+                session.set_options(options, now).unwrap();
+            }
         }
         assert!(session.swim_basis().is_none());
+    }
+}
+
+#[test]
+fn a_replayed_horizontal_endpoint_still_obeys_vertical_caps_and_ordinary_timing() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let basis = session.swim_basis();
+    let mut velocity = WetVelocity::default();
+    let (mut proposed, controls) = candidate(
+        &mut session,
+        &mut velocity,
+        &[(
+            Duration::from_millis(100),
+            0.,
+            SwimInput::Forward(Pace::Run),
+            WetKind::Normal,
+        )],
+    );
+    proposed.position.z += 100.;
+    assert!(session
+        .send_swim_sample(&proposed, Some(&controls), proposed.created, |_| panic!(
+            "vertical cap bypassed"
+        ))
+        .is_err());
+    assert_eq!(session.swim_basis(), basis);
+    let too_soon = request(
+        Position::default(),
+        [0., -0.1, 0.],
+        0.,
+        start + Duration::from_millis(10),
+    );
+    assert!(session
+        .send_swim_sample(&too_soon, None, too_soon.created, |_| panic!(
+            "cadence bypassed"
+        ))
+        .is_err());
+}
+
+#[test]
+fn accepting_owned_controls_does_not_change_the_existing_report_gate() {
+    let start = Instant::now();
+    let gate = UpdateGate::Flagged {
+        pack: |sample| sample.packet(),
+        rule: FlagRule {
+            spacing: Duration::from_millis(280),
+            heading_step: 0.,
+            ..super::super::TITANIUM_FLAGS
+        },
+    };
+    let mut controlled = owner(start, 0).with_gate(Some(gate));
+    let mut legacy = owner(start, 0).with_gate(Some(gate));
+    let mut velocity = WetVelocity::default();
+    let mut controlled_packets = Vec::new();
+    let mut legacy_packets = Vec::new();
+    for _ in 0..24 {
+        let (request, controls) = candidate(
+            &mut controlled,
+            &mut velocity,
+            &[(
+                Duration::from_millis(100),
+                0.,
+                SwimInput::Forward(Pace::Run),
+                WetKind::Normal,
+            )],
+        );
+        controlled
+            .send_swim_sample(&request, Some(&controls), request.created, |packet| {
+                controlled_packets.push(*packet);
+                Ok(())
+            })
+            .unwrap();
+        legacy
+            .send_move_sample(&request, request.created, |packet| {
+                legacy_packets.push(*packet);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(controlled.position(), legacy.position());
+        assert!(controlled.swim_basis().is_some());
+    }
+    assert_eq!(controlled_packets, legacy_packets);
+    assert!(controlled_packets.len() < 24 && controlled_packets.len() > 1);
+}
+
+#[test]
+fn foreign_receipts_and_favorable_endpoint_arcs_do_not_authorize_backing() {
+    let start = Instant::now();
+    let mut foreign = MotionSession::new(12, 7, Position::default(), start)
+        .unwrap()
+        .with_swimming(true);
+    foreign.calibrate(calibration(0), start).unwrap();
+    let mut session = owner(start, 0);
+    let controls = SwimControls::new(
+        foreign.swim_basis().unwrap(),
+        vec![piece(100, 0., SwimInput::Idle)],
+    )
+    .unwrap();
+    let bad = request(
+        Position::default(),
+        [0., -0.1, 0.],
+        0.,
+        start + Duration::from_millis(100),
+    );
+    assert!(session
+        .send_swim_sample(&bad, Some(&controls), bad.created, |_| panic!(
+            "foreign basis used"
+        ))
+        .is_err());
+    for quarter in 1..=8_u16 {
+        let mut session = owner(start, 0);
+        let from_heading = (f32::from(quarter - 1) * 128.).rem_euclid(512.);
+        let to_heading = (from_heading + 128.).rem_euclid(512.);
+        let (sin, cos) = (to_heading / 512. * std::f32::consts::TAU).sin_cos();
+        let controls = SwimControls::new(
+            session.swim_basis().unwrap(),
+            vec![piece(
+                100,
+                from_heading,
+                SwimInput::Strafe(StrafeSide::Right, Pace::Run),
+            )],
+        )
+        .unwrap();
+        let bad = request(
+            Position::default(),
+            [-0.2 * sin, -0.2 * cos, 0.],
+            to_heading,
+            start + Duration::from_millis(100),
+        );
+        assert!(session
+            .send_swim_sample(&bad, Some(&controls), bad.created, |_| panic!(
+                "fitted heading arc used"
+            ))
+            .is_err());
     }
 }
