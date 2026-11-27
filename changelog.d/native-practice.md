@@ -1,0 +1,1 @@
+- Keep P99 practice points and coins locally at an accepted Practice press, allow consecutive practice and trainer reopening, and let received updates replace projections without charging twice. Quietly count Titanium's default-ignored 0x3464 without treating it as training confirmation.

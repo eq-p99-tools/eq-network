@@ -183,14 +183,12 @@ impl Training {
         {
             return Ok(());
         }
-        if self.p99 {
-            if self.trainer.is_some() {
-                return actions::refuse(
-                    command,
-                    "Finish training with the current guildmaster first.",
-                    out.log,
-                );
-            }
+        if self.p99 && self.trainer.is_some() {
+            return actions::refuse(
+                command,
+                "Finish training with the current guildmaster first.",
+                out.log,
+            );
         }
         if let Some(open) = self.trainer.take() {
             if open.offer.is_none() {
@@ -1424,9 +1422,20 @@ mod tests {
                                 .unwrap()
                         ]
                     );
-                    let practice = training.pending.front().unwrap();
-                    assert_eq!(practice.from, u32::from(value.unwrap()));
-                    assert_eq!(practice.cost, if value == Some(20) { 10 } else { 0 });
+                    if project1999 {
+                        assert!(training.pending.is_empty());
+                        assert_eq!(training.points, Some(2));
+                        assert!(matches!(world.take_news().as_slice(),
+                            [Message::Event(WorldEvent::Training(TrainingUpdate::Practiced {
+                                subject: TrainingSubject::Language(got), from, cost
+                            })), Message::Event(WorldEvent::PracticePoints(2))]
+                            if *got == language && *from == u32::from(value.unwrap())
+                                && *cost == if value == Some(20) { 10 } else { 0 }));
+                    } else {
+                        let practice = training.pending.front().unwrap();
+                        assert_eq!(practice.from, u32::from(value.unwrap()));
+                        assert_eq!(practice.cost, if value == Some(20) { 10 } else { 0 });
+                    }
                 } else {
                     assert!(outcome.sent.is_empty(), "refusal must encode no command");
                     assert_eq!(refusals(&outcome.events).len(), 1);
