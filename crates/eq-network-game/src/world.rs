@@ -1059,6 +1059,14 @@ pub enum WorldEvent {
     },
     /// Server-defined doors and their latest action instructions.
     Doors(crate::doors::DoorUpdate),
+    /// Received destination zones by authored boundary reference. Replaces the
+    /// previous mapping; an unreadable or empty table supplies an empty map.
+    ZoneLineZones {
+        /// Admission owning the received table.
+        session_id: u64,
+        /// Boundary reference to destination zone ID, never local source geometry.
+        zones: std::collections::BTreeMap<u32, u16>,
+    },
     /// Result of validating/submitting a door request, not proof that the door opened.
     DoorAction {
         /// Current admission.
