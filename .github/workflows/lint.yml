@@ -15,19 +15,23 @@ concurrency:
 jobs:
   format:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
   dependencies:
     name: Dependency policy
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: taiki-e/install-action@v2
         with:
-          command: check
+          # Match the version in cargo-deny-action@v2's Docker image.
+          tool: cargo-deny@0.22.1
+          fallback: none
+      - run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check
