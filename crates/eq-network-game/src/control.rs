@@ -30,7 +30,7 @@ use std::time::Duration;
 impl crate::GameDialect {
     /// Whether this program's signed HP controls unconscious posture and
     /// voluntary input. Only Titanium's entry/recovery rules are established;
-    /// Mac and RoF2 remain unread.
+    /// Mac and later generations remain unread.
     #[must_use]
     pub const fn models_unconscious(self) -> bool {
         match self {
