@@ -22,7 +22,10 @@ use eq_network_game::{
     inventory::{Inventory, InventoryUpdate},
     message::Message,
     request::Request,
-    spells::{self, BookActionStatus, SpellBook, SpellUpdate},
+    spells::{
+        self, BookActionStatus, MemorizationCountdown, MemorizationInputs, MemorizationProgress,
+        SpellBook, SpellUpdate,
+    },
     world::{PostureState, WorldEvent},
 };
 use std::time::{Duration, Instant};
@@ -66,13 +69,24 @@ struct PendingBookAction {
     intent: BookIntent,
     requires_sitting: bool,
     delay: Duration,
+    memorization: Option<MemorizationCountdown>,
 }
 
 impl PendingBookAction {
     /// Whether the player has sat long enough.
     fn ready(&self, now: Instant) -> bool {
+        if let Some(countdown) = &self.memorization {
+            return countdown.ready();
+        }
         now.checked_duration_since(self.started)
             .is_some_and(|elapsed| elapsed >= self.delay)
+    }
+
+    fn progress(&self) -> Option<MemorizationProgress> {
+        let BookIntent::Memorize { gem, spell_id } = self.intent else {
+            return None;
+        };
+        Some(self.memorization.as_ref()?.progress(gem, spell_id))
     }
 
     /// The request, checked against the book and cursor as they are now
@@ -165,6 +179,7 @@ impl Spellbook {
     fn prepare(
         &mut self,
         intent: BookIntent,
+        inputs: Option<MemorizationInputs>,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
@@ -188,11 +203,30 @@ impl Spellbook {
             BookIntent::Scribe { .. } if gauge => titanium_scribe_wait(),
             BookIntent::Scribe { .. } | BookIntent::Memorize { .. } => SITTING,
         };
+        let started = Instant::now();
+        let memorization = inputs
+            .filter(|_| !fast && matches!(intent, BookIntent::Memorize { .. }))
+            .and_then(|inputs| {
+                let player = world.player.as_ref()?;
+                Some(MemorizationCountdown::new(
+                    gauge,
+                    inputs,
+                    player.class,
+                    player.level,
+                    player
+                        .skills
+                        .as_ref()
+                        .and_then(|skills| skills.get(31))
+                        .copied(),
+                    started,
+                ))
+            });
         let pending = PendingBookAction {
-            started: Instant::now(),
+            started,
             requires_sitting: !fast,
             delay,
             intent,
+            memorization,
         };
         let checked = self
             .book
@@ -212,12 +246,50 @@ impl Spellbook {
         }
         self.pending = Some(pending);
         report(BookActionStatus::Preparing, out)?;
+        if let Some(progress) = self.pending.as_ref().and_then(PendingBookAction::progress) {
+            out.log
+                .send(ClientEvent::World(WorldEvent::MemorizationProgress {
+                    session_id: world.session_id,
+                    progress: Some(progress),
+                }))?;
+        }
         if fast {
             self.submit(Instant::now(), world, out)
         } else {
             out.log
                 .diagnostic(format!("{starting}; movement or posture changes cancel it"))
         }
+    }
+
+    /// One normal host update. Idle polling does nothing and emits no traffic;
+    /// readiness and the displayed gauge come from this same countdown.
+    fn poll(&mut self, now: Instant, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let changed = self.pending.as_mut().is_some_and(|pending| {
+            pending.memorization.as_mut().is_some_and(|countdown| {
+                if let Some(player) = world.player.as_ref() {
+                    countdown.update_character(
+                        player.class,
+                        player.level,
+                        player
+                            .skills
+                            .as_ref()
+                            .and_then(|skills| skills.get(31))
+                            .copied(),
+                    );
+                }
+                countdown.poll(now)
+            })
+        });
+        if changed {
+            if let Some(progress) = self.pending.as_ref().and_then(PendingBookAction::progress) {
+                out.log
+                    .send(ClientEvent::World(WorldEvent::MemorizationProgress {
+                        session_id: world.session_id,
+                        progress: Some(progress),
+                    }))?;
+            }
+        }
+        self.submit(now, world, out)
     }
 
     /// Deletes or swaps book entries at once.
@@ -443,6 +515,7 @@ impl Feature for Spellbook {
             | ClientCommand::MemorizeSpell { .. }
             | ClientCommand::ForgetSpell { .. }
             | ClientCommand::SetBookOptions { .. } => true,
+            ClientCommand::PollSpellbook { .. } => true,
             ClientCommand::DeleteSpell { .. } => self.edits.deleting,
             ClientCommand::SwapSpell { .. } => self.edits.moving,
             _ => false,
@@ -476,6 +549,16 @@ impl Feature for Spellbook {
             }
         }
         match *command {
+            ClientCommand::PollSpellbook {
+                session_id,
+                created,
+            } => {
+                if session_id == world.session_id {
+                    self.poll(created, world, out)
+                } else {
+                    Ok(())
+                }
+            }
             ClientCommand::SetBookOptions {
                 session_id,
                 memorize_without_sitting,
@@ -499,12 +582,21 @@ impl Feature for Spellbook {
                     slot,
                     spell_id,
                 },
+                None,
                 world,
                 out,
             ),
-            ClientCommand::MemorizeSpell { gem, spell_id, .. } => {
-                self.prepare(BookIntent::Memorize { gem, spell_id }, world, out)
-            }
+            ClientCommand::MemorizeSpell {
+                gem,
+                spell_id,
+                preparation,
+                ..
+            } => self.prepare(
+                BookIntent::Memorize { gem, spell_id },
+                preparation,
+                world,
+                out,
+            ),
             ClientCommand::ForgetSpell { .. } => self.forget(command, world, out),
             _ => self.edit(command, out),
         }
@@ -589,6 +681,140 @@ mod tests {
     use super::*;
     use eq_network_game::{inventory::InventorySlot, world::Position, zoning};
 
+    fn native_memorizing(skill: u32) -> (Spellbook, World, Instant) {
+        let (mut book, mut world) = admitted(Some(73));
+        let mut player = testing::player(7);
+        player.class = Some(2);
+        player.level = 10;
+        player.skills = Some(vec![0; 32]);
+        player.skills.as_mut().unwrap()[31] = skill;
+        world.player.admit(player);
+        let command = ClientCommand::MemorizeSpell {
+            preparation: Some(MemorizationInputs {
+                spell_level: Some(10),
+                bard: None,
+            }),
+            session_id: 5,
+            gem: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        let output = testing::run(|out| book.handle(&command, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1, "only the sitting packet is sent");
+        assert!(output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::MemorizationProgress {
+                progress: Some(MemorizationProgress {
+                    remaining: 92,
+                    approximate: false,
+                    ..
+                }),
+                ..
+            })
+        )));
+        let start = book.pending.as_ref().unwrap().started;
+        (book, world, start)
+    }
+
+    fn gauge_poll(
+        book: &mut Spellbook,
+        world: &mut World,
+        now: Instant,
+    ) -> testing::Outcome<Result<()>> {
+        testing::run(|out| {
+            book.handle(
+                &ClientCommand::PollSpellbook {
+                    session_id: 5,
+                    created: now,
+                },
+                world,
+                out,
+            )
+        })
+    }
+
+    #[test]
+    fn update_driven_memorization_sends_once_at_zero_and_still_waits_for_confirmation() {
+        for hz in [30_u64, 60] {
+            let (mut book, mut world, start) = native_memorizing(200);
+            // An elapsed worker timer cannot submit a native countdown by itself.
+            let untouched =
+                testing::run(|out| book.tick(start + Duration::from_secs(20), &mut world, out));
+            untouched.result.unwrap();
+            assert_eq!(untouched.sent, []);
+            assert_eq!(
+                book.pending.as_ref().unwrap().progress().unwrap().remaining,
+                92
+            );
+            let mut sent = Vec::new();
+            let mut gauges = Vec::new();
+            for frame in 0..=120 {
+                let now = start
+                    + Duration::from_secs(20)
+                    + Duration::from_nanos(frame * 1_000_000_000 / hz);
+                let result = gauge_poll(&mut book, &mut world, now);
+                result.result.unwrap();
+                sent.extend(result.sent);
+                gauges.extend(result.events.into_iter().filter_map(|event| match event {
+                    ClientEvent::World(WorldEvent::MemorizationProgress {
+                        progress: Some(progress),
+                        ..
+                    }) => Some(progress.remaining),
+                    _ => None,
+                }));
+            }
+            assert_eq!(gauges, [69, 46, 23, 0]);
+            assert_eq!(sent, [spells::titanium_memorize(2, 73)]);
+            assert!(book.pending.is_none());
+            assert!(book.answers.outstanding());
+            let answer = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: 73,
+                mode: 1,
+            }));
+            let result = testing::run(|out| book.observe(&answer, &mut world, out));
+            result.result.unwrap();
+            assert_eq!(statuses(&result.events), [&BookActionStatus::Confirmed]);
+            assert!(!book.answers.outstanding());
+        }
+    }
+
+    #[test]
+    fn update_countdown_has_strict_threshold_stalls_cancel_and_ignore_idle_polls() {
+        let (mut book, mut world, start) = native_memorizing(0);
+        for elapsed in [
+            Duration::ZERO,
+            Duration::from_millis(500),
+            Duration::from_secs(30),
+        ] {
+            let result = gauge_poll(&mut book, &mut world, start + elapsed);
+            result.result.unwrap();
+            assert_eq!(result.sent, []);
+        }
+        assert_eq!(
+            book.pending.as_ref().unwrap().progress().unwrap().remaining,
+            84
+        );
+        let movement = ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: Posture::Standing,
+            created: start + Duration::from_secs(31),
+        };
+        let result = testing::run(|out| book.notice(&movement, &mut world, out));
+        result.result.unwrap();
+        assert!(book.pending.is_none());
+        assert!(matches!(
+            statuses(&result.events).as_slice(),
+            [BookActionStatus::Cancelled(_)]
+        ));
+        let idle = gauge_poll(&mut book, &mut world, start + Duration::from_secs(60));
+        idle.result.unwrap();
+        assert_eq!(idle.sent, []);
+        assert_eq!(idle.events, []);
+    }
+
     /// A book with spell 73 in its first slot, or an empty one.
     fn book(spell: Option<u32>) -> SpellBook {
         let mut profile = vec![0; 19592];
@@ -615,6 +841,7 @@ mod tests {
 
     fn memorize(gem: u8) -> ClientCommand {
         ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 5,
             gem,
             spell_id: 73,
@@ -1051,6 +1278,7 @@ mod tests {
 
         spellbook.memorize_without_sitting = true;
         let memorize = ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 5,
             gem: 0,
             spell_id: 42,
@@ -1584,6 +1812,7 @@ mod tests {
             started: now,
             requires_sitting: true,
             delay: SITTING,
+            memorization: None,
             intent: BookIntent::Memorize {
                 gem: 2,
                 spell_id: 73,

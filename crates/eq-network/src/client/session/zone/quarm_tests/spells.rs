@@ -181,6 +181,7 @@ fn memorizing_and_forgetting_wait_for_the_server_before_changing_the_gem() {
     let wire = servers::server_type(ServerProtocol::Quarm).wire();
     let (mut features, mut world) = caster();
     let memorize = ClientCommand::MemorizeSpell {
+        preparation: None,
         session_id: 5,
         gem: 2,
         spell_id: 202,
@@ -237,6 +238,7 @@ fn standing_cancels_a_waiting_memorization() {
         &mut features,
         &mut world,
         &ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 5,
             gem: 2,
             spell_id: 202,
