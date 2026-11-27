@@ -7,6 +7,10 @@ use anyhow::{ensure, Result};
 use serde::Serialize;
 
 mod eqmac;
+mod preparation;
+pub use preparation::{
+    BardMemorization, MemorizationCountdown, MemorizationInputs, MemorizationProgress,
+};
 
 pub use eqmac::{
     decode_eqmac, eqmac_cast, eqmac_delete, eqmac_forget, eqmac_item_cast, eqmac_memorize,

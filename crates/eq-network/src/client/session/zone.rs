@@ -1063,7 +1063,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 154;
+    const KINDS: usize = 155;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1090,6 +1090,7 @@ mod tests {
             ClientCommand::DeleteSpell { .. } => 8,
             ClientCommand::ForgetSpell { .. } => 9,
             ClientCommand::MemorizeSpell { .. } => 10,
+            ClientCommand::PollSpellbook { .. } => 154,
             ClientCommand::CastSpell { .. } => 11,
             ClientCommand::UseKnightAbility { .. } => 87,
             ClientCommand::UseDiscipline { .. } => 88,
@@ -1381,9 +1382,14 @@ mod tests {
                 created,
             },
             ClientCommand::MemorizeSpell {
+                preparation: None,
                 session_id,
                 gem: 0,
                 spell_id: 202,
+                created,
+            },
+            ClientCommand::PollSpellbook {
+                session_id,
                 created,
             },
             ClientCommand::UseDiscipline {
@@ -2337,9 +2343,11 @@ mod tests {
             if matches!(command, ClientCommand::SetServerFilters { .. }) {
                 // The session keeps the filters itself, before the feature
                 // gates, on every server type.
-                assert!(servers.iter().all(|features| features
-                    .capabilities()
-                    .contains(&crate::world::Capability::ServerFilters)));
+                assert!(servers.iter().all(|features| {
+                    features
+                        .capabilities()
+                        .contains(&crate::world::Capability::ServerFilters)
+                }));
                 continue;
             }
             // Built and tested, and listed by no server type until each
@@ -2791,6 +2799,7 @@ mod tests {
             created: Instant::now(),
         };
         let memorize = ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: 5,
             gem: 2,
             spell_id: 204,
@@ -2894,6 +2903,7 @@ mod tests {
             outcome.events.as_slice(),
             [
                 ClientEvent::World(WorldEvent::CastPending {
+                    gem: Some(0),
                     session_id: 5,
                     spell_id: Some(202)
                 }),
@@ -2903,10 +2913,12 @@ mod tests {
                 }),
                 ClientEvent::Diagnostic(reason),
                 ClientEvent::World(WorldEvent::CastPending {
+                    gem: Some(0),
                     session_id: 5,
                     spell_id: Some(202)
                 }),
                 ClientEvent::World(WorldEvent::CastPending {
+                    gem: None,
                     session_id: 5,
                     spell_id: None
                 }),
@@ -3008,6 +3020,7 @@ mod tests {
             })
             .collect();
         let pending = WorldEvent::CastPending {
+            gem: Some(2),
             session_id: 5,
             spell_id: Some(202),
         };

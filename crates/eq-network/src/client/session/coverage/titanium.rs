@@ -18,6 +18,15 @@ use super::{
 #[allow(clippy::too_many_lines, reason = "one row per message")]
 pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
+        // Native dispatcher 0x45b8f0/0x45f687 defaults this opcode to
+        // accepted/ignored (6.684). Its purpose is still unknown: no ACK.
+        0x3464 => sent(
+            "unidentified native no-op",
+            P99,
+            Unread(Needless(
+                "Titanium's dispatcher ignores it; its purpose is unknown (6.684)",
+            )),
+        ),
         // `EQEmu`'s Titanium opcode list leaves OP_FinishWindow and
         // OP_FinishWindow2 at 0, and its stream sends them under 0, empty,
         // after a container closes or a trade ends; OP_TargetReject goes

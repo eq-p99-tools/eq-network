@@ -210,6 +210,12 @@ impl Feature for Character {
                 player.level = *current;
             }
             WorldEvent::Skill { skill_id, value } => player.apply_skill(*skill_id, *value),
+            WorldEvent::PracticePoints(points) => player.practice_points = Some(*points),
+            WorldEvent::Training(TrainingUpdate::Practiced {
+                subject: eq_network_game::training::TrainingSubject::Skill(skill),
+                from,
+                ..
+            }) if *from > 0 => player.apply_skill(*skill, from.saturating_add(1)),
             WorldEvent::Disciplines(list) => player.disciplines = Some(list.clone()),
             // A practice at a guildmaster is a skill's new value too.
             WorldEvent::Training(TrainingUpdate::Trained { skill, value, .. }) => {

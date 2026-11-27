@@ -256,7 +256,18 @@ pub enum GameCommand {
         gem: u8,
         /// Spell already present in the server-provided book.
         spell_id: u32,
+        /// Some opts into update-driven preparation using these installed
+        /// facts. None retains legacy library preparation for older callers.
+        preparation: Option<crate::spells::MemorizationInputs>,
         /// Request creation time; queued actions expire.
+        created: std::time::Instant,
+    },
+    /// An ordinary client update opportunity during active memorization.
+    /// This emits no packet until the shared preparation reaches zero.
+    PollSpellbook {
+        /// Current zone admission.
+        session_id: u64,
+        /// Monotonic time of this update opportunity.
         created: std::time::Instant,
     },
     /// Cancel an explicit beneficial buff, with current provider classification.
@@ -1530,6 +1541,7 @@ impl GameCommand {
             Self::DeleteSpell { .. } => "DeleteSpell",
             Self::ForgetSpell { .. } => "ForgetSpell",
             Self::MemorizeSpell { .. } => "MemorizeSpell",
+            Self::PollSpellbook { .. } => "PollSpellbook",
             Self::CancelBuff(_) => "CancelBuff",
             Self::CastSpell { .. } => "CastSpell",
             Self::StopSong { .. } => "StopSong",
@@ -1703,6 +1715,7 @@ impl GameCommand {
             | Self::DeleteSpell { session_id, .. }
             | Self::ForgetSpell { session_id, .. }
             | Self::MemorizeSpell { session_id, .. }
+            | Self::PollSpellbook { session_id, .. }
             | Self::CastSpell { session_id, .. }
             | Self::SetPosture { session_id, .. }
             | Self::FeignLanded { session_id, .. }
@@ -1848,9 +1861,10 @@ impl GameCommand {
             | Self::GenerateName { .. }
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. } => return None,
-            Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
-                Capability::Spellbook
-            }
+            Self::ScribeSpell { .. }
+            | Self::ForgetSpell { .. }
+            | Self::MemorizeSpell { .. }
+            | Self::PollSpellbook { .. } => Capability::Spellbook,
             // Explicit departures from the official client's behaviour are
             // offered only where the server type permits them.
             Self::SetMovementOptions { .. } | Self::SetBookOptions { .. } => {
@@ -2117,6 +2131,7 @@ impl GameCommand {
             | Self::DeleteSpell { created, .. }
             | Self::ForgetSpell { created, .. }
             | Self::MemorizeSpell { created, .. }
+            | Self::PollSpellbook { created, .. }
             | Self::CastSpell { created, .. }
             | Self::StopSong { created, .. }
             | Self::StopCasting { created, .. }
@@ -2457,6 +2472,7 @@ pub fn encode(
         | GameCommand::UseItem(_)
         | GameCommand::UseBeltItem(_)
         | GameCommand::MemorizeSpell { .. }
+        | GameCommand::PollSpellbook { .. }
         | GameCommand::ForgetSpell { .. }
         | GameCommand::DeleteSpell { .. }
         | GameCommand::SwapSpell { .. }
