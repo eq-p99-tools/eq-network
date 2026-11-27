@@ -4,6 +4,152 @@ use crate::movement::{
     water::*, Pace, SpeedState, StrafeSide, SwimControl, SwimControls, SwimInput,
 };
 
+#[test]
+fn actual_applied_clock_keeps_input_facing_separate_from_the_later_pose() {
+    for turn in [-16_f32, 16.] {
+        let start = Instant::now();
+        let mut session = owner(start, 0);
+        let mut physical = WetVelocity::default();
+        let swim = calibration(0).swim.unwrap();
+        let mut path = 0_f32;
+        for frame in 0..100_u16 {
+            let basis = session.swim_basis().unwrap();
+            let before = session.position();
+            let heading = before.heading;
+            let pose = (heading + turn).rem_euclid(512.);
+            let (sin, cos) = (heading / 512. * std::f32::consts::TAU).sin_cos();
+            let mut until = Duration::ZERO;
+            let mut pieces = Vec::new();
+            let mut travel = [0.; 3];
+            let mut left = 0.1_f32;
+            while left > 0. {
+                let seconds = left.min(WET_FRAME_SECONDS);
+                let input = WetInput {
+                    horizontal: [cos * swim.strafe, -sin * swim.strafe],
+                    vertical: 0.,
+                    jump: false,
+                };
+                let (across, up) = physical.advance(swim.set, input, seconds);
+                travel[0] += across[0];
+                travel[1] += across[1];
+                travel[2] += up;
+                until += Duration::from_secs_f32(seconds);
+                pieces.push(
+                    SwimControl::applied(
+                        until,
+                        heading,
+                        WetKind::Normal,
+                        SwimInput::Strafe(StrafeSide::Left, Pace::Run),
+                        seconds,
+                    )
+                    .unwrap(),
+                );
+                left -= seconds;
+            }
+            let controls = SwimControls::from_applied(basis, pieces, pose).unwrap();
+            let now = start + Duration::from_millis(u64::from(frame + 1) * 100);
+            let request = request(before, travel, pose, now);
+            session
+                .send_swim_sample(&request, Some(&controls), now, |_| Ok(()))
+                .unwrap();
+            assert!(
+                session.swim_basis().is_some(),
+                "actual model replay lost continuity at {frame}"
+            );
+            path += travel[0].hypot(travel[1]);
+        }
+        let end = session.position();
+        let net = end.x.hypot(end.y);
+        assert!(path > 50. && net < path);
+        eprintln!("synthetic applied left strafe turn={turn}: accepted=100 refused=0 path_xy={path} net_xy={net}");
+    }
+}
+
+#[test]
+fn applied_clock_retains_waits_without_invented_idle_and_cannot_spend_extra_time() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let basis = session.swim_basis().unwrap();
+    let control = SwimControl::applied(
+        Duration::from_secs_f32(0.1),
+        0.,
+        WetKind::Normal,
+        SwimInput::Idle,
+        0.1,
+    )
+    .unwrap();
+    let controls = SwimControls::from_applied(basis, vec![control], 0.).unwrap();
+    let first = request(
+        Position::default(),
+        [0.; 3],
+        0.,
+        start + Duration::from_millis(200),
+    );
+    session
+        .send_swim_sample(&first, Some(&controls), first.created, |_| Ok(()))
+        .unwrap();
+    assert!(session.swim_basis().is_some());
+    let control = SwimControl::applied(
+        Duration::from_secs_f32(0.1),
+        0.,
+        WetKind::Normal,
+        SwimInput::Idle,
+        0.09,
+    )
+    .unwrap();
+    assert!(SwimControls::from_applied(basis, vec![control], 0.).is_err());
+    let controls = SwimControls::from_applied(
+        session.swim_basis().unwrap(),
+        vec![SwimControl::applied(
+            Duration::from_secs_f32(0.2),
+            0.,
+            WetKind::Normal,
+            SwimInput::Idle,
+            0.2,
+        )
+        .unwrap()],
+        0.,
+    )
+    .unwrap();
+    let request = request(
+        session.position(),
+        [0.; 3],
+        0.,
+        first.created + Duration::from_millis(100),
+    );
+    session
+        .send_swim_sample(&request, Some(&controls), request.created, |_| Ok(()))
+        .unwrap();
+    assert!(
+        session.swim_basis().is_none(),
+        "extra model time must fall back without proof"
+    );
+}
+
+#[test]
+fn stale_swim_request_does_not_destroy_a_real_corrected_reset() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let old = session.swim_basis().unwrap();
+    let stale = request(
+        Position::default(),
+        [0.; 3],
+        0.,
+        start + Duration::from_millis(100),
+    );
+    let controls = SwimControls::new(old, vec![piece(100, 0., SwimInput::Idle)]).unwrap();
+    let corrected = start + Duration::from_millis(200);
+    session.correct(Position::default(), corrected).unwrap();
+    session.calibrate(calibration(0), corrected).unwrap();
+    let fresh = session.swim_basis();
+    assert!(fresh.unwrap().is_reset());
+    assert_ne!(fresh, Some(old));
+    assert!(session
+        .send_swim_sample(&stale, Some(&controls), corrected, |_| panic!("stale send"))
+        .is_err());
+    assert_eq!(session.swim_basis(), fresh);
+}
+
 fn calibration(rate: i16) -> MotionCalibration {
     super::super::titanium_speeds(&SpeedState {
         run: 0.7,
@@ -610,7 +756,7 @@ fn native_pitch_keeps_full_horizontal_input_and_no_fraction_can_fit_an_endpoint(
     let start = Instant::now();
     let calibrated = calibration(0);
     let swim = calibrated.swim.unwrap();
-    let mut horizontal = None;
+    let mut horizontal: Option<f32> = None;
     for pitch in [
         0.0_f32,
         std::f32::consts::FRAC_PI_4,

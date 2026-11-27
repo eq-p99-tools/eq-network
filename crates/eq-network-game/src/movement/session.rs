@@ -1464,7 +1464,7 @@ impl MotionSession {
     /// or an unexplained endpoint uses the existing checks unchanged and earns
     /// no replay state. Vertical bounds and report cadence remain unchanged.
     /// Only a matching local acceptance commits the trial; no packet ACK is
-    /// inferred. No current client path calls this method.
+    /// inferred. The typed ordinary producer records actual integrator calls.
     ///
     /// # Errors
     /// Returns the ordinary movement/transport errors if that guarded path fails.
@@ -1475,6 +1475,14 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<()> {
+        // A retired input cannot withdraw a newer corrected/reset basis.
+        // These are the same ordinary admission/freshness/spacing checks,
+        // performed before any continuity bookkeeping is invalidated.
+        self.guard.check_current(request, now)?;
+        ensure!(
+            self.guard.sample_interval_ready(request.created),
+            "movement samples arrive too frequently"
+        );
         let wet = controls.and_then(|controls| {
             if request.mode != MovementMode::Swim
                 || request.support.is_some()

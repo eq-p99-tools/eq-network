@@ -294,6 +294,7 @@ impl Feature for Camp {
             } => CampEnd::Standing,
             ClientCommand::Move(_)
             | ClientCommand::GroundFrame { .. }
+            | ClientCommand::SwimFrame { .. }
             | ClientCommand::CrossZoneLine { .. } => CampEnd::Moving,
             ClientCommand::Jump { .. } if waiting => CampEnd::Moving,
             ClientCommand::SetPosture {

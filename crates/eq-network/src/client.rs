@@ -1214,7 +1214,10 @@ impl<'a> Events<'a> {
 
     /// Completes a move discarded outside normal zone action routing.
     fn refuse_move(&mut self, command: &ClientCommand, reason: &str) -> Result<()> {
-        if let ClientCommand::Move(request) | ClientCommand::GroundFrame { request, .. } = command {
+        if let ClientCommand::Move(request)
+        | ClientCommand::GroundFrame { request, .. }
+        | ClientCommand::SwimFrame { request, .. } = command
+        {
             self.send(ClientEvent::World(motion_refused(request, reason)))?;
         }
         Ok(())

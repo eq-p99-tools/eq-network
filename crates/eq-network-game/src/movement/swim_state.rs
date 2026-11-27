@@ -13,6 +13,7 @@ pub struct SwimBasis {
     session: u64,
     revision: u64,
     started: Instant,
+    reset: bool,
 }
 
 impl SwimBasis {
@@ -20,6 +21,13 @@ impl SwimBasis {
     #[must_use]
     pub const fn started_at(self) -> Instant {
         self.started
+    }
+
+    /// Whether this unconsumed receipt comes from a real admission/correction.
+    /// It is never inferred from a position, grant, local pad or input report.
+    #[must_use]
+    pub const fn is_reset(self) -> bool {
+        self.reset
     }
 }
 
@@ -46,6 +54,7 @@ pub struct SwimControl {
     heading: f32,
     kind: water::WetKind,
     input: SwimInput,
+    applied_seconds: Option<f32>,
 }
 
 impl SwimControl {
@@ -70,7 +79,31 @@ impl SwimControl {
             heading,
             kind,
             input,
+            applied_seconds: None,
         })
+    }
+
+    /// Captures one actual call to the ordinary water integrator, retaining its
+    /// exact f32 duration. `until` is the cumulative consumed model duration,
+    /// not a fitted request-wall-time interval. No state or rate is supplied.
+    ///
+    /// # Errors
+    /// Rejects invalid duration or heading. The containing observation also
+    /// checks that all cumulative boundaries match the actual call durations.
+    pub fn applied(
+        until: Duration,
+        heading: f32,
+        kind: water::WetKind,
+        input: SwimInput,
+        seconds: f32,
+    ) -> Result<Self> {
+        ensure!(
+            seconds.is_finite() && seconds > 0.0 && seconds <= 0.25,
+            "invalid applied swim duration"
+        );
+        let mut piece = Self::new(until, heading, kind, input)?;
+        piece.applied_seconds = Some(seconds);
+        Ok(piece)
     }
 
     fn horizontal(self, calibration: MotionCalibration) -> Result<[f32; 2]> {
@@ -122,6 +155,8 @@ impl SwimControl {
 pub struct SwimControls {
     basis: SwimBasis,
     pieces: Vec<SwimControl>,
+    pose: f32,
+    applied: bool,
 }
 
 impl SwimControls {
@@ -137,13 +172,59 @@ impl SwimControls {
         );
         let mut previous = Duration::ZERO;
         for piece in &pieces {
+            ensure!(piece.until > previous, "invalid applied swim boundary");
             ensure!(
                 piece.until > previous && piece.until <= Duration::from_millis(250),
                 "invalid swim control time"
             );
             previous = piece.until;
         }
-        Ok(Self { basis, pieces })
+        let pose = pieces.last().expect("checked nonempty controls").heading;
+        Ok(Self {
+            basis,
+            pieces,
+            pose,
+            applied: false,
+        })
+    }
+
+    /// Captures all physical calls that produced one ordinary controller step.
+    /// The model may have paused while waiting; no unobserved idle is inserted.
+    /// The independent final pose may follow a paced turn after those calls.
+    /// Only a producer observing the actual calls may construct this ledger.
+    ///
+    /// # Errors
+    /// Rejects an invalid final heading, missing durations or a partial/mixed
+    /// model clock. Existing request wall-time and pose checks still apply.
+    pub fn from_applied(basis: SwimBasis, pieces: Vec<SwimControl>, pose: f32) -> Result<Self> {
+        ensure!((0.0..512.0).contains(&pose), "invalid applied swim pose");
+        ensure!(
+            (1..=64).contains(&pieces.len()),
+            "invalid swim control count"
+        );
+        let mut previous = Duration::ZERO;
+        for piece in &pieces {
+            let seconds = piece
+                .applied_seconds
+                .ok_or_else(|| anyhow::anyhow!("missing applied swim duration"))?;
+            ensure!(
+                piece.until.checked_sub(previous) == Some(Duration::from_secs_f32(seconds)),
+                "incomplete applied swim clock"
+            );
+            previous = piece.until;
+        }
+        // Each f32 call is independently rounded to nanoseconds for the
+        // cursor. At most 64 calls can contribute half a nanosecond each.
+        ensure!(
+            previous <= Duration::from_millis(250) + Duration::from_nanos(32),
+            "applied swim interval exceeds cap"
+        );
+        Ok(Self {
+            basis,
+            pieces,
+            pose,
+            applied: true,
+        })
     }
 }
 
@@ -168,6 +249,7 @@ impl Owner {
             session,
             revision: self.revision,
             started,
+            reset: self.reset,
         })
     }
 
@@ -224,15 +306,29 @@ impl Owner {
             .expect("checked nonempty controls")
             .until
             .as_secs_f32();
+        ensure!(created >= started, "swim controls predate their basis");
+        let available = created.duration_since(started).as_secs_f32();
         ensure!(
-            created >= started
-                && (created.duration_since(started).as_secs_f32() - seconds).abs() <= 1e-5,
-            "swim controls do not cover the complete interval"
+            if controls.applied {
+                seconds <= available.min(0.25) + 1e-5
+            } else {
+                (available - seconds).abs() <= 1e-5
+            },
+            "swim controls do not cover the complete applied interval"
         );
         ensure!(
-            controls.pieces.last().expect("checked controls").heading == heading,
+            controls.pose == heading,
             "swim control endpoint heading differs"
         );
+        // The applied ledger covers actual model consumption, not time the
+        // controller spent waiting. The unchanged wall budget still caps it.
+        let physical_start = if controls.applied {
+            created
+                .checked_sub(controls.pieces.last().expect("checked controls").until)
+                .ok_or_else(|| anyhow::anyhow!("invalid applied swim clock"))?
+        } else {
+            started
+        };
         let swim = calibration
             .swim
             .ok_or_else(|| anyhow::anyhow!("water is not calibrated"))?;
@@ -242,11 +338,11 @@ impl Owner {
         let mut total = [0.0; 2];
         for piece in &controls.pieces {
             ensure!(velocity.frame_phase().is_some(), "unknown water phase");
-            // The initial reset may precede calibration. Only observed idle
-            // water frames can fill that prefix; they earn no acceleration.
+            // No non-idle physical call may predate its calibrated grant.
+            // Actual applied pauses contain no fabricated physical calls.
             ensure!(
                 piece.input == SwimInput::Idle
-                    || started
+                    || physical_start
                         .checked_add(previous)
                         .is_some_and(|at| at >= granted_from),
                 "swim input predates the calibrated interval"
@@ -259,11 +355,13 @@ impl Owner {
             let (moved, _) = velocity.advance(
                 swim.set_for(piece.kind),
                 input,
-                piece
-                    .until
-                    .checked_sub(previous)
-                    .expect("checked ordered controls")
-                    .as_secs_f32(),
+                piece.applied_seconds.unwrap_or_else(|| {
+                    piece
+                        .until
+                        .checked_sub(previous)
+                        .expect("checked ordered controls")
+                        .as_secs_f32()
+                }),
             );
             ensure!(velocity.frame_phase().is_some(), "unknown water phase");
             total[0] += moved[0];

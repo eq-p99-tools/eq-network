@@ -76,6 +76,81 @@ fn observed(motion: &MotionSession, physical: &mut WetVelocity) -> (MovementRequ
 }
 
 #[test]
+fn typed_swim_uses_normal_owner_sender_and_queues_receipt_after_local_result() {
+    let start = Instant::now()
+        .checked_sub(Duration::from_millis(200))
+        .unwrap();
+    let mut world = World::new(11);
+    world.admitted = Some(start);
+    world.own_spawn = Some(7);
+    world.player.admit(testing::player(7));
+    let mut feature = Motion::new(true, true, None).with_swimming();
+    feature.belongings = Some((
+        world.inventory.revision(),
+        world.coins.purse,
+        world.coins.cursor,
+    ));
+    let output = testing::run(|out| {
+        let motion = owner(start, out, false);
+        let (request, controls) = observed(&motion, &mut WetVelocity::default());
+        let position = request.position;
+        world.body.admit(motion);
+        let command = ClientCommand::SwimFrame { request, controls };
+        assert!(feature.owns(&command));
+        assert_eq!(command.session_id(), Some(11));
+        feature.handle(&command, &mut world, out).unwrap();
+        assert_eq!(out.log.movement_packets_sent, 1);
+        assert_eq!(world.body.position(), Some(position));
+        position
+    });
+    assert_eq!(output.unreliable.len(), 1);
+    assert!(matches!(
+        output.events.last(),
+        Some(ClientEvent::World(WorldEvent::MotionSent {
+            refused: None,
+            ..
+        }))
+    ));
+    assert!(world.take_news().iter().any(|message| matches!(message,
+        Message::Event(WorldEvent::SwimState { position, created: Some(_), basis: Some(_), .. }) if *position == output.result)));
+}
+
+#[test]
+fn repeated_same_position_corrections_queue_distinct_real_reset_receipts() {
+    let start = Instant::now();
+    let mut world = World::new(11);
+    let mut feature = Motion::new(true, true, None).with_swimming();
+    let output = testing::run(|out| {
+        world.body.admit(owner(start, out, false));
+        feature.publish_swim_state(&mut world, None);
+        let first = world.body.motion.as_ref().unwrap().swim_basis();
+        for milliseconds in [100, 200] {
+            let at = start + Duration::from_millis(milliseconds);
+            let motion = world.body.motion.as_mut().unwrap();
+            motion.correct(Position::default(), at).unwrap();
+            motion.calibrate(calibrated(), at).unwrap();
+            feature.publish_swim_state(&mut world, None);
+        }
+        first
+    });
+    let receipts: Vec<_> = world
+        .take_news()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Event(WorldEvent::SwimState {
+                basis: Some(basis), ..
+            }) => Some(basis),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(receipts.len(), 3);
+    assert_eq!(Some(receipts[0]), output.result);
+    assert!(receipts.iter().all(|basis| basis.is_reset()));
+    assert_ne!(receipts[0], receipts[1]);
+    assert_ne!(receipts[1], receipts[2]);
+}
+
+#[test]
 fn owned_acceptance_and_held_samples_do_not_count_as_sent_packets() {
     let output = testing::run(|out| {
         let mut motion = owner(Instant::now(), out, true);

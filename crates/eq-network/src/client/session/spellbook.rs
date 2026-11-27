@@ -422,6 +422,7 @@ impl Feature for Spellbook {
             || matches!(
                 command,
                 ClientCommand::Move(_)
+                    | ClientCommand::SwimFrame { .. }
                     | ClientCommand::CastSpell { .. }
                     | ClientCommand::UseKnightAbility { .. }
                     | ClientCommand::UseDiscipline { .. }

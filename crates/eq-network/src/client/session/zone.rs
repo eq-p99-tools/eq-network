@@ -909,7 +909,9 @@ fn apply_commands(
         if !handled
             && matches!(
                 command,
-                ClientCommand::Move(_) | ClientCommand::GroundFrame { .. }
+                ClientCommand::Move(_)
+                    | ClientCommand::GroundFrame { .. }
+                    | ClientCommand::SwimFrame { .. }
             )
         {
             unoffered(command, out.log)?;
@@ -1017,7 +1019,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 154;
+    const KINDS: usize = 155;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1082,6 +1084,7 @@ mod tests {
             ClientCommand::ArrivalPlacement { .. } => 107,
             ClientCommand::Move(_) => 28,
             ClientCommand::GroundFrame { .. } => 152,
+            ClientCommand::SwimFrame { .. } => 154,
             ClientCommand::OfferTrade { .. } => 29,
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
@@ -1207,7 +1210,43 @@ mod tests {
         reading_inventory.apply(eq_network_game::inventory::InventoryUpdate::Snapshot(vec![
             note,
         ]));
+        let mut swimmer =
+            eq_network_game::movement::MotionSession::new(session_id, 7, position, created)
+                .unwrap()
+                .with_swimming(true)
+                .with_heading_snapshots(true);
+        swimmer
+            .calibrate(
+                eq_network_game::movement::MotionCalibration {
+                    units_per_second: 7.,
+                    velocity_scale: 1.,
+                    animation: 1,
+                    backward: None,
+                    walk: None,
+                    strafe: None,
+                    diagonal: eq_network_game::movement::DiagonalRates::default(),
+                    swim_backward_units_per_second: Some(0.),
+                    swim: None,
+                },
+                created,
+            )
+            .unwrap();
+        let controls = eq_network_game::movement::SwimControls::new(
+            swimmer.swim_basis().unwrap(),
+            vec![eq_network_game::movement::SwimControl::new(
+                Duration::from_millis(100),
+                0.,
+                eq_network_game::movement::water::WetKind::Normal,
+                eq_network_game::movement::SwimInput::Idle,
+            )
+            .unwrap()],
+        )
+        .unwrap();
         vec![
+            ClientCommand::SwimFrame {
+                request: MovementRequest::new(MovementMode::Swim, session_id, position, created),
+                controls,
+            },
             ClientCommand::StopSong {
                 session_id,
                 created,
