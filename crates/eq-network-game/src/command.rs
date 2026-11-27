@@ -1452,6 +1452,13 @@ pub enum GameCommand {
         /// Complete inputs or explicit withdrawal, never guessed zeroes.
         state: crate::movement::SpeedInputState,
     },
+    /// Read the worker's submitted-position counter without changing motion.
+    MovementPacketSnapshot {
+        /// Admission this observation must belong to.
+        session_id: u64,
+        /// Host-chosen correlation identity, not an admission or report stamp.
+        request_id: u64,
+    },
     /// How far the player's body climbs in one 50 ms program step, in world
     /// units, which the host works out from the player's model and the
     /// client generation's floor sweep: the session's movement guard lets a
@@ -1652,6 +1659,7 @@ impl GameCommand {
             Self::ConfigureMotion { .. } => "ConfigureMotion",
             Self::SpeedInputs { .. } => "SpeedInputs",
             Self::ClimbReach { .. } => "ClimbReach",
+            Self::MovementPacketSnapshot { .. } => "MovementPacketSnapshot",
             Self::DoorRadii { .. } => "DoorRadii",
             Self::Move(..) => "Move",
             Self::GroundFrame { .. } => "GroundFrame",
@@ -1817,6 +1825,7 @@ impl GameCommand {
             | Self::DepopLocalNpc { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
             | Self::SpeedInputs { session_id, .. }
+            | Self::MovementPacketSnapshot { session_id, .. }
             | Self::ClimbReach { session_id, .. }
             | Self::DoorRadii { session_id, .. } => Some(*session_id),
         }
@@ -1872,7 +1881,8 @@ impl GameCommand {
             | Self::GroundFrame { .. }
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
-            | Self::ClimbReach { .. } => Capability::Moving,
+            | Self::ClimbReach { .. }
+            | Self::MovementPacketSnapshot { .. } => Capability::Moving,
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
@@ -2020,6 +2030,7 @@ impl GameCommand {
             // The latest report stands however long it waited.
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. }
+            | Self::MovementPacketSnapshot { .. }
             | Self::DoorRadii { .. }
             | Self::WhoAll { .. }
             | Self::AnswerResurrection { .. }
@@ -2343,6 +2354,7 @@ pub fn encode(
         | GameCommand::SpeedInputs { .. }
         | GameCommand::FeignLanded { .. }
         | GameCommand::ClimbReach { .. }
+        | GameCommand::MovementPacketSnapshot { .. }
         | GameCommand::DoorRadii { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::FinishLocalPad { .. }

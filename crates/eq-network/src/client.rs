@@ -516,6 +516,11 @@ pub struct SessionStatus {
     pub messages: u64,
     /// Number of application packets received in this attempt.
     pub packets: u64,
+    /// Successful player-position application-packet submissions in this run.
+    /// Proposals, encoding, gated reports, failures and transport retransmits
+    /// do not increment it. None means this status has no such observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movement_packets_sent: Option<u64>,
     /// Seconds since the last valid server datagram, if a session is active.
     pub last_received_seconds: Option<u64>,
 }
@@ -533,6 +538,7 @@ impl SessionStatus {
             zone: String::new(),
             messages: 0,
             packets: 0,
+            movement_packets_sent: None,
             last_received_seconds: None,
         }
     }
@@ -703,6 +709,22 @@ pub enum ConnectionStage {
 pub enum ClientEvent {
     /// World state for graphical clients; contains no login or profile secrets.
     World(crate::world::WorldEvent),
+    /// On-demand diagnostic boundary; not movement admission or a wire report.
+    MovementPacketSnapshot {
+        /// Exact current zone admission which answered the request.
+        session_id: u64,
+        /// Echoed host correlation identity.
+        request_id: u64,
+        /// Typed worker-attempt identity, never inferred from a display label.
+        run_id: u64,
+        /// Successful player-position transport submissions in that attempt.
+        sent: u64,
+        /// Monotonic worker observation time, shared only within this process.
+        #[serde(skip)]
+        observed: Instant,
+        /// Wall-clock milliseconds for logs; not an elapsed-time authority.
+        unix_timestamp_ms: i64,
+    },
     /// Periodic health and connection status.
     Status(SessionStatus),
     /// Completed connection milestone.
@@ -1033,6 +1055,7 @@ struct Events<'a> {
     session_id: String,
     zone: String,
     messages: u64,
+    movement_packets_sent: u64,
     /// The world played on: the configured one, or the player's choice.
     server: String,
     character: String,
@@ -1057,6 +1080,7 @@ impl<'a> Events<'a> {
             session_id: String::new(),
             zone: String::new(),
             messages: 0,
+            movement_packets_sent: 0,
             server: config.server.clone(),
             character: config.character.clone(),
             spell_tables: session::spell_tables::Sequence::new(rand::random()),
@@ -1075,6 +1099,7 @@ impl<'a> Events<'a> {
         self.ready = None;
         self.zone.clear();
         self.messages = 0;
+        self.movement_packets_sent = 0;
         self.server.clone_from(&self.config.server);
         self.character.clone_from(&self.config.character);
     }
@@ -1209,6 +1234,7 @@ impl<'a> Events<'a> {
             zone: self.zone.clone(),
             messages: self.messages,
             packets,
+            movement_packets_sent: Some(self.movement_packets_sent),
             last_received_seconds,
         }))
     }

@@ -975,7 +975,12 @@ impl Motion {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
         let mut transport_failed = false;
-        let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
+        let (wire, sender, sink, sent_packets) = (
+            out.wire,
+            out.sender,
+            &mut *out.sink,
+            &mut out.log.movement_packets_sent,
+        );
         if ground.is_some() {
             motion.set_hold(hold(
                 world.posture.current(),
@@ -989,6 +994,9 @@ impl Motion {
             let packet = wire.encode(&Request::Position(*sample), sender)?;
             let sent = sink.send_unreliable(&packet);
             transport_failed = sent.is_err();
+            if sent.is_ok() {
+                *sent_packets = sent_packets.saturating_add(1);
+            }
             sent
         };
         let result = match ground {
@@ -1202,6 +1210,7 @@ impl Feature for Motion {
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
                 | ClientCommand::ClimbReach { .. }
+                | ClientCommand::MovementPacketSnapshot { .. }
                 | ClientCommand::SetMovementOptions { .. }
         )
     }
@@ -1212,6 +1221,26 @@ impl Feature for Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        // Read-only diagnostics bypass refresh/calibration/input observation.
+        if let ClientCommand::MovementPacketSnapshot {
+            session_id,
+            request_id,
+        } = *command
+        {
+            if session_id != world.session_id || !world.ready() {
+                return out
+                    .log
+                    .diagnostic("Ignored movement counter snapshot outside its admission".into());
+            }
+            return out.log.send(ClientEvent::MovementPacketSnapshot {
+                session_id: world.session_id,
+                request_id,
+                run_id: out.log.spell_tables.run_id(),
+                sent: out.log.movement_packets_sent,
+                observed: Instant::now(),
+                unix_timestamp_ms: jiff::Timestamp::now().as_millisecond(),
+            });
+        }
         self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
