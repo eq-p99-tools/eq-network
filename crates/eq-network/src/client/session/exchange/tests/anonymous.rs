@@ -1,18 +1,24 @@
-//! The captured unnamed NPC cancellation is terminal, not an item-ID receipt.
+//! Active Titanium cancellation is terminal, not an item-ID receipt.
 use super::*;
 use eq_network_game::inventory::{Inventory, InventorySlot, InventoryUpdate};
 
 fn cancellation() -> Message {
-    let update = exchange::decode(exchange::CANCEL_OPCODE, &[0, 0, 0, 0, 1, 0, 0, 0])
+    cancellation_from(0)
+}
+
+fn cancellation_from(by: u32) -> Message {
+    let mut body = by.to_le_bytes().to_vec();
+    body.extend_from_slice(&1_u32.to_le_bytes());
+    let update = exchange::decode(exchange::CANCEL_OPCODE, &body)
         .unwrap()
         .unwrap();
     news(update)
 }
 
 #[test]
-fn p99_submitted_npc_cancellation_retires_only_escrow_and_never_guesses_returns() {
+fn titanium_submitted_npc_cancellation_retires_only_escrow_and_never_guesses_returns() {
     for returned_before in [0, 1, 2] {
-        let mut feature = Exchanges::project1999();
+        let mut feature = Exchanges::titanium();
         let mut world = giving_to_npc();
         world.exchange.0.as_mut().unwrap().stage = Stage::Accepted;
         let mut offered = testing::item(3000);
@@ -91,32 +97,34 @@ fn p99_submitted_npc_cancellation_retires_only_escrow_and_never_guesses_returns(
 }
 
 #[test]
-fn anonymous_cancel_stays_unattributed_without_a_submitted_p99_npc_give() {
+fn titanium_cancel_uses_the_active_window_not_the_sender_or_partner() {
     for partner in [Partner::Npc, Partner::Player] {
         for stage in [Stage::Asked(Instant::now()), Stage::Open, Stage::Accepted] {
-            for p99 in [false, true] {
-                let mut feature = if p99 {
-                    Exchanges::project1999()
-                } else {
-                    Exchanges::default()
-                };
+            for by in [0, 7, u32::from(NPC), u32::from(PLAYER), 99, u32::MAX] {
+                let mut feature = Exchanges::titanium();
                 let mut world = beside_npc();
                 world.exchange.0 = Some(Exchange {
                     with: NPC,
                     partner,
                     stage,
                 });
-                let mut message = cancellation();
+                let mut message = cancellation_from(by);
                 feature.explain(&mut message, &world);
                 assert_eq!(
-                    matches!(message, Message::Event(_)),
-                    p99 && partner == Partner::Npc && stage == Stage::Accepted
+                    matches!(&message, Message::Event(WorldEvent::Exchange(
+                        ExchangeUpdate::Cancelled { by: heard }
+                    )) if *heard == by),
+                    !matches!(stage, Stage::Asked(_)),
+                    "{partner:?} {stage:?} sender={by}"
                 );
+                let outcome = testing::run(|out| feature.observe(&message, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(world.exchange.is_none(), !matches!(stage, Stage::Asked(_)));
             }
         }
     }
     let mut world = beside_npc();
-    let mut feature = Exchanges::project1999();
+    let mut feature = Exchanges::titanium();
     let mut message = cancellation();
     feature.explain(&mut message, &world);
     assert!(matches!(message, Message::Withheld));
@@ -127,8 +135,28 @@ fn anonymous_cancel_stays_unattributed_without_a_submitted_p99_npc_give() {
 }
 
 #[test]
+fn unread_generations_keep_their_named_sender_guard() {
+    for partner in [Partner::Npc, Partner::Player] {
+        for by in [0, 7, u32::from(NPC), u32::from(PLAYER), 99, u32::MAX] {
+            let mut world = beside_npc();
+            world.exchange.0 = Some(Exchange {
+                with: NPC,
+                partner,
+                stage: Stage::Open,
+            });
+            let mut message = cancellation_from(by);
+            Exchanges::default().explain(&mut message, &world);
+            assert_eq!(
+                matches!(message, Message::Event(_)),
+                by == 7 || by == u32::from(NPC)
+            );
+        }
+    }
+}
+
+#[test]
 fn local_cancel_then_new_give_can_receive_its_later_legitimate_cancellation() {
-    let mut feature = Exchanges::project1999();
+    let mut feature = Exchanges::titanium();
     let mut world = giving_to_npc();
     world.exchange.0.as_mut().unwrap().stage = Stage::Accepted;
     testing::run(|out| {

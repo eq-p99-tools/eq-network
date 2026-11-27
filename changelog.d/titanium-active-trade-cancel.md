@@ -1,0 +1,1 @@
+- Titanium closes an active Give or Trade window on a received cancellation regardless of its sender ID; returned items still follow the server's inventory records.
