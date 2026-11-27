@@ -239,6 +239,7 @@ fn actual_applied_clock_keeps_input_facing_separate_from_the_later_pose() {
                     pose,
                     now,
                     session.guard.sampled,
+                    [before.x, before.y, before.z],
                 )
                 .expect("exact physical calls must replay before ordinary endpoint validation");
             let request = request(before, travel, pose, now);
@@ -1012,7 +1013,8 @@ fn sub_rounding_clock_pieces_cannot_recover_an_unavailable_phase() {
             calibration(0),
             0.,
             start + Duration::from_millis(100),
-            start
+            start,
+            [0.0; 3],
         )
         .is_err());
     let request = request(
@@ -1231,3 +1233,6 @@ fn foreign_receipts_and_favorable_endpoint_arcs_do_not_authorize_backing() {
             .is_err());
     }
 }
+
+#[path = "swim_scene_tests.rs"]
+mod scene_tests;

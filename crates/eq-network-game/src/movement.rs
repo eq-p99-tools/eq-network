@@ -40,6 +40,8 @@ pub use shoreline::{
 };
 pub use speeds::{eqmac as eqmac_speeds, titanium as titanium_speeds, SpeedState, Speeds};
 pub use state::{GroundSampleResult, GroundState};
+mod swim_scene;
+pub use swim_scene::{SwimScene, SwimSceneFrame, SwimSceneHandle, SwimSceneMotion};
 pub use swim_state::{SwimBasis, SwimControl, SwimControls, SwimInput};
 
 use crate::{command::EncodedCommand, world::Position};

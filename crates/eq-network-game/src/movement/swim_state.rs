@@ -56,6 +56,8 @@ pub struct SwimControl {
     kind: water::WetKind,
     input: SwimInput,
     applied_seconds: Option<f32>,
+    pitch: f32,
+    observed_at: Option<Instant>,
 }
 
 impl SwimControl {
@@ -81,6 +83,8 @@ impl SwimControl {
             kind,
             input,
             applied_seconds: None,
+            pitch: 0.0,
+            observed_at: None,
         })
     }
 
@@ -105,6 +109,48 @@ impl SwimControl {
         let mut piece = Self::new(until, heading, kind, input)?;
         piece.applied_seconds = Some(seconds);
         Ok(piece)
+    }
+
+    /// Records one actual completed physical frame, including its own facing
+    /// and forward look pitch. Pure strafe/idle/backward add no pitch input.
+    /// # Errors
+    /// Rejects unobserved, overlong or invalid controls.
+    pub fn physical(
+        until: Duration,
+        heading: f32,
+        kind: water::WetKind,
+        input: SwimInput,
+        seconds: f32,
+        pitch: f32,
+        observed_at: Instant,
+    ) -> Result<Self> {
+        ensure!(
+            seconds > 1e-5
+                && seconds <= 0.15
+                && pitch.is_finite()
+                && pitch.abs() <= std::f32::consts::FRAC_PI_2,
+            "invalid physical swim frame"
+        );
+        let mut piece = Self::applied(until, heading, kind, input, seconds)?;
+        piece.pitch = pitch;
+        piece.observed_at = Some(observed_at);
+        Ok(piece)
+    }
+
+    fn native_input(self, calibration: MotionCalibration) -> Result<water::WetInput> {
+        let swim = calibration
+            .swim
+            .ok_or_else(|| anyhow::anyhow!("missing swim calibration"))?;
+        let forward = match self.input {
+            SwimInput::Forward(Pace::Run) | SwimInput::ForwardStrafe(_, Pace::Run) => swim.forward,
+            SwimInput::Forward(Pace::Walk) | SwimInput::ForwardStrafe(_, Pace::Walk) => swim.walk,
+            SwimInput::Idle | SwimInput::Backward | SwimInput::Strafe(..) => 0.0,
+        };
+        Ok(water::WetInput {
+            horizontal: self.horizontal(calibration)?,
+            vertical: forward * self.pitch.sin(),
+            jump: false,
+        })
     }
 
     fn horizontal(self, calibration: MotionCalibration) -> Result<[f32; 2]> {
@@ -158,9 +204,16 @@ pub struct SwimControls {
     pieces: Vec<SwimControl>,
     pose: f32,
     applied: bool,
+    scene: Option<super::SwimSceneHandle>,
 }
 
 impl SwimControls {
+    /// Whether this is a complete physical-frame scene replay (diagnostic only).
+    #[must_use]
+    pub fn uses_scene(&self) -> bool {
+        self.scene.is_some()
+    }
+
     /// Retains up to 64 ordered positive pieces within the existing 250 ms
     /// maximum interval. More complex/uncertain input must use the old path.
     ///
@@ -188,6 +241,7 @@ impl SwimControls {
             pieces,
             pose,
             applied: false,
+            scene: None,
         })
     }
 
@@ -237,7 +291,40 @@ impl SwimControls {
             pieces,
             pose,
             applied: true,
+            scene: None,
         })
+    }
+    /// Retains complete observed physical frames and the actual immutable
+    /// collision/body snapshot. Backend rates and state are replayed separately.
+    /// No caller-supplied velocity, floor height or resolved delta is accepted.
+    /// # Errors
+    /// Rejects partial clocks, invalid durations and more than250ms of motion.
+    pub fn from_physical_frames(
+        basis: SwimBasis,
+        pieces: Vec<SwimControl>,
+        pose: f32,
+        scene: super::SwimSceneHandle,
+    ) -> Result<Self> {
+        ensure!((0.0..512.0).contains(&pose), "invalid physical swim pose");
+        let mut controls = Self::new(basis, pieces)?;
+        let mut previous = Duration::ZERO;
+        for piece in &controls.pieces {
+            let seconds = piece
+                .applied_seconds
+                .ok_or_else(|| anyhow::anyhow!("missing physical frame clock"))?;
+            ensure!(
+                piece.observed_at.is_some()
+                    && seconds > 1e-5
+                    && seconds <= 0.15
+                    && piece.until.checked_sub(previous) == Some(Duration::from_secs_f32(seconds)),
+                "incomplete physical swim frames"
+            );
+            previous = piece.until;
+        }
+        controls.pose = pose;
+        controls.applied = true;
+        controls.scene = Some(scene);
+        Ok(controls)
     }
 }
 
@@ -246,6 +333,7 @@ pub(super) struct Owner {
     revision: u64,
     known: Option<(water::WetVelocity, Instant)>,
     reset: bool,
+    scene: Option<super::SwimSceneMotion>,
 }
 
 impl Owner {
@@ -254,6 +342,7 @@ impl Owner {
             revision: 0,
             known: Some((water::WetVelocity::default(), now)),
             reset: true,
+            scene: None,
         }
     }
 
@@ -268,6 +357,8 @@ impl Owner {
 
     pub const fn invalidate(&mut self) {
         self.known = None;
+        // With no known state there is no basis, so a retained immutable scene
+        // is unreachable. A real correction/acceptance replaces it at runtime.
         self.reset = false;
         self.revision = self.revision.saturating_add(1);
     }
@@ -278,24 +369,27 @@ impl Owner {
         }
     }
 
-    pub fn accepted(&mut self, velocity: Option<water::WetVelocity>, now: Instant) {
+    pub fn accepted(&mut self, trial: Option<super::swim_scene::Trial>, now: Instant) {
         self.reset = false;
+        self.scene = trial.as_ref().and_then(|trial| trial.scene.clone());
         if let Some(next) = self.revision.checked_add(1) {
             self.revision = next;
-            self.known = velocity.map(|velocity| (velocity, now));
+            self.known = trial.map(|trial| (trial.velocity, now));
         } else {
             self.known = None;
         }
     }
 
     pub fn corrected(&mut self, now: Instant) {
-        self.accepted(Some(water::WetVelocity::default()), now);
+        self.accepted(Some(water::WetVelocity::default().into()), now);
         self.reset = self.known.is_some();
     }
 
     #[allow(
         clippy::float_cmp,
-        reason = "An observed final heading must match exactly"
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "One replay transaction checks exact headings, timing, calibration and scene state"
     )]
     pub fn trial(
         &self,
@@ -305,7 +399,8 @@ impl Owner {
         heading: f32,
         created: Instant,
         granted_from: Instant,
-    ) -> Result<(water::WetVelocity, [f32; 2])> {
+        origin: [f32; 3],
+    ) -> Result<(super::swim_scene::Trial, [f32; 3])> {
         ensure!(
             self.basis(session) == Some(controls.basis),
             "stale or unavailable swim basis"
@@ -357,39 +452,101 @@ impl Owner {
         };
         ensure!(known_clock(velocity), "unknown water phase");
         velocity.clamp(swim.caps());
+        let mut scene = match controls.scene.as_ref() {
+            None => {
+                ensure!(
+                    self.scene.is_none(),
+                    "scene replay cannot silently withdraw geometry"
+                );
+                None
+            }
+            Some(handle) => Some(if let Some(known) = &self.scene {
+                ensure!(
+                    known.scene() == handle && known.origin() == origin,
+                    "changed swim scene or origin"
+                );
+                known.clone()
+            } else {
+                ensure!(
+                    self.reset,
+                    "scene replay needs independently matched reset continuity"
+                );
+                super::SwimSceneMotion::at_reset(handle.clone(), origin)?
+            }),
+        };
+        let mut observed = self.scene.as_ref().map(|_| started);
+        let mut path = super::swim_scene::PathBudget::new();
         let mut previous = Duration::ZERO;
-        let mut total = [0.0; 2];
+        let mut total = [0.0; 3];
         for (index, piece) in controls.pieces.iter().enumerate() {
             ensure!(known_clock(velocity), "unknown water phase");
-            // No non-idle physical call may predate its calibrated grant.
-            // Actual applied pauses contain no fabricated physical calls.
+            let seconds = piece.applied_seconds.unwrap_or_else(|| {
+                piece
+                    .until
+                    .checked_sub(previous)
+                    .expect("checked ordered controls")
+                    .as_secs_f32()
+            });
+            let input_start = if controls.scene.is_some() {
+                let at = piece
+                    .observed_at
+                    .ok_or_else(|| anyhow::anyhow!("missing physical observation time"))?;
+                ensure!(at <= created, "physical swim frame is in the future");
+                let begin = if let Some(before) = observed {
+                    ensure!(
+                        at > before
+                            && at.duration_since(before).as_secs_f32().to_bits()
+                                == seconds.to_bits(),
+                        "physical swim observation has a gap or overlap"
+                    );
+                    before
+                } else {
+                    let begin = at
+                        .checked_sub(Duration::from_secs_f32(seconds))
+                        .ok_or_else(|| anyhow::anyhow!("invalid first physical swim clock"))?;
+                    // A <=150ms f32 duration loses at most8ns when converted
+                    // back to integer nanoseconds. This is not an input gap.
+                    ensure!(
+                        begin >= started
+                            || started.saturating_duration_since(begin) <= Duration::from_nanos(8),
+                        "physical swim frame predates reset"
+                    );
+                    begin.max(started)
+                };
+                observed = Some(at);
+                Some(begin)
+            } else {
+                physical_start.checked_add(previous)
+            };
+            // Input, timing and calibration use each actual physical slice.
             ensure!(
-                piece.input == SwimInput::Idle
-                    || physical_start
-                        .checked_add(previous)
-                        .is_some_and(|at| at >= granted_from),
+                piece.input == SwimInput::Idle || input_start.is_some_and(|at| at >= granted_from),
                 "swim input predates the calibrated interval"
             );
-            let input = water::WetInput {
-                horizontal: piece.horizontal(calibration)?,
-                vertical: 0.0,
-                jump: false,
+            let input = piece.native_input(calibration)?;
+            let moved = if let Some(known) = scene.as_mut() {
+                ensure!(
+                    known.kind()? == piece.kind,
+                    "swim medium chronology differs"
+                );
+                let before = known.origin();
+                let (next, frame) = known.frame(swim.set_for(piece.kind), input, seconds)?;
+                path.add(before, frame.origin, frame.raw);
+                let moved = std::array::from_fn(|axis| frame.origin[axis] - before[axis]);
+                velocity = next.velocity();
+                *known = next;
+                moved
+            } else {
+                let (horizontal, vertical) =
+                    velocity.advance(swim.set_for(piece.kind), input, seconds);
+                [horizontal[0], horizontal[1], vertical]
             };
-            let (moved, _) = velocity.advance(
-                swim.set_for(piece.kind),
-                input,
-                piece.applied_seconds.unwrap_or_else(|| {
-                    piece
-                        .until
-                        .checked_sub(previous)
-                        .expect("checked ordered controls")
-                        .as_secs_f32()
-                }),
-            );
             // Only the final remainder may leave the bounded native debt.
             // Every intervening full caller slice must have a canonical view.
             ensure!(
-                if controls.applied && index + 1 == controls.pieces.len() {
+                if controls.scene.is_some()
+                    || (controls.applied && index + 1 == controls.pieces.len())
+                {
                     velocity.has_ordinary_call_clock()
                 } else {
                     velocity.frame_phase().is_some()
@@ -398,8 +555,16 @@ impl Owner {
             );
             total[0] += moved[0];
             total[1] += moved[1];
+            total[2] += moved[2];
             previous = piece.until;
         }
-        Ok((velocity, total))
+        if scene.is_some() {
+            ensure!(
+                observed == Some(created),
+                "physical swim endpoint is not its actual completed frame"
+            );
+            path.check(swim.caps(), seconds)?;
+        }
+        Ok((super::swim_scene::Trial { velocity, scene }, total))
     }
 }
