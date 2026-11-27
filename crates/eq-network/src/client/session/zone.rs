@@ -1064,7 +1064,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 155;
+    const KINDS: usize = 156;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1108,7 +1108,7 @@ mod tests {
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
-            ClientCommand::OwnHitPoints { .. } => 154,
+            ClientCommand::OwnHitPoints { .. } => 155,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
             ClientCommand::DropItem(_) => 86,
