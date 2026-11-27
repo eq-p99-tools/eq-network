@@ -11,6 +11,7 @@ pub(super) struct Health {
     reported: Option<(i32, i32)>,
     accepted: Option<HitPointBasis>,
     local_damage: u64,
+    local_base: Option<i32>,
     unconscious: bool,
     revision: u64,
     changed: Option<Instant>,
@@ -27,6 +28,7 @@ pub(super) fn note(message: &Message, world: &mut World) {
         if world.is_player(*spawn_id) {
             world.posture.health.reported = Some((*current, *maximum));
             world.posture.health.local_damage = 0;
+            world.posture.health.local_base = None;
             world.posture.health.accepted = None;
         }
     }
@@ -50,9 +52,10 @@ pub(super) fn count(basis: HitPointBasis, world: &mut World, out: &mut Out<'_, '
         return refuse("The HP count does not match the latest own HP report", out);
     }
     let Some(current) = basis.current() else {
-        return refuse("The HP count overflows", out);
+        return refuse("The HP count is inconsistent or overflows", out);
     };
     if basis.local_damage != world.posture.health.local_damage
+        || basis.local_base != world.posture.health.local_base
         || basis.inventory_revision != world.inventory.revision()
         || !world.inventory.received()
         || world.inventory.stale()
@@ -102,6 +105,14 @@ pub(in crate::client::session) fn local_damage(
     if !out.wire.dialect().models_unconscious() || world.lifecycle.blocks_motion() {
         return Ok(());
     }
+    if amount == 0 {
+        return Ok(());
+    }
+    let health = &mut world.posture.health;
+    health.local_base = health
+        .local_base
+        .or_else(|| health.reported.map(|(base, _)| base))
+        .map(|base| eq_network_game::control::subtract_local_hit_points(base, amount));
     world.posture.health.local_damage = world
         .posture
         .health
@@ -109,6 +120,7 @@ pub(in crate::client::session) fn local_damage(
         .saturating_add(u64::from(amount));
     if let Some(mut basis) = world.posture.health.accepted {
         basis.local_damage = world.posture.health.local_damage;
+        basis.local_base = world.posture.health.local_base;
         count(basis, world, out)?;
     }
     Ok(())
@@ -243,12 +255,16 @@ mod tests {
     }
 
     fn report(world: &mut World, current: i32) {
+        report_values(world, current, 100);
+    }
+
+    fn report_values(world: &mut World, current: i32, maximum: i32) {
         testing::run(|out| {
             Stances.observe(
                 &Message::Event(WorldEvent::HitPoints {
                     spawn_id: 7,
                     current,
-                    maximum: 100,
+                    maximum,
                     items: ItemHitPoints::LeftOut,
                 }),
                 world,
@@ -266,6 +282,7 @@ mod tests {
             item_hit_points: items,
             inventory_revision: 1,
             local_damage: 0,
+            local_base: None,
             damage_floor: Some(-10),
         }
     }
@@ -320,6 +337,52 @@ mod tests {
         again.result.unwrap();
         assert_eq!(again.sent, []);
         assert!(!world.lifecycle.is_dead());
+    }
+
+    #[test]
+    fn successive_submitted_damage_keeps_the_previously_clamped_stored_base() {
+        let mut world = world();
+        report_values(&mut world, 10_000_010, 10_000_020);
+        let counted = HitPointBasis {
+            reported_maximum: 10_000_020,
+            ..basis(10_000_010, -20)
+        };
+        testing::run(|out| count(counted, &mut world, out))
+            .result
+            .unwrap();
+        for expected in [9_999_980, 9_999_979] {
+            let output = testing::run(|out| local_damage(1, &mut world, out));
+            output.result.unwrap();
+            assert_eq!(output.sent, []);
+            assert_eq!(
+                world.posture.health.accepted.unwrap().current(),
+                Some(expected)
+            );
+            assert!(!world.posture.unconscious());
+            assert!(!world.lifecycle.is_dead());
+        }
+        assert_eq!(
+            world.posture.health.reported,
+            Some((10_000_010, 10_000_020))
+        );
+        assert_eq!(world.posture.health.local_damage, 2);
+        assert_eq!(world.posture.health.local_base, Some(9_999_999));
+
+        let mut stale = counted;
+        stale.local_damage = 2;
+        stale.local_base = Some(10_000_000);
+        testing::run(|out| count(stale, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(
+            world.posture.health.accepted.unwrap().current(),
+            Some(9_999_979)
+        );
+
+        report(&mut world, 4);
+        assert_eq!(world.posture.health.local_damage, 0);
+        assert_eq!(world.posture.health.local_base, None);
+        assert_eq!(world.posture.health.accepted, None);
     }
 
     #[test]

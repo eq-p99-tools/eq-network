@@ -56,25 +56,37 @@ pub struct HitPointBasis {
     /// Successfully submitted local environmental damage since this report.
     /// A fresh server HP report replaces it, even when its value repeats.
     pub local_damage: u64,
+    /// Stored base after applying each submitted local damage delta, before
+    /// equipped HP. None before local damage; this is not a server HP receipt.
+    pub local_base: Option<i32>,
     /// Native pre-damage cutoff (-10 minus effect 328), when the host can
     /// resolve that effect total. None preserves the unknown total.
     pub damage_floor: Option<i64>,
 }
 
 impl HitPointBasis {
-    /// Full signed current HP; None for an overflowing host input.
+    /// Full signed current HP; None for inconsistent or overflowing host input.
     #[must_use]
     pub fn current(self) -> Option<i64> {
-        let reported = i64::from(self.reported_current);
-        let local = if self.local_damage == 0 {
-            reported
-        } else {
-            reported
-                .saturating_sub(i64::try_from(self.local_damage).unwrap_or(i64::MAX))
-                .clamp(-32768, 10_000_000)
+        let base = match (self.local_damage, self.local_base) {
+            (0, None) => self.reported_current,
+            (damage, Some(base)) if damage != 0 && (-32768..=10_000_000).contains(&base) => base,
+            _ => return None,
         };
-        local.checked_add(self.item_hit_points)
+        i64::from(base).checked_add(self.item_hit_points)
     }
+}
+
+/// Applies one Titanium local damage delta to the stored base (0x41ab7e).
+/// Clamp after every delta, before adding equipped HP; clamping a cumulative
+/// subtraction loses earlier upper-clamp adjustments.
+///
+/// # Panics
+/// The conversion can only panic if these internal bounds stop fitting i32.
+#[must_use]
+pub fn subtract_local_hit_points(base: i32, damage: u32) -> i32 {
+    i32::try_from((i64::from(base) - i64::from(damage)).clamp(-32768, 10_000_000))
+        .expect("stored HP bounds fit i32")
 }
 
 /// `OP_Stun`: the raw stun length in milliseconds, including zero.
@@ -257,6 +269,7 @@ mod tests {
             item_hit_points: -20,
             inventory_revision: 1,
             local_damage: 1,
+            local_base: Some(subtract_local_hit_points(10_000_010, 1)),
             damage_floor: None,
         };
         assert_eq!(basis.current(), Some(9_999_980));
@@ -265,6 +278,7 @@ mod tests {
             reported_maximum: 100,
             item_hit_points: -50,
             local_damage: 100,
+            local_base: Some(subtract_local_hit_points(-32760, 100)),
             ..basis
         };
         // The final value can be below the stored-base bound.
@@ -273,10 +287,52 @@ mod tests {
         assert_eq!(
             HitPointBasis {
                 local_damage: 0,
+                local_base: None,
                 ..basis
             }
             .current(),
             Some(9_999_990)
+        );
+    }
+
+    #[test]
+    fn repeated_local_damage_starts_from_the_previously_clamped_base() {
+        let first = subtract_local_hit_points(10_000_010, 1);
+        let second = subtract_local_hit_points(first, 1);
+        assert_eq!(first, 10_000_000);
+        assert_eq!(second, 9_999_999);
+        assert_ne!(second, subtract_local_hit_points(10_000_010, 2));
+    }
+
+    #[test]
+    fn counted_local_damage_requires_a_bounded_stored_base() {
+        let basis = HitPointBasis {
+            reported_current: 5,
+            reported_maximum: 100,
+            item_hit_points: 0,
+            inventory_revision: 1,
+            local_damage: 1,
+            local_base: Some(4),
+            damage_floor: None,
+        };
+        assert_eq!(basis.current(), Some(4));
+        for local_base in [None, Some(-32769), Some(10_000_001)] {
+            assert_eq!(
+                HitPointBasis {
+                    local_base,
+                    ..basis
+                }
+                .current(),
+                None
+            );
+        }
+        assert_eq!(
+            HitPointBasis {
+                local_damage: 0,
+                ..basis
+            }
+            .current(),
+            None
         );
     }
 

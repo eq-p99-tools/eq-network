@@ -100,6 +100,7 @@ fn submitted_drowning_at_one_hp_lies_holds_reports_and_wakes_without_inventing_d
                 item_hit_points: 0,
                 inventory_revision: world.inventory.revision(),
                 local_damage: 0,
+                local_base: None,
                 damage_floor: Some(-10),
             },
         };
