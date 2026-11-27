@@ -722,6 +722,8 @@ mod tests {
         let outcome = testing::run(|out| exchanges.handle(&give, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [exchange::accept(7).unwrap()]);
+        assert_eq!(outcome.sent[0].opcode, 0x0065);
+        assert_eq!(outcome.sent[0].body, [7, 0, 0, 0, 1, 0, 0, 0]);
         assert_eq!(world.exchange.unwrap().stage, Stage::Accepted);
         let finished = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Finished));
         testing::run(|out| exchanges.observe(&finished, &mut world, out))
