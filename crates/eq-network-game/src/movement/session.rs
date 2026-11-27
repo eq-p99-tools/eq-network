@@ -1483,43 +1483,73 @@ impl MotionSession {
             self.guard.sample_interval_ready(request.created),
             "movement samples arrive too frequently"
         );
-        let wet = controls.and_then(|controls| {
-            if request.mode != MovementMode::Swim
-                || request.support.is_some()
-                || !self.swimming
-                || !self.heading_snapshots
-                || self.rooted
-                || self.hold != Hold::None
-                || self.options.fly
-                || self.guard.carrier_pose.is_some()
-                || self
-                    .earlier
-                    .iter()
-                    .any(|(until, _)| *until > self.guard.sampled)
-            {
-                return None;
-            }
-            let calibration = self.calibration?;
-            let (velocity, expected) = self
-                .wet
-                .trial(
-                    self.guard.session_id,
-                    controls,
-                    calibration,
-                    request.position.heading,
-                    request.created,
-                    self.guard.sampled,
-                )
-                .ok()?;
-            let error = (request.position.x - self.position.x - expected[0])
-                .hypot(request.position.y - self.position.y - expected[1]);
-            (error <= 0.01).then_some(velocity)
-        });
+        let wet = controls.and_then(|controls| self.swim_trial(request, controls).ok());
         if wet.is_none() {
             self.wet.invalidate();
         }
         self.prepare_move_sample_with_wet(request, now, None, wet)?
             .submit(send)
+    }
+
+    /// Read-only diagnostic of ordinary horizontal replay eligibility and match.
+    /// This neither admits a proposal nor commits state, sends a packet, or
+    /// replaces the full movement/control/timing checks in `send_swim_sample`.
+    /// No diagnostics are emitted unless the caller explicitly requests them.
+    ///
+    /// # Errors
+    /// Identifies unavailable continuity, controls, calibration or an unmatched
+    /// horizontal endpoint. Success is only a replay match, not movement approval.
+    pub fn inspect_swim_replay(
+        &self,
+        request: &MovementRequest,
+        controls: &super::SwimControls,
+    ) -> Result<()> {
+        self.swim_trial(request, controls).map(|_| ())
+    }
+
+    fn swim_trial(
+        &self,
+        request: &MovementRequest,
+        controls: &super::SwimControls,
+    ) -> Result<super::water::WetVelocity> {
+        ensure!(
+            request.mode == MovementMode::Swim && request.support.is_none(),
+            "swim replay requires ordinary unsupported water motion"
+        );
+        ensure!(
+            self.swimming
+                && self.heading_snapshots
+                && !self.rooted
+                && self.hold == Hold::None
+                && !self.options.fly
+                && self.guard.carrier_pose.is_none(),
+            "ordinary swim replay is currently unavailable"
+        );
+        ensure!(
+            !self
+                .earlier
+                .iter()
+                .any(|(until, _)| *until > self.guard.sampled),
+            "swim calibration crosses the pending interval"
+        );
+        let calibration = self
+            .calibration
+            .ok_or_else(|| anyhow::anyhow!("missing swim calibration"))?;
+        let (velocity, expected) = self.wet.trial(
+            self.guard.session_id,
+            controls,
+            calibration,
+            request.position.heading,
+            request.created,
+            self.guard.sampled,
+        )?;
+        let error = (request.position.x - self.position.x - expected[0])
+            .hypot(request.position.y - self.position.y - expected[1]);
+        ensure!(
+            error <= 0.01,
+            "native swim horizontal endpoint differs by {error}"
+        );
+        Ok(velocity)
     }
 
     fn prepare_move_sample(
