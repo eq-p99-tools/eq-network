@@ -421,7 +421,7 @@ mod tests {
         ] {
             let outcome = testing::run(|out| Corpses::default().handle(&command, &mut world, out));
             outcome.result.unwrap();
-            assert!(refusals(&outcome.events).is_empty());
+            assert_eq!(refusals(&outcome.events), [] as [String; 0]);
             assert_eq!(outcome.sent.len(), 1);
             let expected = if matches!(command, ClientCommand::SummonCorpse { .. }) {
                 corpses::summon("Tester's corpse4", "Tester").unwrap()
