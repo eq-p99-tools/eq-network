@@ -258,6 +258,42 @@ impl Features {
         }
     }
 
+    /// Resolve only the observed P99 no-reason peer close, then run the
+    /// ordinary failure cleanup. A timeout, out-of-session, opaque refusal or
+    /// unrelated handler error is not a camp completion.
+    fn receive_failed(
+        &mut self,
+        error: &anyhow::Error,
+        protocol: crate::client::ServerProtocol,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        use eq_network_transport::modern::SessionTermination;
+        let closed = Some(SessionTermination::PeerDisconnected { reason: None });
+        let expected_close = match protocol {
+            crate::client::ServerProtocol::Project1999 => true,
+            crate::client::ServerProtocol::EqEmu
+            | crate::client::ServerProtocol::Quarm
+            | crate::client::ServerProtocol::Takp
+            | crate::client::ServerProtocol::EqEmuRof2 => false,
+        };
+        if expected_close
+            && error.downcast_ref::<SessionTermination>().copied() == closed
+            && out.sink.termination() == closed
+        {
+            for feature in &mut self.provided {
+                feature.peer_closed(world, out)?;
+                if world.ending() {
+                    break;
+                }
+            }
+        }
+        if !world.ending() {
+            self.connection_ended(world);
+        }
+        Ok(())
+    }
+
     /// Lets every feature hear a message once the zone has admitted the
     /// player, until one ends the session.
     fn observe(
@@ -479,7 +515,17 @@ fn run_connected(
             Err(error) => {
                 // A feature may expect the zone to close the connection.
                 if !recording_only {
-                    features.connection_ended(&mut world);
+                    features.receive_failed(
+                        &error,
+                        config.protocol,
+                        &mut world,
+                        &mut Out {
+                            sink: session,
+                            log: &mut *log,
+                            wire: server.wire(),
+                            sender: speaker,
+                        },
+                    )?;
                 }
                 return match world.take_exit() {
                     Some(exit) => Ok(exit),
@@ -4009,3 +4055,7 @@ mod discipline_tests;
 mod local_damage_tests;
 #[cfg(test)]
 mod tracking_zone_tests;
+
+#[cfg(test)]
+#[path = "zone/camp_close_tests.rs"]
+mod camp_close_tests;

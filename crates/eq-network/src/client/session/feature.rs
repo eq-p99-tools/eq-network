@@ -645,6 +645,11 @@ pub(super) trait Feature {
     /// the session's end, as a zone closing on a player who departs.
     fn connection_ended(&mut self, _world: &mut World) {}
 
+    /// The P99 peer closed normally; this is transport evidence only.
+    fn peer_closed(&mut self, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+        Ok(())
+    }
+
     /// Hears a message once the zone has admitted the player.
     ///
     /// # Errors
