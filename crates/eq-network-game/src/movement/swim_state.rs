@@ -58,6 +58,7 @@ pub struct SwimControl {
     applied_seconds: Option<f32>,
     pitch: f32,
     observed_at: Option<Instant>,
+    stall: Option<(Instant, Instant)>,
 }
 
 impl SwimControl {
@@ -85,6 +86,7 @@ impl SwimControl {
             applied_seconds: None,
             pitch: 0.0,
             observed_at: None,
+            stall: None,
         })
     }
 
@@ -135,6 +137,34 @@ impl SwimControl {
         piece.pitch = pitch;
         piece.observed_at = Some(observed_at);
         Ok(piece)
+    }
+
+    /// Marks the first physical call after a render stall during which the
+    /// producer held its scene state and applied no motion. Only the call
+    /// between `resumed_at` and the observed end contributes to travel.
+    ///
+    /// # Errors
+    /// Rejects a missing physical clock or a duration different from the
+    /// observed call. Replay checks the stall against the preceding frame.
+    pub fn after_stall(mut self, stopped_at: Instant, resumed_at: Instant) -> Result<Self> {
+        ensure!(
+            resumed_at
+                .saturating_duration_since(stopped_at)
+                .as_secs_f32()
+                > 0.15,
+            "physical swim stall must span an overlong frame"
+        );
+        let duration = self
+            .observed_at
+            .and_then(|end| end.checked_duration_since(resumed_at));
+        ensure!(
+            duration.is_some_and(
+                |d| self.applied_seconds.map(f32::to_bits) == Some(d.as_secs_f32().to_bits())
+            ),
+            "invalid resumed physical swim clock"
+        );
+        self.stall = Some((stopped_at, resumed_at));
+        Ok(self)
     }
 
     fn native_input(self, calibration: MotionCalibration) -> Result<water::WetInput> {
@@ -492,7 +522,13 @@ impl Owner {
                     .observed_at
                     .ok_or_else(|| anyhow::anyhow!("missing physical observation time"))?;
                 ensure!(at <= created, "physical swim frame is in the future");
-                let begin = if let Some(before) = observed {
+                let begin = if let Some((stopped, resumed)) = piece.stall {
+                    ensure!(
+                        observed.map_or(stopped >= started, |previous| stopped == previous),
+                        "physical swim stall does not follow the observed frame"
+                    );
+                    resumed
+                } else if let Some(before) = observed {
                     ensure!(
                         at > before
                             && at.duration_since(before).as_secs_f32().to_bits()

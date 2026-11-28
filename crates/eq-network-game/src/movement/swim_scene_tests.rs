@@ -448,6 +448,72 @@ fn a_missing_observed_interval_requires_ordinary_fallback_without_scene_credit()
 }
 
 #[test]
+fn a_reported_stall_keeps_the_scene_and_earns_only_the_next_physical_frame() {
+    let start = Instant::now();
+    let mut session = owner(start, 0);
+    let mut model = SwimSceneMotion::at_reset(scene(0.05), [0.0; 3]).unwrap();
+    let input = SwimInput::Strafe(StrafeSide::Right, Pace::Run);
+    let stopped = start + Duration::from_millis(100);
+    let (first, tape) = sample(&session, &mut model, input, 0.0, 0.0, stopped);
+    session
+        .send_swim_sample(&first, Some(&tape), stopped, |_| Ok(()))
+        .unwrap();
+    let resumed = stopped + Duration::from_micros(231_838);
+    let dt = Duration::from_millis(16);
+    let end = resumed + dt;
+    let cal = calibration(0);
+    let (next, _) = model
+        .frame(
+            cal.swim.unwrap().set,
+            native(cal, input, 0.0, 0.0),
+            dt.as_secs_f32(),
+        )
+        .unwrap();
+    let [x, y, z] = next.origin();
+    let mut request = MovementRequest::new(
+        MovementMode::Swim,
+        11,
+        Position {
+            x,
+            y,
+            z,
+            heading: 0.0,
+        },
+        end,
+    );
+    request.heading = HeadingUpdate::Snapshot;
+    let piece = SwimControl::physical(
+        Duration::from_secs_f32(dt.as_secs_f32()),
+        0.0,
+        WetKind::Normal,
+        input,
+        dt.as_secs_f32(),
+        0.0,
+        end,
+    )
+    .unwrap();
+    let basis = session.swim_basis().unwrap();
+    let tape =
+        |p| SwimControls::from_physical_frames(basis, vec![p], 0.0, model.scene().clone()).unwrap();
+    assert!(session.inspect_swim_replay(&request, &tape(piece)).is_err());
+    assert!(piece.after_stall(resumed, stopped).is_err());
+    assert!(piece.after_stall(stopped, resumed + dt).is_err());
+    let overlapping = piece.after_stall(start, resumed).unwrap();
+    assert!(session
+        .inspect_swim_replay(&request, &tape(overlapping))
+        .is_err());
+    let valid = tape(piece.after_stall(stopped, resumed).unwrap());
+    let mut extra = request.clone();
+    extra.position.x += 1.0;
+    assert!(session.inspect_swim_replay(&extra, &valid).is_err());
+    session
+        .send_swim_sample(&request, Some(&valid), end, |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.position(), request.position);
+    assert!(session.inspect_swim_replay(&request, &valid).is_err());
+}
+
+#[test]
 fn scene_backing_uses_its_positive_calibrated_rate() {
     let start = Instant::now();
     let mut session = owner(start, 25);

@@ -1,0 +1,1 @@
+- Allow the first sampled swim frame after a render stall to continue the accepted scene. Only time spent applying controls counts toward travel.
