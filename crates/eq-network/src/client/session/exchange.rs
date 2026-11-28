@@ -714,7 +714,10 @@ mod tests {
         }));
         let outcome = testing::run(|out| exchanges.observe(&refused, &mut world, out));
         outcome.result.unwrap();
-        assert_eq!(refusals(&outcome.events), ["They are busy"]);
+        assert_eq!(
+            refusals(&outcome.events),
+            ["They are not accepting incoming trade requests"]
+        );
         assert!(world.exchange.is_none());
     }
 

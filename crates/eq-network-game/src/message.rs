@@ -1230,6 +1230,7 @@ mod tests {
                     part: Part::World,
                     ..
                 },
+                Message::Event(WorldEvent::CorpseAutoConsent([None, None, None])),
                 Message::Unreadable {
                     part: Part::World,
                     ..
