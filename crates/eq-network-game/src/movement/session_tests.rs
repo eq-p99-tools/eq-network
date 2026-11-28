@@ -3720,6 +3720,48 @@ fn a_held_heading_backs_up_only_as_far_as_momentum_from_the_last_turn_carries() 
 }
 
 #[test]
+fn a_heading_that_only_wiggles_earns_backing_only_in_proportion_to_its_arc() {
+    // Heading 128 faces +x; behind is -x.
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = unbuffed_swim_session(start);
+    // A swimmer moving at a held heading, long enough that nothing carried
+    // from before is left behind it.
+    let mut ms = 100;
+    let mut x = 0.0;
+    session
+        .send_move_sample(&stroke_to(x, 0.0, 128.0, at(ms)), at(ms), |_| Ok(()))
+        .unwrap();
+    while ms < 2_100 {
+        ms += 150;
+        x += 1.0;
+        session
+            .send_move_sample(&stroke_to(x, 0.0, 128.0, at(ms)), at(ms), |_| Ok(()))
+            .unwrap();
+    }
+    // A wiggle of 0.003 heading units each stroke may bring round only
+    // that sine's share of the velocity, so backing at well under the cap
+    // (1.0 of the 2.55 units the cap allows in 150 ms) is still refused.
+    let mut refused = None;
+    for (stroke, heading) in [128.003, 128.0, 128.003, 128.0].into_iter().enumerate() {
+        ms += 150;
+        let back = x - 1.0 * (stroke + 1) as f32;
+        match session.send_move_sample(&stroke_to(back, 0.0, heading, at(ms)), at(ms), |_| Ok(())) {
+            Ok(()) => {}
+            Err(error) => {
+                refused = Some(error);
+                break;
+            }
+        }
+    }
+    let refused = refused.expect("a wiggling heading backed up near the cap");
+    assert!(
+        refused.to_string().contains("backing up in water"),
+        "{refused}"
+    );
+}
+
+#[test]
 fn entering_the_water_backing_up_glides_on_only_as_its_momentum_carries() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
