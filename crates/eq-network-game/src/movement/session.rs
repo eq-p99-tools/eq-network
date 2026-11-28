@@ -859,6 +859,11 @@ impl MotionSession {
         } else {
             self.guard.set_speed(Some(value.units_per_second), now);
         }
+        // The guard bounds momentum carried behind a held heading by the
+        // slower-damping of the grant's two water sets.
+        self.guard.swim_keep = value
+            .swim
+            .map(|swim| swim.set.horizontal_keep.max(swim.slower.horizontal_keep));
         self.calibration = Some(value);
         self.rooted = false;
         Ok(())

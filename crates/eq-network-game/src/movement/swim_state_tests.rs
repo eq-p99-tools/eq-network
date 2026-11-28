@@ -757,9 +757,12 @@ fn uncertainty_does_not_gain_directional_credit_even_inside_the_total_cap() {
         let start = Instant::now();
         let mut session = owner(start, 0);
         let radians = heading / 512. * std::f32::consts::TAU;
+        // From rest, a stroke that turns can point all its own input
+        // behind, which builds about 0.3 units in 100 ms at this cap; more
+        // than that behind is not the program's.
         let bad = request(
             Position::default(),
-            [-0.2 * radians.sin(), -0.2 * radians.cos(), 0.],
+            [-0.4 * radians.sin(), -0.4 * radians.cos(), 0.],
             heading,
             start + Duration::from_millis(100),
         );
@@ -1220,9 +1223,10 @@ fn foreign_receipts_and_favorable_endpoint_arcs_do_not_authorize_backing() {
             )],
         )
         .unwrap();
+        // Beyond what a turning stroke's own input builds from rest.
         let bad = request(
             Position::default(),
-            [-0.2 * sin, -0.2 * cos, 0.],
+            [-0.4 * sin, -0.4 * cos, 0.],
             to_heading,
             start + Duration::from_millis(100),
         );
