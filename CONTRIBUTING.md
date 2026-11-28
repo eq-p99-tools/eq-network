@@ -15,16 +15,21 @@ unknown wire values when doing so helps diagnostics or forward compatibility.
 Tests must use synthetic packet data. Never commit packet captures, live logs,
 account names, passwords, tokens, or environment files.
 
-Pull request CI checks only formatting and dependency policy; the full suite
-runs on demand at milestones (Actions > CI > Run workflow). Run the full checks
-locally before opening a pull request:
+The automatic [PR checks](.github/workflows/lint.yml) verify formatting and
+dependency policy on Windows. To run the full checks locally on Windows with
+the default CI toolchain, use PowerShell.
 
-```shell
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo test --workspace --all-targets --all-features
+```powershell
+cargo +1.99.0 fmt --all -- --check
+cargo +1.99.0 clippy --workspace --all-targets --all-features -- -D warnings
+cargo +1.99.0 test --workspace --all-targets --all-features
+$env:RUSTDOCFLAGS = '-D warnings'
+cargo +1.99.0 doc --workspace --all-features --no-deps
 ```
+
+The manual [CI workflow](.github/workflows/ci.yml) runs Clippy, tests and
+rustdoc on one selected platform. Windows and Rust 1.99.0 are the defaults.
+Select Linux explicitly for a Linux check.
 
 Record a change's changelog entry as a new file in `changelog.d/`, not as an
 edit to `CHANGELOG.md`, so that pull requests never conflict over the

@@ -63,7 +63,8 @@ through its [application callback](https://github.com/EQEmu/EQEmu/blob/4aceae18b
 while processing combined parts in order. A later disconnect changes connection
 status without withdrawing an already dispatched application. Retaining that
 completed prefix lets an actual logout reply reach the camp consumer; a terminal
-control without that reply remains transport evidence only.
+control without that reply remains transport evidence only. For a matching
+peer close after logout submission, see the distinct [camp completion outcomes](../API-CONTRACT.md#camp-completion-evidence).
 
 Synthetic regressions cover framing variants, malformed/current/wrong codes,
 peer filtering, duplicates, complete-prefix delivery, incomplete-work removal,

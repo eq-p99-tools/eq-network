@@ -1,0 +1,1 @@
+- Index the protocol guides and document current Windows checks and memorization inputs.
