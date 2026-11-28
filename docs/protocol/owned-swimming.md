@@ -44,8 +44,15 @@ phase behavior and legacy observations are unchanged. Unknown state never
 becomes a guessed phase.
 
 Only a matched endpoint replay replaces the old ending-heading backward
-projection test. Every total/vertical/time/session/availability/transport and
-report check remains. Unqualified input or unexplained travel uses existing
+projection test. A producer that observes a frame longer than 150 ms can hold
+its physical scene still. On the next applied frame it records both boundaries
+of that pause. The worker matches the start to the preceding observation and
+checks the resumed frame duration against its real endpoint. No simulation
+steps or displacement accrue during the pause.
+
+The replay uses the ordinary
+total/vertical/time/session/availability/transport and
+report checks. Unqualified input or unexplained travel uses existing
 checks and invalidates continuity, even if the old guard admits it. There is
 no retry with a more permissive rule. Trial commits only on matching local
 acceptance; failed send does not commit. A held accepted sample can commit
