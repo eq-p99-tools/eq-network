@@ -222,9 +222,34 @@ pub fn swim_speed(granted_units_per_second: f32) -> f32 {
     granted_units_per_second * 0.156_25
 }
 
-/// Whether a sample's heading changed, beyond float rounding.
-fn turned(from: f32, to: f32) -> bool {
-    carriers::heading_arc(from, to).abs() > 1e-3
+/// The rate per second at which the wet step's `keep` damps velocity, when
+/// it damps at all.
+fn wet_rate(keep: f32) -> Option<f32> {
+    let rate = -keep.ln() / water::WET_FRAME_SECONDS;
+    (rate.is_finite() && rate > 0.0).then_some(rate)
+}
+
+/// The most of a velocity that lay ahead of heading `from`, or of input
+/// given at a heading between `from` and `to`, that can point behind `to`:
+/// the sine of the arc between them, all of it from a quarter turn on.
+fn turn_share(from: f32, to: f32) -> f32 {
+    let arc = carriers::heading_arc(from, to).abs() / 512.0 * std::f32::consts::TAU;
+    if arc >= std::f32::consts::FRAC_PI_2 {
+        1.0
+    } else {
+        arc.sin()
+    }
+}
+
+/// What a swimmer's velocity could be at the end of the last accepted
+/// sample, as shares of the horizontal swim cap (0x4bfe0f, read R33
+/// section 2). Both are zero at rest since the last reset.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SwimMomentum {
+    /// The most of it that could point behind the heading faced.
+    behind: f32,
+    /// The most it could be in any direction.
+    speed: f32,
 }
 
 /// Checks that a swim stroke's displacement `delta` goes no further than
@@ -631,14 +656,8 @@ pub struct MovementGuard {
     /// frame, the larger of the grant's two water sets (0x4bfe0f, read R33
     /// section 2), where the grant reads the generation's water.
     swim_keep: Option<f32>,
-    /// The latest instant momentum could lie behind the heading held since:
-    /// the end of the last accepted sample that turned a moving swimmer or
-    /// moved them on land. None at rest since the last reset.
-    swim_carry: Option<Instant>,
-    /// The end of the last accepted sample that moved the player across the
-    /// ground plane, when their velocity could be up to the cap. None at
-    /// rest since the last reset.
-    swim_moved: Option<Instant>,
+    /// What momentum the player could carry into the next swim stroke.
+    swim_momentum: SwimMomentum,
     /// When the last swim sample was accepted and the rising cap it had: a
     /// sample that follows out of the water may rise on from it
     /// ([`Self::surfacing_rise`]).
@@ -699,8 +718,7 @@ impl MovementGuard {
             shoreline_velocity: None,
             previous_swim: false,
             swim_keep: None,
-            swim_carry: None,
-            swim_moved: None,
+            swim_momentum: SwimMomentum::default(),
             surfacing: None,
         }
     }
@@ -993,8 +1011,7 @@ impl MovementGuard {
         self.speed = None;
         self.jumped_at = None;
         self.surfacing = None;
-        self.swim_carry = None;
-        self.swim_moved = None;
+        self.swim_momentum = SwimMomentum::default();
         self.clear_shoreline();
     }
 
@@ -1179,7 +1196,7 @@ impl MovementGuard {
                         caps.horizontal,
                         keep,
                         elapsed,
-                        turned(from.heading, to.heading),
+                        turn_share(from.heading, to.heading),
                     )
                 });
                 swim_backing(
@@ -1299,17 +1316,7 @@ impl MovementGuard {
         let moved = (request.position.x - self.position.x)
             .hypot(request.position.y - self.position.y)
             > 0.001;
-        // On land the next stroke's start velocity is unread here: any
-        // movement there may carry into the water behind its heading.
-        let swimming = request.mode == MovementMode::Swim;
-        if (swimming && turned(from, to) && (moved || self.swim_moved.is_some()))
-            || (!swimming && moved)
-        {
-            self.swim_carry = Some(request.created);
-        }
-        if moved {
-            self.swim_moved = Some(request.created);
-        }
+        self.carry_swim_momentum(request, turn_share(from, to), moved);
         // Any rise while a lift is named counts against its account.
         if let Some(credit) = self.lift.as_mut() {
             if request.support.is_some() {
@@ -1361,34 +1368,52 @@ impl MovementGuard {
     ///
     /// The velocity never exceeds the horizontal `cap`, and each frame keeps
     /// `keep` of it before adding that frame's input. Input never points
-    /// behind the heading it is given at, so a stroke that holds its heading
-    /// can only carry what lay behind it already: momentum from the last
-    /// turn of a moving swimmer, or from land, dying away a frame at a time.
-    /// A stroke that turns may point everything behind: what the velocity
-    /// carried in from the last movement, dying away the same way, and what
-    /// its own input builds from there. The frame's phase is unknown, so
-    /// each bound counts one frame less damping.
-    fn carried_behind(&self, cap: f32, keep: f32, elapsed: f32, turned: bool) -> f32 {
-        let frame = water::WET_FRAME_SECONDS;
-        let rate = -keep.ln() / frame;
-        if !(rate.is_finite() && rate > 0.0) {
+    /// behind the heading it is given at, so only a turn can bring velocity
+    /// round behind: of what lay ahead of the old heading, and of the
+    /// stroke's own input, no more than the turn's `share`
+    /// ([`turn_share`]). What lay behind already dies away a frame at a
+    /// time. The frame's phase is unknown, so the bound counts one frame
+    /// less damping and one frame more input.
+    fn carried_behind(&self, cap: f32, keep: f32, elapsed: f32, share: f32) -> f32 {
+        let Some(rate) = wet_rate(keep) else {
             return cap * elapsed;
-        }
-        let decayed = |seconds: f32| (-rate * seconds).exp();
-        // The share of `cap` still carried, summed over the stroke, from
-        // momentum that was at the cap at `since`.
-        let carried = |since: Option<Instant>| {
-            since.map_or(0.0, |since| {
-                let after = self.sampled.saturating_duration_since(since).as_secs_f32();
-                cap / (keep * rate) * (decayed(after) - decayed(after + elapsed))
-            })
         };
-        if turned {
-            let built = cap * (elapsed - keep / rate * (1.0 - decayed(elapsed)));
-            carried(self.swim_moved) + built
-        } else {
-            carried(self.swim_carry)
-        }
+        let left = 1.0 - (-rate * elapsed).exp();
+        let SwimMomentum { behind, speed } = self.swim_momentum;
+        let start = share.mul_add(speed, behind).min(speed);
+        cap * (share * (elapsed - keep * left / rate) + start * left / (keep * rate))
+    }
+
+    /// Carries [`Self::swim_momentum`] over an accepted sample that turned
+    /// the heading by `share` ([`turn_share`]) and `moved` the player across
+    /// the ground plane, as [`Self::carried_behind`] bounds it.
+    fn carry_swim_momentum(&mut self, request: &MovementRequest, share: f32, moved: bool) {
+        let seconds = request
+            .created
+            .saturating_duration_since(self.sampled)
+            .as_secs_f32();
+        // Without the generation's water, nothing is carried
+        // ([`Self::carried_behind`] is not asked).
+        let kept = self
+            .swim_keep
+            .and_then(wet_rate)
+            .map_or(0.0, |rate| (-rate * seconds).exp());
+        let was = self.swim_momentum;
+        let speed = if moved { 1.0 } else { was.speed * kept };
+        self.swim_momentum = SwimMomentum {
+            behind: if request.mode == MovementMode::Swim {
+                // What lay behind the old heading dies away; of the rest, at
+                // most the turn's share comes round behind the new one.
+                share.mul_add(speed, was.behind * kept).min(speed)
+            } else if moved {
+                // Land velocity is unread here: any movement there may carry
+                // into the water at the cap, in any direction.
+                1.0
+            } else {
+                was.behind * kept
+            },
+            speed,
+        };
     }
 
     fn interval(&self, created: Instant) -> f32 {
