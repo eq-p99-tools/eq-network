@@ -3594,3 +3594,167 @@ fn pad_completion_keeps_an_actual_upward_velocity_without_restarting_jump_rules(
     assert!((motion.held.unwrap().delta[2] - 0.4).abs() < 0.00001);
     assert_eq!(motion.guard.surfacing, Some((at(410), 8.0)));
 }
+
+/// A Titanium swimmer at full health, unbuffed: backing up in water takes
+/// no rate of its own, and the grant reads the generation's water.
+fn unbuffed_swim_session(start: Instant) -> MotionSession {
+    use crate::movement::{titanium_speeds, SpeedState};
+    let calibration = titanium_speeds(&SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: false,
+        ducking: false,
+        zone_id: 1,
+        swimming_skill: Some(100),
+    })
+    .motion
+    .unwrap();
+    assert!(calibration.swim.is_some());
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_swimming(true)
+        .with_heading_snapshots(true);
+    session.calibrate(calibration, start).unwrap();
+    session
+}
+
+fn stroke_to(x: f32, y: f32, heading: f32, at: Instant) -> MovementRequest {
+    let mut request = MovementRequest::new(
+        MovementMode::Swim,
+        11,
+        Position {
+            x,
+            y,
+            heading,
+            ..Position::default()
+        },
+        at,
+    );
+    request.heading = HeadingUpdate::Snapshot;
+    request
+}
+
+#[test]
+fn a_turning_stroke_may_carry_momentum_behind_its_new_heading() {
+    // The live refusal: strafing left near the bottom of Timorous Deep
+    // while the mouse turned right, heading 123.3 to 109.3 in 149 ms, the
+    // stroke ending 0.47 units mostly behind the new heading.
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = unbuffed_swim_session(start);
+    session
+        .send_move_sample(&stroke_to(0.0, 0.0, 123.3188, at(135)), at(135), |_| Ok(()))
+        .unwrap();
+    session
+        .send_move_sample(
+            &stroke_to(0.0671, -0.467, 109.275_32, at(284)),
+            at(284),
+            |_| Ok(()),
+        )
+        .unwrap();
+    // A whole turn of carried strafe, still within the horizontal cap.
+    let mut ms = 284;
+    let (mut x, mut y, mut heading) = (0.0671_f32, -0.467_f32, 109.275_32_f32);
+    for _ in 0..8 {
+        ms += 150;
+        heading = (heading - 18.0).rem_euclid(512.0);
+        let behind = (heading / 512.0 * std::f32::consts::TAU).sin_cos();
+        x -= 0.5 * behind.0;
+        y -= 0.5 * behind.1;
+        session
+            .send_move_sample(&stroke_to(x, y, heading, at(ms)), at(ms), |_| Ok(()))
+            .unwrap_or_else(|error| panic!("turning stroke at {ms} ms refused: {error}"));
+    }
+}
+
+#[test]
+fn a_held_heading_backs_up_only_as_far_as_momentum_from_the_last_turn_carries() {
+    // Heading 128 faces +x; behind is -x.
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = unbuffed_swim_session(start);
+    session
+        .send_move_sample(&stroke_to(0.0, 0.0, 300.0, at(100)), at(100), |_| Ok(()))
+        .unwrap();
+    // The turn to 128: momentum from facing 300 may now lie behind.
+    session
+        .send_move_sample(&stroke_to(-0.5, 0.0, 128.0, at(250)), at(250), |_| Ok(()))
+        .unwrap();
+    // Held just after the turn, what the turn carried glides on behind.
+    session
+        .send_move_sample(&stroke_to(-1.5, 0.0, 128.0, at(400)), at(400), |_| Ok(()))
+        .unwrap();
+    // Two seconds on at the same heading the carried share has died away
+    // (0.95 a frame), and unbuffed input adds none behind: refused.
+    let mut ms = 400;
+    while ms < 2_400 {
+        ms += 150;
+        session
+            .send_move_sample(&stroke_to(-1.5, 0.0, 128.0, at(ms)), at(ms), |_| Ok(()))
+            .unwrap();
+    }
+    let refused = session
+        .send_move_sample(
+            &stroke_to(-1.8, 0.0, 128.0, at(ms + 150)),
+            at(ms + 150),
+            |_| panic!("backing up in water long after the last turn"),
+        )
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("backing up in water"),
+        "{refused}"
+    );
+    // Forward and sideways still go.
+    session
+        .send_move_sample(
+            &stroke_to(-1.0, 0.5, 128.0, at(ms + 150)),
+            at(ms + 150),
+            |_| Ok(()),
+        )
+        .unwrap();
+}
+
+#[test]
+fn entering_the_water_backing_up_glides_on_only_as_its_momentum_carries() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = unbuffed_swim_session(start);
+    // Backing up on land at heading 128.
+    let mut ashore = MovementRequest::new(
+        MovementMode::Backward,
+        11,
+        Position {
+            x: -1.5,
+            heading: 128.0,
+            ..Position::default()
+        },
+        at(150),
+    );
+    ashore.heading = HeadingUpdate::Snapshot;
+    session
+        .send_move_sample(&ashore, at(150), |_| Ok(()))
+        .unwrap();
+    // Into the water: the land momentum may carry on behind for a moment.
+    session
+        .send_move_sample(&stroke_to(-2.5, 0.0, 128.0, at(300)), at(300), |_| Ok(()))
+        .unwrap();
+    let mut ms = 300;
+    while ms < 2_300 {
+        ms += 150;
+        session
+            .send_move_sample(&stroke_to(-2.5, 0.0, 128.0, at(ms)), at(ms), |_| Ok(()))
+            .unwrap();
+    }
+    assert!(session
+        .send_move_sample(
+            &stroke_to(-2.8, 0.0, 128.0, at(ms + 150)),
+            at(ms + 150),
+            |_| Ok(())
+        )
+        .is_err());
+}
