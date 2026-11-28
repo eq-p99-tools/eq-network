@@ -3672,6 +3672,112 @@ fn a_turning_stroke_may_carry_momentum_behind_its_new_heading() {
     }
 }
 
+/// Swims the program's wet step (0x4bfe0f) with the unbuffed swimmer's
+/// inputs from rest, the heading turning at `turn(seconds)` heading units a
+/// second, and sends each `interval(n)`-millisecond sample's endpoint.
+/// Returns the first refusal.
+fn swim_turning(
+    forward: f32,
+    strafe: f32,
+    turn: impl Fn(f32) -> f32,
+    interval: impl Fn(usize) -> u64,
+) -> Option<String> {
+    use crate::movement::water::{WetInput, WetVelocity};
+    use crate::movement::{titanium_speeds, SpeedState};
+    let swim = titanium_speeds(&SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: false,
+        ducking: false,
+        zone_id: 1,
+        swimming_skill: Some(100),
+    })
+    .motion
+    .unwrap()
+    .swim
+    .unwrap();
+    let start = Instant::now();
+    let mut session = unbuffed_swim_session(start);
+    let mut velocity = WetVelocity::default();
+    let (mut x, mut y, mut heading) = (0.0_f32, 0.0_f32, 0.0_f32);
+    let mut ms = 0_u64;
+    for sample in 0..40 {
+        let until = ms + interval(sample);
+        while ms < until {
+            let seconds = Duration::from_millis(ms).as_secs_f32();
+            let (sin, cos) = (heading / 512.0 * std::f32::consts::TAU).sin_cos();
+            // Ahead is (sin, cos), as the backing check reads it; strafe
+            // input is square to it, never behind.
+            let input = WetInput {
+                horizontal: [
+                    (forward * swim.forward).mul_add(sin, strafe * swim.strafe * cos),
+                    (forward * swim.forward).mul_add(cos, -strafe * swim.strafe * sin),
+                ],
+                ..WetInput::default()
+            };
+            let (travel, _) = velocity.advance(swim.set, input, 0.001);
+            x += travel[0];
+            y += travel[1];
+            heading = turn(seconds).mul_add(0.001, heading).rem_euclid(512.0);
+            ms += 1;
+        }
+        let at = start + Duration::from_millis(ms);
+        if let Err(error) = session.send_move_sample(&stroke_to(x, y, heading, at), at, |_| Ok(()))
+        {
+            return Some(format!("sample {sample} at {ms} ms: {error}"));
+        }
+    }
+    None
+}
+
+#[test]
+fn the_wet_step_strafing_through_a_mouse_turn_is_never_refused_as_backing() {
+    // The live refusals turned about 14 heading units in 149 ms (94 a
+    // second) while strafing; cover slow to very fast mouse turns either
+    // way, strafing either side or swimming forward, at the sample
+    // spacings the client sends.
+    let spacings: [&dyn Fn(usize) -> u64; 3] =
+        [&|_| 149, &|n| [60, 149, 240, 95, 180][n % 5], &|n| {
+            50 + (n as u64 * 37) % 200
+        }];
+    for rate in [5.0, 20.0, 50.0, 94.0, 150.0, 300.0, 700.0, 1_200.0] {
+        for (forward, strafe) in [(0.0, 1.0), (0.0, -1.0), (1.0, 0.0)] {
+            for turn_sign in [1.0, -1.0] {
+                for spacing in spacings {
+                    let steady = |_| turn_sign * rate;
+                    // The mouse sweeping back and forth.
+                    let sweep = |seconds: f32| turn_sign * rate * (seconds * 4.0).sin().signum();
+                    // Turning, then held a while, then turning again.
+                    let pause = |seconds: f32| {
+                        if (seconds % 1.5) < 0.9 {
+                            turn_sign * rate
+                        } else {
+                            0.0
+                        }
+                    };
+                    for (name, refused) in [
+                        ("steady", swim_turning(forward, strafe, steady, spacing)),
+                        ("sweep", swim_turning(forward, strafe, sweep, spacing)),
+                        ("pause", swim_turning(forward, strafe, pause, spacing)),
+                    ] {
+                        assert!(
+                            refused.is_none(),
+                            "{name} turn {} at {rate}/s, forward {forward}, strafe {strafe}: {}",
+                            turn_sign,
+                            refused.unwrap_or_default()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn a_held_heading_backs_up_only_as_far_as_momentum_from_the_last_turn_carries() {
     // Heading 128 faces +x; behind is -x.
