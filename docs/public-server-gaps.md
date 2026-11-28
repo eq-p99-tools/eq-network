@@ -1,7 +1,8 @@
 # P99 and Quarm: remaining client gaps
 
-Source/policy refresh: 2026-11-17. The current snapshot below supersedes the
-older implementation labels. It adds no native-test or live-server evidence.
+The policy inventory below was last reconciled on 2026-11-17. For capabilities
+at the revision you are integrating, consult the [server policies](../crates/eq-network/src/client/session/servers.rs).
+The dated live observations apply to their recorded builds.
 
 Historical inspection date: 2026-11-02. Baselines: networking
 [`6ae8956`](https://github.com/eq-p99-tools/eq-network/tree/6ae8956068415fa30934485ccdae1a102757b50c)
@@ -29,7 +30,7 @@ the whole interaction works. The policy inventory is
 [`servers.rs`](../crates/eq-network/src/client/session/servers.rs); wire coverage
 is separately tracked under `client/session/coverage`.
 
-## Current source and policy snapshot, 2026-11-17
+## Source and policy snapshot, 2026-11-17
 
 This table reconciles the older inventory with the checked-in
 [`servers.rs` policy and tests](../crates/eq-network/src/client/session/servers.rs).

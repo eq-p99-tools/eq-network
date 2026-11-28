@@ -146,16 +146,16 @@ the player's choices. The world is also told what machine the player entered
 on, once a week, just before entering the world, when the host supplies it
 (`ClientConfig::sysinfo`). No other server type sends that report.
 
-More detail on particular areas:
-[boat riding](docs/boat-riding.md), [boat control](docs/boat-control.md),
-[training](docs/training.md), [P99 reading](docs/p99-reading.md),
-[P99 manual combines](docs/p99-manual-combines.md),
-[EQMac world objects](docs/eqmac-world-objects.md),
-[EQMac looting](docs/eqmac-looting.md), [Quarm combat](docs/quarm-combat.md),
-[Quarm meals](docs/quarm-meals.md), [Quarm merchants](docs/quarm-merchants.md)
-and [session termination](docs/session-termination.md).
-[API and integration contracts](API-CONTRACT.md) says how features, commands
-and their answers behave.
+The [API contract](API-CONTRACT.md) describes command and event semantics.
+Use the following guides for implementation details and evidence.
+
+| Area | Guides |
+| --- | --- |
+| Movement | [Input readiness](docs/movement-input-readiness.md), [movement history](docs/protocol/movement-history.md), [horizontal swimming](docs/protocol/owned-swimming.md), [boat riding](docs/boat-riding.md), [boat control](docs/boat-control.md) |
+| Character and spells | [Training](docs/training.md), [EQMac profile skills](docs/eqmac-profile-skills.md), [memorization](docs/memorization-updates.md), [beneficial buff cancellation](docs/buff-cancellation.md), [Quarm combat](docs/quarm-combat.md) |
+| Inventory and trade | [Carried-stack mass](docs/carried-stack-mass-bound.md), [cursor destruction](docs/cursor-destruction.md), [P99 manual combines](docs/p99-manual-combines.md), [EQMac world objects](docs/eqmac-world-objects.md), [EQMac looting](docs/eqmac-looting.md), [Quarm merchants](docs/quarm-merchants.md) |
+| Reading, meals and consumption | [P99 reading](docs/p99-reading.md), [EQMac reading](docs/eqmac-reading.md), [Quarm scribe consumption](docs/quarm-consumption.md), [Quarm meals](docs/quarm-meals.md), [EQMac stamina](docs/protocol/eqmac-stamina.md) |
+| Sessions | [EQMac world selection](docs/eqmac-world-reliability.md), [session termination](docs/session-termination.md) |
 
 ## Crates
 

@@ -67,8 +67,14 @@ nor endpoint velocity times elapsed. Other sets retain their coefficients.
 
 Coefficients follow the Titanium read at `eqgame.exe` 0x4bfe0f. The unchanged
 60 Hz clock is this client's inferred model, not a measured native frame rate.
-Clipping, ordinary land/fall entry, surface/shoreline ownership and unmatched
-reset remain on the old guard and can still exhibit its refusals.
+For fully submerged Titanium movement with a matching reset, a host can
+supply an immutable body and collision snapshot through `SwimSceneHandle`.
+The scene-backed path checks the floor, swept motion, water kind and clearance
+for a vertical floor correction using the same body. An unknown collision
+query declines the trial. A new scene needs its own matching reset. Ordinary
+land or fall entry and surface transitions remain outside this replay path.
+See the [scene interface](../../crates/eq-network-game/src/movement/swim_scene.rs)
+for the required queries.
 
 Synthetic regressions use the real recurrence and distinguish physical path,
 accepted report chords and net endpoint. They are not reconstructions of live

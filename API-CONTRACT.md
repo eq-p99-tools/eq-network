@@ -1148,8 +1148,8 @@ logout-close deadline, with unchanged timing and local selection/desktop routing
 It does not confirm server logout, cleanup or a reconnect cooldown waiver.
 Consumers must handle both local completion destinations and keep their evidence
 distinct. Ordinary camp preparation and the explicit ExitAtOnce opt-in still
-share the same logout/reply owner. A terminal error without a logout reply is
-still an error, not either completion event.
+share the same logout/reply owner. A terminal error outside the documented
+peer-close case continues through the session error path.
 
 ## Meal command availability
 
@@ -1780,10 +1780,11 @@ only and leaves the received color and faction available separately. The
 `combat::Consideration::faction` docs give the wire order and cite the pinned
 server swaps.
 
-This library workspace intentionally does not commit `Cargo.lock`. CI resolves
-dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
-native tests on Windows. These checks
-neither load proprietary assets nor connect to a live game server. A fresh
+This library workspace leaves `Cargo.lock` to downstream applications.
+The automatic Windows checks cover formatting and dependency policy. The
+manual workflow defaults to Windows with Rust 1.99.0 and runs strict Clippy,
+all-target tests and rustdoc with all features. It also accepts Linux as an
+explicit platform choice. See [Contributing](CONTRIBUTING.md) for local commands. A fresh
 downstream resolution and packaged-crate consumer remain release checks,
 because a downstream application owns its dependency lockfile.
 
@@ -1865,6 +1866,9 @@ Quarm and TAKP offer `Rolling`, `Assisting` and `Splitting` the same way
     wait, and is otherwise unknown.
   - What the `EQMac` program's purse shows after a split that made change is
     unread (open row 6.585d).
+
+Titanium accepts a selected player or NPC corpse for summon and drag requests.
+The server decides ownership, consent and movement permission.
 
 Quarm and TAKP offer `Corpses` the same way (6.591), from Quarm fc75fcf and TAKP
 44afcbf.
@@ -2388,8 +2392,11 @@ Sending 0 in the air was our departure until now, and the change applies on
 every Titanium server type, P99 included.
 
 `SetBookOptions { session_id, memorize_without_sitting }` is an explicit
-memorization departure: no automatic sitting and no local five-second
-preparation. Scribing retains its existing posture and delay. Spell ownership,
+memorization departure. It bypasses automatic sitting and local preparation.
+For ordinary memorization, hosts supplying preparation inputs poll the worker
+and receive progress. Omitting the inputs retains the legacy worker delay.
+See [Memorization updates](docs/memorization-updates.md) for timing, fallback
+and confirmation. Scribing retains its existing posture and delay. Spell ownership,
 current book, gem, inventory, action holds, stun and server-reply handling
 remain. A changed option cancels pending preparation rather than converting
 it in flight. A new admission starts with default book and movement choices,
