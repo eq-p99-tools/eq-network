@@ -217,6 +217,9 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
     /// Current character's opt-in; zone crossings retain it.
     pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
+    /// Current character's incoming trade policy, shared across zone visits.
+    pub(in crate::client) player_trade:
+        std::rc::Rc<std::cell::Cell<eq_network_game::exchange::PlayerTrade>>,
     /// Current character's server filters; zone crossings retain them.
     pub(in crate::client) server_filters:
         std::cell::RefCell<eq_network_game::filters::ServerFilters>,
@@ -245,6 +248,14 @@ impl<'a> CharacterSession<'a> {
         duration: Option<Duration>,
         commands: Option<&'a Receiver<ClientCommand>>,
     ) -> Self {
+        let player_trade = config
+            .initial_player_trade
+            .as_ref()
+            .filter(|_| !config.character.is_empty())
+            .map_or_else(
+                eq_network_game::exchange::PlayerTrade::default,
+                |provider| provider.policy(None, &config.character),
+            );
         Self {
             config: config.clone(),
             identity,
@@ -254,6 +265,7 @@ impl<'a> CharacterSession<'a> {
             commands,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
+            player_trade: std::rc::Rc::new(std::cell::Cell::new(player_trade)),
             server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
             guild_roster: guilds::RosterTransfer::default(),
@@ -263,11 +275,23 @@ impl<'a> CharacterSession<'a> {
         }
     }
 
+    fn load_initial_trade_policy(&self, world: Option<&str>) {
+        let (Some(provider), Some(world)) = (&self.config.initial_player_trade, world) else {
+            return;
+        };
+        if !self.config.character.is_empty() {
+            self.player_trade
+                .set(provider.policy(Some(world), &self.config.character));
+        }
+    }
+
     fn on_zone_exit(&mut self, exit: &ZoneExit) {
         if matches!(exit, ZoneExit::CharacterSelect) {
             // Show the list and forget the departing character's runtime choice.
             self.config.character.clear();
             self.answer_list_polls.set(self.config.answer_list_polls);
+            self.player_trade
+                .set(eq_network_game::exchange::PlayerTrade::Everyone);
             self.server_filters
                 .replace(self.config.server_filters.clone());
             self.riding = std::sync::Arc::default();
@@ -352,4 +376,47 @@ fn cstr(bytes: &[u8]) -> &[u8] {
 }
 fn le32(bytes: &[u8]) -> u32 {
     u32::from_le_bytes(bytes.try_into().unwrap())
+}
+
+#[cfg(test)]
+mod trade_policy_tests {
+    use super::*;
+    use eq_network_game::exchange::PlayerTrade;
+
+    #[derive(Debug)]
+    struct SavedPolicy;
+
+    impl super::super::InitialPlayerTrade for SavedPolicy {
+        fn policy(&self, world: Option<&str>, character: &str) -> PlayerTrade {
+            assert_eq!(character, "Tester");
+            match world {
+                None => PlayerTrade::PartyOnly,
+                Some("Example") => PlayerTrade::NoOne,
+                Some(_) => PlayerTrade::Everyone,
+            }
+        }
+    }
+
+    #[test]
+    fn direct_trade_policy_uses_the_world_identity_and_resets_after_character_select() {
+        let mut config =
+            ClientConfig::for_protocol(ServerProtocol::EqEmu, "Tester", "synthetic", "", "Tester");
+        config.initial_player_trade = Some(std::sync::Arc::new(SavedPolicy));
+        let identity = ClientIdentity::new("Example", "Example");
+        let credentials = Credentials {
+            account: "synthetic".into(),
+            key: [0; 10],
+        };
+        let stop = CancellationToken::default();
+        let mut context =
+            CharacterSession::new(&config, &identity, &credentials, &stop, None, None);
+        assert_eq!(context.player_trade.get(), PlayerTrade::PartyOnly);
+        context.load_initial_trade_policy(None);
+        assert_eq!(context.player_trade.get(), PlayerTrade::PartyOnly);
+        context.load_initial_trade_policy(Some("Example"));
+        assert_eq!(context.player_trade.get(), PlayerTrade::NoOne);
+        context.on_zone_exit(&ZoneExit::CharacterSelect);
+        context.load_initial_trade_policy(Some("Example"));
+        assert_eq!(context.player_trade.get(), PlayerTrade::Everyone);
+    }
 }

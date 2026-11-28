@@ -91,6 +91,16 @@ impl Groups {
         (group.members.len() >= OTHERS).then_some(("The group is full.", FULL))
     }
 
+    fn project_group(&self, world: &mut World) {
+        world.grouped = self.group.is_some();
+        world.trade_group.clear();
+        if let Some(group) = &self.group {
+            world
+                .trade_group
+                .extend(group.leader.iter().chain(&group.members).cloned());
+        }
+    }
+
     fn follow_news(&mut self, update: &GroupUpdate, player: &str) {
         match update {
             GroupUpdate::Invited {
@@ -364,7 +374,7 @@ impl Feature for Groups {
         }
         if let Message::Event(WorldEvent::Group(update)) = message {
             self.follow_news(update, out.sender.name);
-            world.grouped = self.group.is_some();
+            self.project_group(world);
         }
         Ok(())
     }
@@ -387,7 +397,7 @@ impl Feature for Groups {
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         for update in std::mem::take(&mut self.staged) {
             self.follow_news(&update, out.sender.name);
-            world.grouped = self.group.is_some();
+            self.project_group(world);
             out.log
                 .send(ClientEvent::World(WorldEvent::Group(update)))?;
         }
@@ -396,6 +406,7 @@ impl Feature for Groups {
 
     fn connection_ended(&mut self, world: &mut World) {
         world.grouped = false;
+        world.trade_group.clear();
         self.invitation = None;
         self.rejected = None;
         self.group = None;

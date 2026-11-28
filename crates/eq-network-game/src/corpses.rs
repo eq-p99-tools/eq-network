@@ -52,6 +52,57 @@ pub const MAX_NAME: usize = 62;
 /// Name fields in the drag and summon requests.
 const NAME_FIELD: usize = 64;
 
+/// The membership scope of a Titanium corpse auto-consent preference.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ConsentAudience {
+    /// Group members.
+    Group,
+    /// Raid members.
+    Raid,
+    /// Guild members.
+    Guild,
+}
+
+impl ConsentAudience {
+    /// Index of this audience in the three profile flags.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Group => 0,
+            Self::Raid => 1,
+            Self::Guild => 2,
+        }
+    }
+}
+
+/// The three flags the Titanium server reports in the character profile.
+/// Missing and unrecognized bytes are unknown.
+#[must_use]
+pub fn titanium_auto_consent_profile(body: &[u8]) -> [Option<bool>; 3] {
+    [19_572, 19_573, 19_574].map(|index| match body.get(index) {
+        Some(0) => Some(false),
+        Some(1) => Some(true),
+        _ => None,
+    })
+}
+
+/// The native appearance request, separate from consenting a named player.
+///
+/// # Errors
+/// Rejects the reserved zero spawn ID.
+pub fn titanium_auto_consent(
+    spawn: u16,
+    audience: ConsentAudience,
+    enabled: bool,
+) -> Result<EncodedCommand> {
+    let kind = match audience {
+        ConsentAudience::Group => 40,
+        ConsentAudience::Raid => 41,
+        ConsentAudience::Guild => 42,
+    };
+    crate::listing::update(spawn, kind, u32::from(enabled))
+}
+
 /// A consent given or taken back, as the server told the owner or the
 /// player consented (`ConsentResponse_Struct`).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

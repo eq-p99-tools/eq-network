@@ -393,6 +393,7 @@ fn run_connected(
     let session_id = rand::random();
     let mut world = World::for_zone(session_id, config);
     world.ruleset = context.world_ruleset.get();
+    world.player_trade = std::rc::Rc::clone(&context.player_trade);
     let mut recording_only = false;
     let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
@@ -1066,7 +1067,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 157;
+    const KINDS: usize = 159;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1135,6 +1136,7 @@ mod tests {
             ClientCommand::GroundFrame { .. } => 152,
             ClientCommand::SwimFrame { .. } => 156,
             ClientCommand::OfferTrade { .. } => 29,
+            ClientCommand::SetPlayerTrade { .. } => 157,
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
@@ -1166,6 +1168,7 @@ mod tests {
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
             ClientCommand::Consent { .. } => 36,
+            ClientCommand::SetCorpseAutoConsent { .. } => 158,
             ClientCommand::SummonCorpse { .. } => 37,
             ClientCommand::DragCorpse { .. } => 38,
             ClientCommand::DropCorpse { .. } => 39,
@@ -1640,6 +1643,10 @@ mod tests {
                 request: MovementRequest::new(MovementMode::Forward, session_id, position, created),
                 state: eq_network_game::movement::GroundState::new([0.0; 2], false).unwrap(),
             },
+            ClientCommand::SetPlayerTrade {
+                session_id,
+                policy: eq_network_game::exchange::PlayerTrade::PartyOnly,
+            },
             ClientCommand::OfferTrade {
                 session_id,
                 with_id: 9,
@@ -1761,6 +1768,11 @@ mod tests {
             ClientCommand::WhoAll {
                 session_id,
                 filter: eq_network_game::who::WhoFilter::default(),
+            },
+            ClientCommand::SetCorpseAutoConsent {
+                session_id,
+                audience: eq_network_game::corpses::ConsentAudience::Group,
+                enabled: true,
             },
             ClientCommand::Consent {
                 session_id,
@@ -2471,6 +2483,7 @@ mod tests {
             ClientCommand::SelectCharacter {
                 selection_id: 1,
                 slot: 0,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             },
         ] {
             for features in &servers {

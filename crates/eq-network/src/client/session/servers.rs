@@ -1521,7 +1521,7 @@ impl ServerType for EqEmu {
     }
 
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::corpses())
+        offer(Box::new(Corpses::titanium_eqemu()))
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {

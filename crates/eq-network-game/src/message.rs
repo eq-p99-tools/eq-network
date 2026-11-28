@@ -519,6 +519,9 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         |error| unreadable(Part::World, &error),
         |coins| Message::Event(WorldEvent::Coins(coins)),
     ));
+    messages.push(Message::Event(WorldEvent::CorpseAutoConsent(
+        crate::corpses::titanium_auto_consent_profile(body),
+    )));
     messages.push(crate::split::titanium_profile(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |on| Message::Event(WorldEvent::AutoSplit(on)),
@@ -1188,6 +1191,7 @@ mod tests {
                 )),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
+                Message::Event(WorldEvent::CorpseAutoConsent([Some(false), Some(false), Some(false)])),
                 Message::Event(WorldEvent::AutoSplit(true)),
                 Message::Event(WorldEvent::PlayedTime(_)),
                 Message::Event(WorldEvent::Nourishment(_)),
@@ -1226,6 +1230,7 @@ mod tests {
                     part: Part::World,
                     ..
                 },
+                Message::Event(WorldEvent::CorpseAutoConsent([None, None, None])),
                 Message::Unreadable {
                     part: Part::World,
                     ..

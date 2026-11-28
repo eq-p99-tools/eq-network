@@ -787,6 +787,7 @@ fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
     let choose = ClientCommand::SelectCharacter {
         selection_id: 1,
         slot: 0,
+        player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
     };
     assert!(allowed(&say));
     assert!(!allowed(&cast), "casting is greyed out");

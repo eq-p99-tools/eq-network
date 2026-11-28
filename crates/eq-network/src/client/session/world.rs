@@ -499,9 +499,10 @@ fn titanium_owned(
                         super::creation::names::answer(list, request, None, log)?;
                     }
                 }
-                Some(crate::client::selection::Choice::Enter(name))
+                Some(crate::client::selection::Choice::Enter(name, trade))
                     if creating.is_none() && !deletion.blocked() =>
                 {
+                    context.player_trade.set(trade);
                     chosen = Some(name);
                 }
                 Some(crate::client::selection::Choice::Create(character))
@@ -757,6 +758,13 @@ fn titanium_owned(
                         context.world_ruleset.set(Some(world_rules.pvp));
                     }
                 }
+                if !zoning && packet.opcode == rules::TITANIUM_LOG_SERVER_OPCODE {
+                    context.load_initial_trade_policy(
+                        crate::world::titanium_world_name(&packet.body)
+                            .ok()
+                            .as_deref(),
+                    );
+                }
                 if !news(packet.opcode, &packet.body, log)? && !chatted {
                     unheard(server.wire(), packet.opcode, &packet.body, log)?;
                 }
@@ -936,6 +944,7 @@ pub(super) mod tests {
             commands: None,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(false),
+            player_trade: std::rc::Rc::default(),
             server_filters: std::cell::RefCell::default(),
             riding: std::sync::Arc::default(),
             guild_roster: crate::client::session::guilds::RosterTransfer::default(),

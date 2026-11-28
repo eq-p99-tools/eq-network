@@ -1,5 +1,20 @@
 # API and integration contracts
 
+## Incoming player trade and automatic corpse consent
+
+The host includes a character's incoming trade setting in `SelectCharacter`.
+Hosts automatically entering a configured character can supply an
+`InitialPlayerTrade` provider. The provider can read the character's policy
+once the world reports its short name. `SetPlayerTrade` changes the setting
+for the current character and survives zone transfers. The exchange worker
+uses the received group roster for party-only requests. Outgoing offers and
+NPC hand-ins retain their established custody rules.
+
+On Titanium EQEmu, `CorpseAutoConsent` allows three scoped
+`SetCorpseAutoConsent` requests. `WorldEvent::CorpseAutoConsent` is reported by
+the profile. `WorldEvent::CorpseAutoConsentSent` reports a sent request scoped
+to its zone visit. Hosts must treat the two observations separately.
+
 ## Authored exit destination zones (6.686)
 
 `WorldEvent::ZoneLineZones { session_id, zones }` projects only the received
