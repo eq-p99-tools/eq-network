@@ -208,6 +208,17 @@ pub trait InstalledZoneBoundaries: fmt::Debug + Send + Sync {
     ) -> Option<eq_network_game::zoning::ZoneLineDestination>;
 }
 
+/// Reads the host's incoming trade preference for an automatically entered character.
+pub trait InitialPlayerTrade: fmt::Debug + Send + Sync {
+    /// Gives the shared fallback before the world reports its short name, then
+    /// the selected character's saved policy when that name becomes available.
+    fn policy(
+        &self,
+        world: Option<&str>,
+        character: &str,
+    ) -> eq_network_game::exchange::PlayerTrade;
+}
+
 /// Connection and logging preferences.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -226,6 +237,9 @@ pub struct ClientConfig {
     pub server: String,
     /// Character to enter automatically; empty requests interactive selection.
     pub character: String,
+    /// Host's saved trade preference for automatic character entry.
+    pub initial_player_trade: Option<std::sync::Arc<dyn InitialPlayerTrade>>,
+
     /// Whether decoded records retain raw packet representations.
     pub include_raw: bool,
     /// None logs every channel; an empty set logs no decoded chat.
@@ -303,6 +317,7 @@ impl ClientConfig {
             credentials: Credentials::new(user, pass),
             server: server.into(),
             character: character.into(),
+            initial_player_trade: None,
             include_raw: false,
             channels: None,
             reconnect_delay: Duration::from_secs(30),

@@ -222,6 +222,11 @@ fn world_owned(
                 }));
             }
             _ => {
+                if !zoning && packet.opcode == rules::EQMAC_LOG_SERVER_OPCODE {
+                    context.load_initial_trade_policy(
+                        rules::eqmac_world_name(&packet.body).ok().as_deref(),
+                    );
+                }
                 if !news(packet.opcode, &packet.body, log)? && !chatted {
                     super::unheard(server.wire(), packet.opcode, &packet.body, log)?;
                 }

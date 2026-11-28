@@ -758,6 +758,13 @@ fn titanium_owned(
                         context.world_ruleset.set(Some(world_rules.pvp));
                     }
                 }
+                if !zoning && packet.opcode == rules::TITANIUM_LOG_SERVER_OPCODE {
+                    context.load_initial_trade_policy(
+                        crate::world::titanium_world_name(&packet.body)
+                            .ok()
+                            .as_deref(),
+                    );
+                }
                 if !news(packet.opcode, &packet.body, log)? && !chatted {
                     unheard(server.wire(), packet.opcode, &packet.body, log)?;
                 }

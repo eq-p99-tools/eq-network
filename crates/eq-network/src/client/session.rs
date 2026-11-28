@@ -248,6 +248,14 @@ impl<'a> CharacterSession<'a> {
         duration: Option<Duration>,
         commands: Option<&'a Receiver<ClientCommand>>,
     ) -> Self {
+        let player_trade = config
+            .initial_player_trade
+            .as_ref()
+            .filter(|_| !config.character.is_empty())
+            .map_or_else(
+                eq_network_game::exchange::PlayerTrade::default,
+                |provider| provider.policy(None, &config.character),
+            );
         Self {
             config: config.clone(),
             identity,
@@ -257,13 +265,23 @@ impl<'a> CharacterSession<'a> {
             commands,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
-            player_trade: std::rc::Rc::default(),
+            player_trade: std::rc::Rc::new(std::cell::Cell::new(player_trade)),
             server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
             guild_roster: guilds::RosterTransfer::default(),
             chat: std::sync::Arc::default(),
             chat_pace: chat_pace::SharedPace::default(),
             world_ruleset: std::cell::Cell::new(None),
+        }
+    }
+
+    fn load_initial_trade_policy(&self, world: Option<&str>) {
+        let (Some(provider), Some(world)) = (&self.config.initial_player_trade, world) else {
+            return;
+        };
+        if !self.config.character.is_empty() {
+            self.player_trade
+                .set(provider.policy(Some(world), &self.config.character));
         }
     }
 
