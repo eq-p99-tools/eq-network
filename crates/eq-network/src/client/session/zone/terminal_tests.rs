@@ -160,6 +160,7 @@ fn the_zone_loop_refuses_queued_work_and_drains_the_final_logout() {
         commands: Some(&receiver),
         sysinfo_reported_at: Cell::new(0),
         answer_list_polls: Cell::new(false),
+        player_trade: std::rc::Rc::default(),
         server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
         guild_roster: crate::client::session::guilds::RosterTransfer::default(),

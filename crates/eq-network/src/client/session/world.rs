@@ -937,6 +937,7 @@ pub(super) mod tests {
             commands: None,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(false),
+            player_trade: std::rc::Rc::default(),
             server_filters: std::cell::RefCell::default(),
             riding: std::sync::Arc::default(),
             guild_roster: crate::client::session::guilds::RosterTransfer::default(),
