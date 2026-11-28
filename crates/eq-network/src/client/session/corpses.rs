@@ -45,7 +45,7 @@ struct EqMacCorpses {
 const EQMAC_SUMMON_FLOOR: Duration = Duration::from_millis(250);
 
 impl Corpses {
-    /// Stock EQEmu implements and persists the Titanium auto-consent flags.
+    /// Stock `EQEmu` implements and persists the Titanium auto-consent flags.
     pub(super) const fn titanium_eqemu() -> Self {
         Self {
             eqmac: None,

@@ -508,7 +508,6 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::Buy { session_id, .. }
         | ClientCommand::Sell { session_id, .. }
         | ClientCommand::OfferTrade { session_id, .. }
-        | ClientCommand::SetPlayerTrade { session_id, .. }
         | ClientCommand::AcceptTrade { session_id, .. }
         | ClientCommand::MoveCoins { session_id, .. }
         | ClientCommand::DestroyCoins { session_id, .. }
