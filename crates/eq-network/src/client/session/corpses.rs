@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 pub(super) struct Corpses {
     /// TAKP's and Quarm's rules, where they apply.
     eqmac: Option<EqMacCorpses>,
-    auto_consent: bool,
+    auto_consent: Option<[Option<bool>; 3]>,
 }
 
 /// What TAKP and Quarm take: whether the server takes `/corpsedrop`, and
@@ -49,7 +49,7 @@ impl Corpses {
     pub(super) const fn titanium_eqemu() -> Self {
         Self {
             eqmac: None,
-            auto_consent: true,
+            auto_consent: Some([None; 3]),
         }
     }
 
@@ -61,7 +61,7 @@ impl Corpses {
                 drop,
                 last_summon: None,
             }),
-            auto_consent: false,
+            auto_consent: None,
         }
     }
 }
@@ -133,14 +133,15 @@ fn request(command: &ClientCommand, world: &World, official: bool) -> Result<Req
 impl Feature for Corpses {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         let mut caps = vec![crate::world::Capability::Corpses];
-        if self.auto_consent {
+        if self.auto_consent.is_some() {
             caps.push(crate::world::Capability::CorpseAutoConsent);
         }
         caps
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        (self.auto_consent && matches!(command, ClientCommand::SetCorpseAutoConsent { .. }))
+        (self.auto_consent.is_some()
+            && matches!(command, ClientCommand::SetCorpseAutoConsent { .. }))
             || matches!(
                 command,
                 ClientCommand::Consent { .. }
@@ -162,17 +163,22 @@ impl Feature for Corpses {
             enabled,
         } = *command
         {
-            if !self.auto_consent
-                || session_id != world.session_id
-                || world.player.as_ref().is_none()
-            {
+            let sent = self
+                .auto_consent
+                .as_mut()
+                .filter(|_| session_id == world.session_id && world.player.as_ref().is_some());
+            let Some(sent) = sent else {
                 return actions::refuse(
                     command,
                     "Auto consent is unavailable on this zone visit",
                     out.log,
                 );
+            };
+            if sent[audience.index()] == Some(enabled) {
+                return Ok(());
             }
             out.request(&Request::CorpseAutoConsent { audience, enabled })?;
+            sent[audience.index()] = Some(enabled);
             return out
                 .log
                 .send(ClientEvent::World(WorldEvent::CorpseAutoConsentSent {
@@ -263,6 +269,9 @@ mod tests {
                     outcome.sent[0].body,
                     [7, 0, kind, 0, u8::from(enabled), 0, 0, 0]
                 );
+                let repeated = testing::run(|out| corpse.handle(&command, &mut world, out));
+                repeated.result.unwrap();
+                assert_eq!(repeated.sent, []);
                 assert!(matches!(&outcome.events[..],
                     [ClientEvent::World(WorldEvent::CorpseAutoConsentSent {
                         session_id: 5, audience: scope, enabled: on,

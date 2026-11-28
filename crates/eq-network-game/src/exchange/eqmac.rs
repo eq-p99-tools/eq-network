@@ -89,10 +89,10 @@ pub fn busy(own_id: u16, asker: u32) -> Result<EncodedCommand> {
     refuse(own_id, asker, super::Refusal::Busy)
 }
 
-/// Sends an EQMac trade refusal with the recipient's reason.
+/// Sends an `EQMac` trade refusal with the recipient's reason.
 ///
 /// # Errors
-/// Rejects IDs outside the EQMac wire range.
+/// Rejects IDs outside the `EQMac` wire range.
 pub fn refuse(own_id: u16, asker: u32, reason: super::Refusal) -> Result<EncodedCommand> {
     let asker = u16::try_from(asker).context("spawn ID past 16 bits")?;
     ensure!(own_id != 0 && asker != 0, "a trade needs two characters");

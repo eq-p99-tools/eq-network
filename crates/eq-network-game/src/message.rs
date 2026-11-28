@@ -1191,7 +1191,7 @@ mod tests {
                 )),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
-                Message::Event(WorldEvent::CorpseAutoConsent([Some(false); 3])),
+                Message::Event(WorldEvent::CorpseAutoConsent([Some(false), Some(false), Some(false)])),
                 Message::Event(WorldEvent::AutoSplit(true)),
                 Message::Event(WorldEvent::PlayedTime(_)),
                 Message::Event(WorldEvent::Nourishment(_)),
