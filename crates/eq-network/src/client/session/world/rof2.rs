@@ -118,7 +118,7 @@ fn world_at(
                 Some(Choice::GenerateName(list, request, _, _)) => {
                     super::super::creation::names::answer(list, request, None, log)?;
                 }
-                Some(Choice::Enter(name)) => chosen = Some(name),
+                Some(Choice::Enter(name, _)) => chosen = Some(name),
                 _ => (),
             }
             if let Some(name) = chosen.as_deref() {

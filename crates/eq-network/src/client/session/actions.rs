@@ -257,6 +257,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // coins are not items.
         | ClientCommand::OfferTrade { .. }
         | ClientCommand::CancelTrade { .. }
+        | ClientCommand::SetPlayerTrade { .. }
         | ClientCommand::MoveCoins { .. }
         | ClientCommand::DestroyCoins { .. }
         | ClientCommand::Jump { .. }
@@ -355,6 +356,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // possible.
         | ClientCommand::OpenContainer { .. }
         | ClientCommand::CloseContainer { .. }
+        | ClientCommand::SetCorpseAutoConsent { .. }
         | ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
@@ -506,6 +508,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::Buy { session_id, .. }
         | ClientCommand::Sell { session_id, .. }
         | ClientCommand::OfferTrade { session_id, .. }
+        | ClientCommand::SetPlayerTrade { session_id, .. }
         | ClientCommand::AcceptTrade { session_id, .. }
         | ClientCommand::MoveCoins { session_id, .. }
         | ClientCommand::DestroyCoins { session_id, .. }
@@ -586,6 +589,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::RaidRemove { session_id, .. }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
+        | ClientCommand::SetCorpseAutoConsent { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
         | ClientCommand::SummonCorpse { session_id, .. }
         | ClientCommand::DragCorpse { session_id, .. }
@@ -658,6 +662,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Shop { .. }
         | ClientCommand::CancelTrade { .. }
+        | ClientCommand::SetPlayerTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::EnvironmentalDamage { .. }
         | ClientCommand::LiquidDamage { .. }
@@ -861,7 +866,8 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             reason,
             string_id: None,
         },
-        ClientCommand::Consent { .. }
+        ClientCommand::SetCorpseAutoConsent { .. }
+        | ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
         | ClientCommand::DropCorpse { .. } => WorldEvent::CorpseRefused {

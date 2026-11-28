@@ -219,6 +219,10 @@ pub(in crate::client) struct World {
     /// Whether the player is in a group, as the group feature follows it;
     /// only that feature changes it.
     pub(super) grouped: bool,
+    /// Names in the received group roster, maintained by Groups.
+    pub(super) trade_group: Vec<String>,
+    /// The selected character's local incoming trade policy.
+    pub(super) player_trade: std::rc::Rc<std::cell::Cell<eq_network_game::exchange::PlayerTrade>>,
     /// The player's posture as last sent or reported.
     pub(super) posture: OwnPosture,
     /// Whether the player's melee auto attack is on, as last sent; only the
@@ -310,6 +314,8 @@ impl World {
             own_spawn: None,
             validated: false,
             grouped: false,
+            trade_group: Vec::new(),
+            player_trade: std::rc::Rc::default(),
             posture: OwnPosture::default(),
             attacking: false,
             ruleset: None,

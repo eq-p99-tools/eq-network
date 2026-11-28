@@ -87,6 +87,41 @@ pub const EQMAC_CLOSES: WindowCloses = WindowCloses {
     beyond: Some(REACH),
 };
 
+/// Which incoming player trade requests this character takes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PlayerTrade {
+    /// Take requests from anyone within the normal trade guards.
+    #[default]
+    Everyone,
+    /// Take requests only from received group members.
+    PartyOnly,
+    /// Refuse every incoming player request.
+    NoOne,
+}
+
+/// Why an incoming trade request is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// The normal availability checks refused.
+    Busy,
+    /// The recipient takes no incoming trades.
+    NoOne,
+    /// The recipient takes incoming trades only from their group.
+    PartyOnly,
+}
+
+impl Refusal {
+    /// The byte put in the refusal packet.
+    #[must_use]
+    pub const fn wire(self) -> u8 {
+        match self {
+            Self::Busy => 1,
+            Self::NoOne => 0x62,
+            Self::PartyOnly => 0x63,
+        }
+    }
+}
+
 /// Who the player is exchanging with, which decides the window and its
 /// number of trade slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -144,9 +179,8 @@ pub enum ExchangeUpdate {
     Busy {
         /// The busy side.
         by: u32,
-        /// Why, where the wire says: `EQMac`'s refusal reason (0x62 and 0x63
-        /// from their trade setting, 1 busy; TAKP program read N4).
-        /// Titanium's busy packet says none.
+        /// The received refusal reason, when recognized (0x62 and 0x63
+        /// from the trade setting, 1 busy).
         reason: Option<u8>,
     },
     /// The player took another player's request, as the official client
@@ -227,7 +261,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ExchangeUpdate>> {
         CANCEL_OPCODE => ExchangeUpdate::Cancelled { by: word(body, 0) },
         BUSY_OPCODE => ExchangeUpdate::Busy {
             by: word(body, 4),
-            reason: None,
+            reason: matches!(body[8], 1 | 0x62 | 0x63).then_some(body[8]),
         },
         // `TradeCoin_Struct`: the trader, the kind (one byte) and the amount.
         COINS_OPCODE => ExchangeUpdate::Coins {
@@ -299,10 +333,20 @@ pub fn acknowledge(own_id: u16, asker: u32) -> Result<EncodedCommand> {
 /// # Errors
 /// Rejects the reserved zero ID.
 pub fn busy(own_id: u16, asker: u32) -> Result<EncodedCommand> {
+    refuse(own_id, asker, Refusal::Busy)
+}
+
+/// Refuse a Titanium trade request with the recipient's reason.
+///
+/// # Errors
+/// Rejects the reserved zero ID.
+pub fn refuse(own_id: u16, asker: u32, reason: Refusal) -> Result<EncodedCommand> {
     ensure!(own_id != 0 && asker != 0, "a trade needs two characters");
     let mut packet = pair(BUSY_OPCODE, asker, u32::from(own_id));
     // `TradeBusy_Struct`'s trailing bytes as `EQEmu` records them.
-    packet.body.extend_from_slice(&[1, 0xef, 0xff, 0xff]);
+    packet
+        .body
+        .extend_from_slice(&[reason.wire(), 0xef, 0xff, 0xff]);
     Ok(packet)
 }
 
@@ -373,7 +417,7 @@ mod tests {
             decode(BUSY_OPCODE, &busy).unwrap(),
             Some(ExchangeUpdate::Busy {
                 by: 42,
-                reason: None
+                reason: Some(1)
             })
         );
         assert_eq!(decode(0x1234, &[]).unwrap(), None);

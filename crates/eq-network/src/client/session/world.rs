@@ -499,9 +499,10 @@ fn titanium_owned(
                         super::creation::names::answer(list, request, None, log)?;
                     }
                 }
-                Some(crate::client::selection::Choice::Enter(name))
+                Some(crate::client::selection::Choice::Enter(name, trade))
                     if creating.is_none() && !deletion.blocked() =>
                 {
+                    context.player_trade.set(trade);
                     chosen = Some(name);
                 }
                 Some(crate::client::selection::Choice::Create(character))

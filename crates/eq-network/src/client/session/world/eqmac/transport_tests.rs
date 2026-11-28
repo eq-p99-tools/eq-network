@@ -293,6 +293,7 @@ fn selection_creation_and_handoff(protocol: ServerProtocol, camp_return: bool) {
             .send(ClientCommand::SelectCharacter {
                 selection_id: selection,
                 slot: 0,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             })
             .unwrap();
         peer.expect(WORLD_ENTER, 64);
@@ -465,6 +466,7 @@ fn deletion_refresh(protocol: ServerProtocol) {
             .send(ClientCommand::SelectCharacter {
                 selection_id: first.selection_id,
                 slot: 0,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             })
             .unwrap();
         commands

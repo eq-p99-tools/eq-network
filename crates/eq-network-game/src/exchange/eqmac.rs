@@ -35,10 +35,6 @@ pub const COINS_OPCODE: u16 = 0xe440;
 /// `OP_TradeItemPacket` (0x40df): {x u16, slot u16, kind u8, record}.
 pub const ITEM_OPCODE: u16 = 0xdf40;
 
-/// The refusal's reason when the player is busy: the program's own when it
-/// can't trade now (inferred busy; the 0x62 and 0x63 reasons come from a
-/// trade setting this client doesn't have).
-const BUSY: u8 = 1;
 /// The item record kinds 0x40df carries, and how much of each the program
 /// copies: an item (360 bytes), a bag (276) and a book (264); the names of
 /// the last two are inferred.
@@ -90,10 +86,18 @@ pub fn acknowledge(own_id: u16, asker: u32) -> Result<EncodedCommand> {
 /// # Errors
 /// Rejects the reserved zero ID and an ID past 16 bits.
 pub fn busy(own_id: u16, asker: u32) -> Result<EncodedCommand> {
+    refuse(own_id, asker, super::Refusal::Busy)
+}
+
+/// Sends an EQMac trade refusal with the recipient's reason.
+///
+/// # Errors
+/// Rejects IDs outside the EQMac wire range.
+pub fn refuse(own_id: u16, asker: u32, reason: super::Refusal) -> Result<EncodedCommand> {
     let asker = u16::try_from(asker).context("spawn ID past 16 bits")?;
     ensure!(own_id != 0 && asker != 0, "a trade needs two characters");
     let mut packet = pair(REFUSED_OPCODE, asker, own_id);
-    packet.body.extend_from_slice(&[BUSY, 0]);
+    packet.body.extend_from_slice(&[reason.wire(), 0]);
     Ok(packet)
 }
 

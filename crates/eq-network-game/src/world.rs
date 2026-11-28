@@ -773,12 +773,14 @@ pub enum Capability {
     /// `EQEmu`); the Mac-era program is unread. The host keeps the timers;
     /// the session sends nothing for it.
     BardRefreshTimers,
+    /// Change the server's group, raid and guild corpse auto-consent preferences.
+    CorpseAutoConsent,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 95] = [
+    pub const ALL: [Self; 96] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -874,6 +876,7 @@ impl Capability {
         Self::InspectAnswer,
         Self::DecliningDuels,
         Self::BardRefreshTimers,
+        Self::CorpseAutoConsent,
     ];
 }
 
@@ -1739,6 +1742,17 @@ pub enum WorldEvent {
     /// Whether looted coins are shared with the group, as the profile says
     /// at admission.
     AutoSplit(bool),
+    /// The three corpse auto-consent flags in the received Titanium profile.
+    CorpseAutoConsent([Option<bool>; 3]),
+    /// The worker sent a corpse auto-consent setting. This is not a server answer.
+    CorpseAutoConsentSent {
+        /// Admission in which the request went out.
+        session_id: u64,
+        /// The scope requested.
+        audience: crate::corpses::ConsentAudience,
+        /// The requested value.
+        enabled: bool,
+    },
     /// `/played`'s fields as each Titanium profile gives them (read R49-8 a,
     /// checklist 6.490b).
     PlayedTime(crate::played::PlayedTime),
@@ -3116,6 +3130,7 @@ mod tests {
             Capability::InspectAnswer => 92,
             Capability::DecliningDuels => 93,
             Capability::BardRefreshTimers => 94,
+            Capability::CorpseAutoConsent => 95,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

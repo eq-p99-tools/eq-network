@@ -17,10 +17,13 @@
 use super::{
     actions,
     feature::{Feature, Out, World},
-    ClientCommand,
+    ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-use eq_network_game::{request::Request, world::SpawnKind};
+use eq_network_game::{
+    request::Request,
+    world::{SpawnKind, WorldEvent},
+};
 use std::time::{Duration, Instant};
 
 /// Consents, summons and drags the player's and others' corpses.
@@ -28,6 +31,7 @@ use std::time::{Duration, Instant};
 pub(super) struct Corpses {
     /// TAKP's and Quarm's rules, where they apply.
     eqmac: Option<EqMacCorpses>,
+    auto_consent: bool,
 }
 
 /// What TAKP and Quarm take: whether the server takes `/corpsedrop`, and
@@ -41,6 +45,14 @@ struct EqMacCorpses {
 const EQMAC_SUMMON_FLOOR: Duration = Duration::from_millis(250);
 
 impl Corpses {
+    /// Stock EQEmu implements and persists the Titanium auto-consent flags.
+    pub(super) const fn titanium_eqemu() -> Self {
+        Self {
+            eqmac: None,
+            auto_consent: true,
+        }
+    }
+
     /// TAKP's or Quarm's corpses; `drop` where the server takes
     /// `/corpsedrop` (Quarm).
     pub(super) const fn eqmac(drop: bool) -> Self {
@@ -49,6 +61,7 @@ impl Corpses {
                 drop,
                 last_summon: None,
             }),
+            auto_consent: false,
         }
     }
 }
@@ -119,17 +132,22 @@ fn request(command: &ClientCommand, world: &World, official: bool) -> Result<Req
 
 impl Feature for Corpses {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
-        vec![crate::world::Capability::Corpses]
+        let mut caps = vec![crate::world::Capability::Corpses];
+        if self.auto_consent {
+            caps.push(crate::world::Capability::CorpseAutoConsent);
+        }
+        caps
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(
-            command,
-            ClientCommand::Consent { .. }
-                | ClientCommand::SummonCorpse { .. }
-                | ClientCommand::DragCorpse { .. }
-                | ClientCommand::DropCorpse { .. }
-        )
+        (self.auto_consent && matches!(command, ClientCommand::SetCorpseAutoConsent { .. }))
+            || matches!(
+                command,
+                ClientCommand::Consent { .. }
+                    | ClientCommand::SummonCorpse { .. }
+                    | ClientCommand::DragCorpse { .. }
+                    | ClientCommand::DropCorpse { .. }
+            )
     }
 
     fn handle(
@@ -138,6 +156,31 @@ impl Feature for Corpses {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let ClientCommand::SetCorpseAutoConsent {
+            session_id,
+            audience,
+            enabled,
+        } = *command
+        {
+            if !self.auto_consent
+                || session_id != world.session_id
+                || world.player.as_ref().is_none()
+            {
+                return actions::refuse(
+                    command,
+                    "Auto consent is unavailable on this zone visit",
+                    out.log,
+                );
+            }
+            out.request(&Request::CorpseAutoConsent { audience, enabled })?;
+            return out
+                .log
+                .send(ClientEvent::World(WorldEvent::CorpseAutoConsentSent {
+                    session_id,
+                    audience,
+                    enabled,
+                }));
+        }
         if let Some(eqmac) = &mut self.eqmac {
             let refusal = match command {
                 ClientCommand::Consent { given: false, .. } => Some(
@@ -198,6 +241,48 @@ mod tests {
     use super::*;
     use eq_network_game::corpses;
     use eq_network_game::world::WorldEvent;
+
+    #[test]
+    fn corpse_auto_consent_sends_each_scope_and_never_acknowledges_it() {
+        use corpses::ConsentAudience::{Group, Guild, Raid};
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        let mut corpse = Corpses::titanium_eqemu();
+        for (audience, kind) in [(Group, 40), (Raid, 41), (Guild, 42)] {
+            for enabled in [true, false] {
+                let command = ClientCommand::SetCorpseAutoConsent {
+                    session_id: 5,
+                    audience,
+                    enabled,
+                };
+                let outcome = testing::run(|out| corpse.handle(&command, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent[0].opcode, 0x7c32);
+                assert_eq!(
+                    outcome.sent[0].body,
+                    [7, 0, kind, 0, u8::from(enabled), 0, 0, 0]
+                );
+                assert!(matches!(&outcome.events[..],
+                    [ClientEvent::World(WorldEvent::CorpseAutoConsentSent {
+                        session_id: 5, audience: scope, enabled: on,
+                    })] if *scope == audience && *on == enabled
+                ));
+            }
+        }
+        let stale = ClientCommand::SetCorpseAutoConsent {
+            session_id: 4,
+            audience: Group,
+            enabled: true,
+        };
+        let outcome = testing::run(|out| corpse.handle(&stale, &mut world, out));
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            refusals(&outcome.events),
+            ["Auto consent is unavailable on this zone visit"]
+        );
+        assert!(!Corpses::eqmac(false).owns(&stale));
+    }
 
     fn refusals(events: &[super::super::ClientEvent]) -> Vec<String> {
         events

@@ -254,7 +254,8 @@ mod tests {
         assert!(!choose(
             &ClientCommand::SelectCharacter {
                 selection_id: 3,
-                slot: 0
+                slot: 0,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             },
             3,
             GameDialect::Titanium,

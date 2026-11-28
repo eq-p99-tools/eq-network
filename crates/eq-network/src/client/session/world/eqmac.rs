@@ -110,7 +110,8 @@ fn world_owned(
                 Some(Choice::GenerateName(list, request, _, _)) => {
                     super::super::creation::names::answer(list, request, None, log)?;
                 }
-                Some(Choice::Enter(name)) if creating.is_none() && !deletion.blocked() => {
+                Some(Choice::Enter(name, trade)) if creating.is_none() && !deletion.blocked() => {
+                    context.player_trade.set(trade);
                     chosen = Some(name);
                 }
                 Some(Choice::Create(character)) if creating.is_none() && !deletion.blocked() => {

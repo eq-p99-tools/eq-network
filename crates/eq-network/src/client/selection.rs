@@ -103,7 +103,7 @@ impl Worlds {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Choice {
     /// Enter the world as this listed character.
-    Enter(String),
+    Enter(String, eq_network_game::exchange::PlayerTrade),
     /// Create a new character first.
     Create(eq_network_game::creation::NewCharacter),
     /// List-scoped name request, carrying frontend identity, race and gender.
@@ -117,7 +117,7 @@ impl Choice {
     /// The character to enter, ignoring creation requests.
     fn entered(self) -> Option<String> {
         match self {
-            Self::Enter(name) => Some(name),
+            Self::Enter(name, _) => Some(name),
             Self::Create(_) | Self::GenerateName(..) | Self::Delete(_) => None,
         }
     }
@@ -218,12 +218,15 @@ impl Selection {
         match command {
             // Even stale requests receive a typed local refusal from the owner.
             ClientCommand::DeleteCharacter(request) => Some(Choice::Delete(request)),
-            ClientCommand::SelectCharacter { selection_id, slot } if selection_id == self.id => {
-                self.characters
-                    .iter()
-                    .find(|entry| entry.slot == slot)
-                    .map(|entry| Choice::Enter(entry.name.clone()))
-            }
+            ClientCommand::SelectCharacter {
+                selection_id,
+                slot,
+                player_trade,
+            } if selection_id == self.id => self
+                .characters
+                .iter()
+                .find(|entry| entry.slot == slot)
+                .map(|entry| Choice::Enter(entry.name.clone(), player_trade)),
             ClientCommand::GenerateName {
                 selection_id,
                 request_id,
@@ -322,6 +325,7 @@ mod tests {
             .send(ClientCommand::SelectCharacter {
                 selection_id: 9,
                 slot: 0,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             })
             .unwrap();
         sender.send(choice(9, 0)).unwrap();
@@ -363,7 +367,8 @@ mod tests {
                 selection
                     .choose(ClientCommand::SelectCharacter {
                         selection_id: id,
-                        slot
+                        slot,
+                        player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
                     })
                     .and_then(Choice::entered)
                     .as_deref(),
@@ -377,12 +382,14 @@ mod tests {
             .send(ClientCommand::SelectCharacter {
                 selection_id: 8,
                 slot: 3,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             })
             .unwrap();
         sender
             .send(ClientCommand::SelectCharacter {
                 selection_id: 9,
                 slot: 3,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             })
             .unwrap();
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Example Up", "");

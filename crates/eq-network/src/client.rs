@@ -1557,6 +1557,7 @@ mod tests {
             ClientCommand::SelectCharacter {
                 selection_id: 1,
                 slot: 0,
+                player_trade: eq_network_game::exchange::PlayerTrade::Everyone,
             },
             ClientCommand::Camp {
                 session_id: 3,

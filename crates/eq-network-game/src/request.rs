@@ -68,7 +68,14 @@ pub enum Request {
     Posture(Posture),
     /// Ask the world who is online.
     Who(WhoFilter),
-    /// Let a player drag the player's corpses, or take that back.
+    /// Send the Titanium corpse auto-consent appearance update.
+    CorpseAutoConsent {
+        /// The scope to change.
+        audience: corpses::ConsentAudience,
+        /// Whether to give automatic consent to this scope.
+        enabled: bool,
+    },
+    /// Give or withdraw the named player's consent.
     Consent {
         /// Who may drag them.
         name: String,
@@ -374,8 +381,8 @@ pub enum Request {
     AnswerTrade {
         /// The one who asked.
         asker: u32,
-        /// Whether the player is busy with another trade.
-        busy: bool,
+        /// None takes the offer, otherwise the reason sent to the asker.
+        refusal: Option<exchange::Refusal>,
     },
     /// Accept the open trade with this partner, by spawn: `EQMac` names
     /// them, Titanium the player.
@@ -622,6 +629,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::Logout => command::titanium_logout(),
         Request::Posture(posture) => command::titanium_posture(sender.spawn(), *posture)?,
         Request::Who(filter) => who::request(filter)?,
+        Request::CorpseAutoConsent { audience, enabled } => {
+            corpses::titanium_auto_consent(sender.spawn(), *audience, *enabled)?
+        }
         Request::Consent { name, given } => corpses::consent(name, *given)?,
         Request::SummonCorpse(corpse) => corpses::summon(corpse, sender.name)?,
         Request::DragCorpse(corpse) => corpses::drag(corpse, sender.name)?,
@@ -788,10 +798,14 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
-        Request::AnswerTrade { asker, busy: false } => {
-            exchange::acknowledge(sender.spawn(), *asker)?
-        }
-        Request::AnswerTrade { asker, busy: true } => exchange::busy(sender.spawn(), *asker)?,
+        Request::AnswerTrade {
+            asker,
+            refusal: None,
+        } => exchange::acknowledge(sender.spawn(), *asker)?,
+        Request::AnswerTrade {
+            asker,
+            refusal: Some(reason),
+        } => exchange::refuse(sender.spawn(), *asker, *reason)?,
         Request::AcceptTrade { .. } => exchange::accept(sender.spawn())?,
         Request::CancelTrade { .. } => exchange::cancel(sender.spawn())?,
         Request::ClickDoor { door_id, held } => {
@@ -1053,10 +1067,14 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         )),
         Request::DuelOver { opponent } => Ok(socials::eqmac_duel_won(*opponent, duelist(sender)?)),
         Request::Trade(with) => exchange::eqmac::request(sender.spawn(), *with),
-        Request::AnswerTrade { asker, busy: false } => {
-            exchange::eqmac::acknowledge(sender.spawn(), *asker)
-        }
-        Request::AnswerTrade { asker, busy: true } => exchange::eqmac::busy(sender.spawn(), *asker),
+        Request::AnswerTrade {
+            asker,
+            refusal: None,
+        } => exchange::eqmac::acknowledge(sender.spawn(), *asker),
+        Request::AnswerTrade {
+            asker,
+            refusal: Some(reason),
+        } => exchange::eqmac::refuse(sender.spawn(), *asker, *reason),
         Request::AcceptTrade { with } => exchange::eqmac::accept(*with),
         Request::CancelTrade { with } => exchange::eqmac::cancel(sender.spawn(), *with),
         Request::AlternateAdvancement(action) => Ok(EncodedCommand {
@@ -1108,7 +1126,10 @@ mod tests {
             eqmac(&Request::Trade(42), PLAYER).unwrap(),
             exchange::eqmac::request(7, 42).unwrap()
         );
-        let answer = |busy| Request::AnswerTrade { asker: 50, busy };
+        let answer = |busy: bool| Request::AnswerTrade {
+            asker: 50,
+            refusal: busy.then_some(exchange::Refusal::Busy),
+        };
         assert_eq!(
             eqmac(&answer(false), PLAYER).unwrap(),
             exchange::eqmac::acknowledge(7, 50).unwrap()
@@ -1513,7 +1534,10 @@ mod tests {
         };
         assert!(titanium(&Request::AcceptTrade { with: 42 }, unspawned).is_err());
         // Another player's request is taken, or answered as busy.
-        let answer = |busy| Request::AnswerTrade { asker: 50, busy };
+        let answer = |busy: bool| Request::AnswerTrade {
+            asker: 50,
+            refusal: busy.then_some(exchange::Refusal::Busy),
+        };
         assert_eq!(
             titanium(&answer(false), PLAYER).unwrap(),
             exchange::acknowledge(7, 50).unwrap()

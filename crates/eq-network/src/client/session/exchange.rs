@@ -11,7 +11,7 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    exchange::{self, ExchangeUpdate, Partner},
+    exchange::{self, ExchangeUpdate, Partner, PlayerTrade, Refusal},
     inventory::InventorySlot,
     message::Message,
     request::Request,
@@ -222,26 +222,16 @@ impl Exchanges {
                 .log
                 .diagnostic(format!("Spawn {from} asked to trade before admission"));
         };
-        if world.exchange.is_some()
-            || !world.player_at().is_some_and(|(own, position)| {
-                own != with
-                    && world.spawns.visible(with).is_some_and(|spawn| {
-                        spawn.kind == SpawnKind::Player && exchange::in_reach(position, spawn)
-                    })
-            })
-        {
-            out.request(&Request::AnswerTrade {
-                asker: from,
-                busy: true,
-            })?;
-            return out.log.diagnostic(format!(
-                "Declined a trade request from spawn {from}: busy or unavailable partner"
-            ));
-        }
+        let refusal = trade_refusal(world, with);
         out.request(&Request::AnswerTrade {
             asker: from,
-            busy: false,
+            refusal,
         })?;
+        if let Some(reason) = refusal {
+            return out.log.diagnostic(format!(
+                "Declined a trade request from spawn {from}: {reason:?}"
+            ));
+        }
         world.exchange.0 = Some(Exchange {
             with,
             partner: Partner::Player,
@@ -303,6 +293,32 @@ impl Exchanges {
     }
 }
 
+fn trade_refusal(world: &World, asker: u16) -> Option<Refusal> {
+    let Some((own, position)) = world.player_at() else {
+        return Some(Refusal::Busy);
+    };
+    let Some(spawn) = world
+        .spawns
+        .visible(asker)
+        .filter(|spawn| own != asker && spawn.kind == SpawnKind::Player)
+    else {
+        return Some(Refusal::Busy);
+    };
+    match world.player_trade.get() {
+        PlayerTrade::NoOne => return Some(Refusal::NoOne),
+        PlayerTrade::PartyOnly
+            if !world
+                .trade_group
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&spawn.name)) =>
+        {
+            return Some(Refusal::PartyOnly)
+        }
+        PlayerTrade::Everyone | PlayerTrade::PartyOnly => (),
+    }
+    (world.exchange.is_some() || !exchange::in_reach(position, spawn)).then_some(Refusal::Busy)
+}
+
 impl Feature for Exchanges {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
@@ -312,7 +328,8 @@ impl Feature for Exchanges {
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,
-            ClientCommand::OfferTrade { .. }
+            ClientCommand::SetPlayerTrade { .. }
+                | ClientCommand::OfferTrade { .. }
                 | ClientCommand::AcceptTrade { .. }
                 | ClientCommand::CancelTrade { .. }
         )
@@ -325,6 +342,12 @@ impl Feature for Exchanges {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         match *command {
+            ClientCommand::SetPlayerTrade { session_id, policy } => {
+                if session_id == world.session_id {
+                    world.player_trade.set(policy);
+                }
+                Ok(())
+            }
             ClientCommand::OfferTrade {
                 with_id,
                 session_id,
@@ -424,7 +447,12 @@ impl Feature for Exchanges {
                             "Spawn {by} refused the trade, reason {reason:#04x}"
                         ))?;
                     }
-                    refused(world.session_id, "They are busy", out)?;
+                    let text = match reason {
+                        Some(0x62) => "They are not accepting incoming trade requests",
+                        Some(0x63) => "They accept incoming trades only from party members",
+                        _ => "They are busy",
+                    };
+                    refused(world.session_id, text, out)?;
                 }
             }
             WorldEvent::Exchange(ExchangeUpdate::Unread { index, kind }) => {
@@ -781,6 +809,50 @@ mod tests {
             let outcome = testing::run(|out| exchanges.handle(&trade, &mut world, out));
             assert_eq!(outcome.sent, [exchange::accept(7).unwrap()]);
         }
+    }
+
+    #[test]
+    fn incoming_trade_selection_precedes_ack_and_preserves_normal_custody() {
+        let mut world = beside_npc();
+        let mut exchanges = Exchanges::titanium();
+        let request = news(ExchangeUpdate::Requested {
+            from: u32::from(PLAYER),
+        });
+        let set = |session_id, policy| ClientCommand::SetPlayerTrade { session_id, policy };
+        testing::run(|out| exchanges.handle(&set(5, PlayerTrade::NoOne), &mut world, out))
+            .result
+            .unwrap();
+        testing::run(|out| exchanges.handle(&set(4, PlayerTrade::Everyone), &mut world, out))
+            .result
+            .unwrap();
+        let declined = testing::run(|out| exchanges.observe(&request, &mut world, out));
+        assert_eq!(
+            declined.sent,
+            [exchange::refuse(7, u32::from(PLAYER), Refusal::NoOne).unwrap()]
+        );
+        assert!(world.exchange.is_none());
+        assert_eq!(declined.sent[0].body[8], 0x62);
+
+        testing::run(|out| exchanges.handle(&set(5, PlayerTrade::PartyOnly), &mut world, out))
+            .result
+            .unwrap();
+        let declined = testing::run(|out| exchanges.observe(&request, &mut world, out));
+        assert_eq!(declined.sent[0].body[8], 0x63);
+        assert!(world.exchange.is_none());
+
+        let name = world
+            .spawns
+            .visible(PLAYER)
+            .unwrap()
+            .name
+            .to_ascii_lowercase();
+        world.trade_group.push(name);
+        let allowed = testing::run(|out| exchanges.observe(&request, &mut world, out));
+        assert_eq!(
+            allowed.sent,
+            [exchange::acknowledge(7, u32::from(PLAYER)).unwrap()]
+        );
+        assert!(world.exchange.is_some());
     }
 
     #[test]

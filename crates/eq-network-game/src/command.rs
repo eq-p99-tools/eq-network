@@ -65,6 +65,8 @@ pub enum GameCommand {
         selection_id: u64,
         /// Server slot to enter.
         slot: u8,
+        /// The selected character's incoming player trade policy.
+        player_trade: crate::exchange::PlayerTrade,
     },
     /// The server filters for the character entered next from the current
     /// character list: its first zone-in sends them, on every server type.
@@ -531,8 +533,14 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
-    /// Ask a nearby character to trade; their answer opens the window: the
-    /// give window for an NPC, the trade window for a player.
+    /// Keep the incoming trade setting for this character until they camp.
+    SetPlayerTrade {
+        /// The current admission.
+        session_id: u64,
+        /// The new incoming player trade policy.
+        policy: crate::exchange::PlayerTrade,
+    },
+    /// Ask to give a held item or coins to a player or NPC.
     OfferTrade {
         /// Current zone admission.
         session_id: u64,
@@ -732,8 +740,16 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
-    /// Let a player drag the player's corpses, or take it back: `/consent`
-    /// and `/deny`.
+    /// Request a change to a server-owned corpse auto-consent preference.
+    SetCorpseAutoConsent {
+        /// The current admission.
+        session_id: u64,
+        /// Which group of players may move the player's corpse.
+        audience: crate::corpses::ConsentAudience,
+        /// Whether to grant or withdraw automatic consent for this audience.
+        enabled: bool,
+    },
+    /// Grant or withdraw permission for a named character to move a corpse.
     Consent {
         /// Current zone admission.
         session_id: u64,
@@ -1591,6 +1607,7 @@ impl GameCommand {
             Self::Shop { .. } => "Shop",
             Self::Buy { .. } => "Buy",
             Self::Sell { .. } => "Sell",
+            Self::SetPlayerTrade { .. } => "SetPlayerTrade",
             Self::OfferTrade { .. } => "OfferTrade",
             Self::AcceptTrade { .. } => "AcceptTrade",
             Self::CancelTrade { .. } => "CancelTrade",
@@ -1619,6 +1636,7 @@ impl GameCommand {
             Self::AskTaskHistory { .. } => "AskTaskHistory",
             Self::ListTaskTimers { .. } => "ListTaskTimers",
             Self::UseDiscipline { .. } => "UseDiscipline",
+            Self::SetCorpseAutoConsent { .. } => "SetCorpseAutoConsent",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
             Self::DragCorpse { .. } => "DragCorpse",
@@ -1754,6 +1772,7 @@ impl GameCommand {
             | Self::Shop { session_id, .. }
             | Self::Buy { session_id, .. }
             | Self::Sell { session_id, .. }
+            | Self::SetPlayerTrade { session_id, .. }
             | Self::OfferTrade { session_id, .. }
             | Self::AcceptTrade { session_id, .. }
             | Self::CancelTrade { session_id }
@@ -1855,6 +1874,7 @@ impl GameCommand {
             | Self::RaidRemove { session_id, .. }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
+            | Self::SetCorpseAutoConsent { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -1951,9 +1971,10 @@ impl GameCommand {
             Self::BledOut { .. } => Capability::BleedingOut,
             Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
             Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
-            Self::OfferTrade { .. } | Self::AcceptTrade { .. } | Self::CancelTrade { .. } => {
-                Capability::Giving
-            }
+            Self::SetPlayerTrade { .. }
+            | Self::OfferTrade { .. }
+            | Self::AcceptTrade { .. }
+            | Self::CancelTrade { .. } => Capability::Giving,
             // Coins go into a trade window only where the player can give.
             Self::MoveCoins { transfer, .. } => {
                 if matches!(transfer.from, crate::money::CoinPlace::Trade)
@@ -2035,6 +2056,7 @@ impl GameCommand {
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { container, .. } => crate::tradeskills::combine_capability(*container),
             Self::OpenContainer { .. } | Self::CloseContainer { .. } => Capability::WorldContainers,
+            Self::SetCorpseAutoConsent { .. } => Capability::CorpseAutoConsent,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -2067,6 +2089,7 @@ impl GameCommand {
             | Self::PoisonWait { .. }
             | Self::AnswerListPolls { .. }
             | Self::SetServerFilters { .. }
+            | Self::SetPlayerTrade { .. }
             | Self::SetBookOptions { .. }
             | Self::EnvironmentalDamage { .. }
             // The latest report stands however long it waited.
@@ -2129,6 +2152,7 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. }
+            | Self::SetCorpseAutoConsent { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -2384,6 +2408,7 @@ pub fn encode(
         | GameCommand::PickUp { .. }
         | GameCommand::OpenContainer { .. }
         | GameCommand::CloseContainer { .. }
+        | GameCommand::SetPlayerTrade { .. }
         | GameCommand::OfferTrade { .. }
         | GameCommand::AcceptTrade { .. }
         | GameCommand::CancelTrade { .. }
@@ -2496,6 +2521,7 @@ pub fn encode(
         | GameCommand::RaidRemove { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
+        | GameCommand::SetCorpseAutoConsent { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }

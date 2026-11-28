@@ -217,6 +217,9 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
     /// Current character's opt-in; zone crossings retain it.
     pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
+    /// Current character's incoming trade policy, shared across zone visits.
+    pub(in crate::client) player_trade:
+        std::rc::Rc<std::cell::Cell<eq_network_game::exchange::PlayerTrade>>,
     /// Current character's server filters; zone crossings retain them.
     pub(in crate::client) server_filters:
         std::cell::RefCell<eq_network_game::filters::ServerFilters>,
@@ -254,6 +257,7 @@ impl<'a> CharacterSession<'a> {
             commands,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
+            player_trade: std::rc::Rc::default(),
             server_filters: std::cell::RefCell::new(config.server_filters.clone()),
             riding: std::sync::Arc::default(),
             guild_roster: guilds::RosterTransfer::default(),
@@ -268,6 +272,8 @@ impl<'a> CharacterSession<'a> {
             // Show the list and forget the departing character's runtime choice.
             self.config.character.clear();
             self.answer_list_polls.set(self.config.answer_list_polls);
+            self.player_trade
+                .set(eq_network_game::exchange::PlayerTrade::Everyone);
             self.server_filters
                 .replace(self.config.server_filters.clone());
             self.riding = std::sync::Arc::default();
