@@ -377,3 +377,46 @@ fn cstr(bytes: &[u8]) -> &[u8] {
 fn le32(bytes: &[u8]) -> u32 {
     u32::from_le_bytes(bytes.try_into().unwrap())
 }
+
+#[cfg(test)]
+mod trade_policy_tests {
+    use super::*;
+    use eq_network_game::exchange::PlayerTrade;
+
+    #[derive(Debug)]
+    struct SavedPolicy;
+
+    impl super::super::InitialPlayerTrade for SavedPolicy {
+        fn policy(&self, world: Option<&str>, character: &str) -> PlayerTrade {
+            assert_eq!(character, "Tester");
+            match world {
+                None => PlayerTrade::PartyOnly,
+                Some("Example") => PlayerTrade::NoOne,
+                Some(_) => PlayerTrade::Everyone,
+            }
+        }
+    }
+
+    #[test]
+    fn direct_trade_policy_uses_the_world_identity_and_resets_after_character_select() {
+        let mut config =
+            ClientConfig::for_protocol(ServerProtocol::EqEmu, "Tester", "synthetic", "", "Tester");
+        config.initial_player_trade = Some(std::sync::Arc::new(SavedPolicy));
+        let identity = ClientIdentity::new("Example", "Example");
+        let credentials = Credentials {
+            account: "synthetic".into(),
+            key: [0; 10],
+        };
+        let stop = CancellationToken::default();
+        let mut context =
+            CharacterSession::new(&config, &identity, &credentials, &stop, None, None);
+        assert_eq!(context.player_trade.get(), PlayerTrade::PartyOnly);
+        context.load_initial_trade_policy(None);
+        assert_eq!(context.player_trade.get(), PlayerTrade::PartyOnly);
+        context.load_initial_trade_policy(Some("Example"));
+        assert_eq!(context.player_trade.get(), PlayerTrade::NoOne);
+        context.on_zone_exit(&ZoneExit::CharacterSelect);
+        context.load_initial_trade_policy(Some("Example"));
+        assert_eq!(context.player_trade.get(), PlayerTrade::Everyone);
+    }
+}
